@@ -1,0 +1,122 @@
+# matcami — Restaurant Management & POS (MVP v1.1)
+
+One restaurant, one branch, one registered POS device, one owner + one cashier + one waiter. Dine-in (tables) and takeaway.
+Stack: SvelteKit + TypeScript (UI **and** server) · Node.js · PostgreSQL · Drizzle ORM · IndexedDB + Service Worker for the offline POS · a local Print Agent over WebSocket/HTTP (→ ESC/POS) for receipts, kitchen tickets and the drawer. Modular monolith. No Redis, no server push in the MVP (spec 28, 30, 32).
+Full spec: `docs/spec.md` (v1.1, sections 1–33; the signed-off PDF sits beside it). Cite as `(spec 17)`. The spec outranks this file; if they disagree, follow the spec and fix this file.
+
+## Non-negotiable invariants
+
+If a change breaks one, stop and say so.
+
+1. **Money is integer minor units.** Integer cents in `bigint` columns; `$8.50` is `850`. NEVER a float or a `numeric` money column, NEVER arithmetic on money outside `src/lib/server/money`, which owns rounding and tax — a float literal, `parseFloat` or a second rounding helper in money code is a bug. Ingredient quantities are the one exception: `numeric(12,3)`. One currency in the MVP. (spec 17, 3)
+2. **Posted records are permanent.** NEVER `UPDATE` or `DELETE` a paid order, invoice, payment, stock movement, journal entry or journal line — not in app code, not in a repair script, not in a migration. Correct with a reversing record plus a new correct one. Normal path `OPEN → BILLED → PAID`; adding items to a BILLED order re-opens it; re-opening a PAID order needs owner-PIN approval and writes NEW records — it never rewinds posted ones. (spec 3, 13, 22)
+3. **Journal entries balance in the database.** Debits = credits, enforced by a DB constraint checked at COMMIT, not only in TypeScript; a migration creating journal tables without it is incomplete. Entries are generated from business events by the spec 24 posting-rule table — nobody types a debit. (spec 3, 22, 24)
+4. **One all-or-nothing transaction, and it runs AT PAYMENT.** One DB transaction, in order: record payment(s) → finalize totals → take the invoice number → deduct inventory (recipe × qty, incl. modifiers) → create invoice → post journal entries (sale **and** COGS) → mark order PAID. Adding items and sending to the kitchen are ordinary saves; printing NEVER happens inside the transaction. Splitting it across requests or committing part of it alone is a bug; an offline sale runs the SAME transaction server-side on sync. (spec 13)
+5. **A completed offline CASH sale is a recorded FACT, not a request the server may reject.** Price and tax rate at time of sale win; stock may go negative; a synced sale that fails validation is stored and flagged for owner review, NEVER discarded. Every queued operation carries a device-generated idempotency key; a retry MUST be a no-op. Invoice numbers come from the device's gap-free sequence (`POS1-000001`), online or offline — the server enforces `UNIQUE (device_id, invoice_number)`, never renumbers, no global sequence, no `max(number)+1`. Card and mobile payments are NEVER auto-completed offline unless the provider/terminal explicitly supports offline authorization; house rule for that case: fail closed — no receipt, no invoice number, no Payment Clearing posting, order stays BILLED. Protect unsynced work: `navigator.storage.persist()`, unsynced count always on screen, logout and POS session close BLOCKED while the queue is non-empty (close needs a connection; reconciliation runs on the server). (spec 6)
+6. **Inventory is a ledger.** Stock on hand is the sum of stock movements (purchase, sale consumption, waste, comp, count adjustment). A cached quantity may exist for speed but is NEVER the truth and NEVER written without the movement that caused it. Sales are NEVER blocked by stock levels; negative stock is flagged, not prevented. Costing is weighted average, recalculated on EVERY purchase (purchase units converted to base units first); every sale posts Dr COGS / Cr Inventory. (spec 3, 15, 16, 24)
+7. **Discounts before tax; each line snapshots its own numbers.** Discount first, then tax the discounted amount. Every order line stores the unit price AND tax rate used, so later menu or rate changes cannot alter past sales. Tax mode (inclusive vs exclusive) is a restaurant setting read at calculation time, never hardcoded. ONE rounding rule in ONE function used by POS, server and reports: full precision per line, round once on the invoice total — spec 17's default, still subject to open decision 3. (spec 14, 17, 6)
+8. **Permissions are enforced SERVER-side on every POS API route, reads included.** Each route checks its own permission and returns `403`; hiding a button is not security. A new `+server.ts` or form action with no permission check is unfinished. (spec 8, 29)
+9. **Owner PIN approval is required** for: refund, void of an item already SENT to the kitchen, discount above the configured limit, comp/staff meal, re-opening a paid order, opening the cash drawer without a sale, cash pay-out above the limit, and voiding a whole order any of whose items were already SENT. Store action, acting employee, approver and reason code together in one audit record. Reason codes are mandatory on voids, refunds, discounts and comps — deleting a NEW (unsent) item needs none. (spec 8, 14)
+10. **Sensitive actions are audit-logged**: logins, failed PINs, voids, refunds, discounts, comps, approvals, cash-drawer opens, price changes. House rule: write the audit row in the same transaction as the action — offline logins excepted, recorded locally and synced later. (spec 3, 6, 7)
+11. **Business date, not calendar date.** A sale belongs to the business date of its POS session — 01:30 belongs to the previous evening. Reports, end-of-day and reconciliation group by it, never `created_at::date`. Timestamps stored UTC in `timestamptz`; the restaurant's time zone is a setting. (spec 10, 17)
+12. **POS access = registered device + PIN.** PINs are 4–6 digits stored ONLY as slow salted hashes (Argon2/bcrypt), never reversible, never logged; 5 wrong attempts lock the employee out for 5 minutes and write an audit event; the POS returns to employee-select after idle (default 2 min, configurable). The PIN screen is shown ONLY on a device the owner registered (long-lived HttpOnly+Secure device cookie, revocable from the dashboard). Sessions are HttpOnly + Secure + SameSite cookies — NEVER `localStorage` — and SvelteKit's origin/CSRF check stays ON. (spec 7, 9)
+
+## Tests that are mandatory, not optional (spec 29)
+
+A change in these areas without its test is not done.
+- Money arithmetic and rounding; tax calculated in **both** modes.
+- Journal entries always balance — property test over generated events, plus the DB rejecting an unbalanced entry.
+- One posting-rule test per business event in the spec 24 table.
+- Offline sync: retries never create duplicates.
+- A permission check test on every POS API route.
+
+## Where code lives
+
+Business rules live in `src/lib/server/**`; routes validate input, check permissions, call a module, return.
+
+```
+src/
+  lib/
+    server/
+      db/           Drizzle schema (one file per aggregate), generated migrations, client — the ONLY place tables are defined
+      money/        integer cents, allocation, THE rounding rule, tax in both modes
+      accounting/   chart of accounts, posting rules (one per business event), journal writer
+      inventory/    stock movements, recipes + unit conversion, weighted-average costing
+      orders/       order/item lifecycle, split & merge bills, THE payment transaction
+      auth/         cookie sessions, PIN hash + lockout, POS device registration
+      permissions/  RBAC checks + owner-PIN approval gates
+      audit/        audit log writer
+    pos/            IndexedDB, sync queue, service worker, device invoice sequence, print-agent client
+  routes/
+    (dashboard)/    owner/admin: menu, purchases, expenses, reports — online only
+    (pos)/          POS shell: PIN login, orders, payment, session open/close — MUST work offline
+    api/            JSON endpoints: POS sync, menu version/snapshot — no printing endpoint, printing is local
+```
+
+Migrations live in `src/lib/server/db/migrations` (point `drizzle.config.ts` there), are COMMITTED, and are NEVER hand-edited once they have run — add a new one instead.
+
+House convention, not spec (spec 30/32 say only "modular monolith"): `lib/server/**` MUST NOT be imported by client-side code or by `lib/pos/`; `money/` is imported by everything and imports no sibling; `orders/` calls `accounting/`, `inventory/`, `permissions/`, `audit/`, and none of them call back.
+
+## Commands & setup
+
+ASSUMED toolchain — the repo is empty, nothing is installed. The commit that scaffolds tooling MUST make these real or rewrite this block; until then they are a proposal, not fact.
+
+```bash
+pnpm install
+docker compose up -d db     # PostgreSQL; DATABASE_URL in .env (never commit .env)
+pnpm dev
+pnpm db:generate            # drizzle-kit — SQL from src/lib/server/db/schema
+pnpm db:migrate             # apply — ALWAYS back up first (spec 29)
+pnpm db:studio
+pnpm test                   # Vitest, unit
+pnpm test:e2e               # Playwright
+pnpm check && pnpm lint
+```
+
+## Domain glossary
+
+- **Account codes** — use spec 23's numbers verbatim (1000 Cash on Hand … 6900 Other Expenses). Never invent one; propose it instead.
+- **POS session** — a cashier shift: opening cash → sales → count → reconciliation → end-of-day report. Distinct from the auth session.
+- **Item status** — `NEW` (change or delete freely) → `SENT` (kitchen ticket printed; removal is a void, not a delete) → `VOIDED` (waste if already prepared).
+- **Void / refund / comp** — void before payment; refund after payment, back to the original method, food does not come back; comp = no revenue, cost to 5200 Comps & Staff Meals.
+- **Base unit vs purchase unit** — recipes use base units (g, pcs, can); purchases are entered in purchase units (kg, bag, case) and converted.
+- **Modifier** — a menu option that changes price **and** recipe (Extra Cheese → +1 cheese, +$0.50), so it changes the deduction too.
+- **Clearing account** — 1020 card / 1030 mobile hold funds until they land in 1010 Bank; settlement posts fees to 6400.
+- **Cash Over/Short (6800)** — absorbs the expected-vs-counted cash difference at session close.
+- **Pay-out** — cash out of the drawer at the POS; it becomes an expense entry automatically.
+- **Print agent** — local ESC/POS service owning the printers and drawer; the browser NEVER talks to hardware. Queues jobs while a printer is down; reprints are marked COPY.
+- **Menu version** — integer the POS compares against `/api/menu/version`; on a mismatch it downloads the FULL snapshot and replaces its local copy. No change-only sync.
+
+## Open decisions — UNRESOLVED (spec 33)
+
+When work touches one, SURFACE the question and its default, ASK, and record the assumption in the commit/PR. NEVER assume one silently; when a decision is made, record it here and delete its row. This applies beyond the seven: if a task raises a question the spec does not answer — a service charge, a tip line, a new account, a new payment method — treat it the same way, and NEVER bake an answer into the schema or the chart of accounts silently.
+
+1. Waiter order entry with one device → shared POS at the counter; a tablet becomes terminal 2 later.
+2. Hosting: cloud or in-restaurant server → cloud (Docker + Nginx) with the offline POS.
+3. Local tax rules (inclusive/exclusive, rounding, legal receipt requirements, tax on staff meals) → tax mode as a setting, round on the invoice total, confirm with a local accountant.
+4. Payment methods and currencies at launch → cash + one card or mobile-money method; one currency.
+5. Who approves refunds/voids when the owner is away → owner PIN only; Manager role later.
+6. Approval limits and lock timing → discounts above 10% and pay-outs above a set amount need approval; auto-lock after 2 minutes idle.
+7. Inventory costing method → weighted average.
+
+## Do NOT build (spec 31, 28, 27, 5, 15)
+
+Delivery · multiple branches, terminals, warehouses or tenants · Kitchen Display System · waiter handhelds · Manager role and remote approvals, advanced RBAC, advanced employee management · sub-recipes and batch prep · supplier management, Accounts Receivable, payroll, bank reconciliation, any accounting beyond spec 23's chart — the Accounts Payable *account* (2000) IS in the MVP, supplier management is not · change-only menu sync · Redis and server WebSocket push · biometrics · advanced analytics · summary tables, materialized views and background report jobs (plain indexed SQL until a report is measurably slow, spec 27). Leave seams, not implementations: keep `device_id` on POS-created rows so a second terminal is a data change, not a rewrite.
+
+## Task routing & skill map — PLANNED, not yet built
+
+`.claude/skills/` DOES NOT EXIST YET; these skills are the next thing to build. Until one exists read the cited spec sections, and create the skill as part of the first real task in that area.
+
+| Task smells like | Code | Spec | Skill (planned) |
+|---|---|---|---|
+| "What does the spec say about X?" | — | `docs/spec.md` | `spec-lookup` |
+| New table, column, index, migration | `lib/server/db` | 3, 17 | `drizzle-schema` |
+| Prices, totals, tax, rounding, currency | `lib/server/money` | 17, 18 | `money-tax` |
+| Debits, credits, accounts, journal entries | `lib/server/accounting` | 22–25 | `accounting-posting` |
+| Wrong data already posted / "fix yesterday's X" | `lib/server/accounting` | 3, 14, 22 | `accounting-posting` — reversing entry, NEVER an edit |
+| Recipes, stock, waste, purchases, COGS | `lib/server/inventory` | 15, 16, 19 | `inventory-cogs` |
+| Order flow, payment, split/merge bills | `lib/server/orders` | 13, 14 | `order-payment` |
+| IndexedDB, sync queue, idempotency, menu version | `lib/pos` | 4, 5, 6 | `offline-sync` |
+| Who may do what, PIN approval, 403s | `lib/server/permissions` | 7, 8, 9, 14 | `permissions-approvals` |
+| Receipts, kitchen tickets, drawer kick | `lib/pos` print-agent client | 11 | `pos-printing` |
+| Reports, end-of-day, trial balance | `routes/(dashboard)` | 10, 26, 27 | `reporting` |
