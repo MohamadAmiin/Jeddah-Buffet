@@ -21,6 +21,10 @@ export default defineConfig({
 					name: 'integration',
 					environment: 'node',
 					include: ['src/**/*.integration.test.ts'],
+					// Runs ONCE before any test file: applies migrations to matcami_test.
+					// Without it every integration test fails with
+					// `relation "restaurants" does not exist`.
+					globalSetup: ['./src/lib/server/db/test/global-setup.ts'],
 					setupFiles: ['./src/lib/server/db/integration-setup.ts'],
 					// Every file shares one matcami_test database; parallel files would
 					// interfere with each other's rows.

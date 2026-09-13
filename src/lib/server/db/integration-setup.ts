@@ -1,3 +1,6 @@
+import { beforeEach, afterAll } from 'vitest';
+import { resetDb, closeResetPool } from './test/reset';
+
 // FAIL CLOSED. This is the guard that stops a test run destroying development
 // data. Integration tests truncate tables; DATABASE_URL points at data somebody
 // cares about. There is deliberately NO fallback to DATABASE_URL — a fallback is
@@ -21,3 +24,16 @@ if (!dbName.endsWith('_test')) {
 			'from development and production data.'
 	);
 }
+
+// Reset between tests HERE rather than per-test, so a new test file cannot forget
+// it. Deliberately NOT a transaction-rollback wrapper: two tests in this plan need
+// genuinely committed, concurrent transactions — T-14's "two concurrent
+// registrations, exactly one succeeds" and T-13's lockout, which must observe a
+// counter that survived a rejected login. A rollback wrapper makes both untestable.
+beforeEach(async () => {
+	await resetDb();
+});
+
+afterAll(async () => {
+	await closeResetPool();
+});
