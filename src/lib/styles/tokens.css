@@ -1,0 +1,156 @@
+/* matcami design tokens — imported by src/app.css AFTER `@import 'tailwindcss'`.
+ * The ONLY place a colour, size or type value is defined. A raw hex or an
+ * arbitrary value like `text-[#123456]` in a component is a bug: add a token here.
+ *
+ * Two layers, and the split matters:
+ *   1. the raw palette as plain custom properties (--c-*), which the theme swaps
+ *   2. an `@theme inline` block exposing them to Tailwind as utilities
+ * `inline` is REQUIRED for anything themeable. Plain `@theme` bakes the light
+ * value into the utility; `@theme inline` emits `var(--c-bg)`, so the utility
+ * follows the theme. Static things (fonts, spacing, type scale) use plain @theme.
+ *
+ * THEME: light is the default. The viewer has THREE states, not two —
+ *   bare :root                          → the COMPLETE light palette
+ *   @media (prefers-color-scheme:dark)  → guarded :root:not([data-theme="light"])
+ *                                         so an explicit light choice beats a dark OS
+ *   :root[data-theme="dark"]            → so an explicit dark choice wins the other way
+ * Every --c-* MUST be declared in the bare :root. One defined only inside a media
+ * or [data-theme] block is invisible in the un-stamped state — the classic
+ * unreadable-page bug. Contrast is verified to WCAG AA (4.5:1) at normal text size.
+ */
+
+/* ── 1. the raw palette ────────────────────────────────────────────────── */
+:root {
+  color-scheme: light;
+
+  --c-bg:#e9edf0; --c-bg-2:#dfe5e9; --c-raise:#ffffff; --c-raise-2:#f4f7f9;
+  --c-line:#c5cfd6; --c-line-soft:#dce3e8;
+
+  --c-ink:#161b20;    /* body + headings          17.3:1 on --c-raise */
+  --c-ink-2:#4a5661;  /* secondary, captions       7.5:1 */
+  --c-ink-3:#646f7a;  /* labels, table heads       5.1:1 */
+
+  --c-accent:#0f6b7e; --c-accent-ink:#ffffff; --c-accent-soft:#ddeef2;
+
+  /* semantic — separate from the accent, never decorative */
+  --c-ok:#2c6a48;     --c-ok-bg:#e2efe7;
+  --c-warn:#855a12;   --c-warn-bg:#f7ecd8;
+  --c-danger:#a13a2e; --c-danger-bg:#f9e5e2;
+
+  /* domain status. Colour is NEVER the only carrier — pair each with its glyph:
+     item  NEW ◇ · SENT ▲ · VOIDED ✕ (struck through)
+     order OPEN ○ · BILLED ◐ · PAID ● · VOIDED ✕ · REFUNDED ↩
+     table free ○ outline · occupied ● filled + open amount
+     sync  online ● · offline ◆ + the unsynced COUNT (spec 6: always on screen) */
+  --c-st-new:#0f6b7e;     --c-st-new-bg:#ddeef2;
+  --c-st-sent:#2c6a48;    --c-st-sent-bg:#e2efe7;
+  --c-st-voided:#a13a2e;  --c-st-voided-bg:#f9e5e2;
+  --c-st-billed:#855a12;  --c-st-billed-bg:#f7ecd8;
+  --c-st-paid:#2c6a48;    --c-st-paid-bg:#e2efe7;
+  --c-st-offline:#855a12; --c-st-offline-bg:#f7ecd8;
+
+  /* POS terminal chrome — stays dark in BOTH themes. It is a device surface,
+     not page chrome: dark cuts counter glare and keeps the keys the brightest
+     thing on screen. Do not theme these. */
+  --c-screen:#0f1215; --c-key:#2a313a; --c-key-line:#3a434e; --c-key-ink:#e3e9ee;
+
+  --c-shadow:0 1px 0 rgb(255 255 255 / .8), 0 6px 20px -14px rgb(22 27 32 / .45);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --c-bg:#15181b; --c-bg-2:#1b1f24; --c-raise:#22272e; --c-raise-2:#2b3139;
+    --c-line:#333b44; --c-line-soft:#272d34;
+    --c-ink:#e6eaec; --c-ink-2:#a8b3bc; --c-ink-3:#8a949d;
+    --c-accent:#5cb4c9; --c-accent-ink:#0d1416; --c-accent-soft:#16323a;
+    --c-ok:#5aa06f;   --c-ok-bg:#1b2a21;
+    --c-warn:#d99a3c; --c-warn-bg:#2c2417;
+    --c-danger:#d97165; --c-danger-bg:#2c1d1b;
+    --c-st-new:#8fd2e3;     --c-st-new-bg:#243745;
+    --c-st-sent:#8fd0a0;    --c-st-sent-bg:#1f3326;
+    --c-st-voided:#e0938a;  --c-st-voided-bg:#3a2523;
+    --c-st-billed:#e8bd6b;  --c-st-billed-bg:#332a14;
+    --c-st-paid:#8fd0a0;    --c-st-paid-bg:#1f3326;
+    --c-st-offline:#e8bd6b; --c-st-offline-bg:#332a14;
+    --c-shadow:0 1px 0 rgb(255 255 255 / .04), 0 8px 24px -12px rgb(0 0 0 / .8);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --c-bg:#15181b; --c-bg-2:#1b1f24; --c-raise:#22272e; --c-raise-2:#2b3139;
+  --c-line:#333b44; --c-line-soft:#272d34;
+  --c-ink:#e6eaec; --c-ink-2:#a8b3bc; --c-ink-3:#8a949d;
+  --c-accent:#5cb4c9; --c-accent-ink:#0d1416; --c-accent-soft:#16323a;
+  --c-ok:#5aa06f;   --c-ok-bg:#1b2a21;
+  --c-warn:#d99a3c; --c-warn-bg:#2c2417;
+  --c-danger:#d97165; --c-danger-bg:#2c1d1b;
+  --c-st-new:#8fd2e3;     --c-st-new-bg:#243745;
+  --c-st-sent:#8fd0a0;    --c-st-sent-bg:#1f3326;
+  --c-st-voided:#e0938a;  --c-st-voided-bg:#3a2523;
+  --c-st-billed:#e8bd6b;  --c-st-billed-bg:#332a14;
+  --c-st-paid:#8fd0a0;    --c-st-paid-bg:#1f3326;
+  --c-st-offline:#e8bd6b; --c-st-offline-bg:#332a14;
+  --c-shadow:0 1px 0 rgb(255 255 255 / .04), 0 8px 24px -12px rgb(0 0 0 / .8);
+}
+
+/* ── 2. themeable tokens → Tailwind utilities (bg-raise, text-ink-2, …) ─── */
+@theme inline {
+  --color-bg:        var(--c-bg);
+  --color-bg-2:      var(--c-bg-2);
+  --color-raise:     var(--c-raise);
+  --color-raise-2:   var(--c-raise-2);
+  --color-line:      var(--c-line);
+  --color-line-soft: var(--c-line-soft);
+
+  --color-ink:       var(--c-ink);
+  --color-ink-2:     var(--c-ink-2);
+  --color-ink-3:     var(--c-ink-3);
+
+  --color-accent:      var(--c-accent);
+  --color-accent-ink:  var(--c-accent-ink);
+  --color-accent-soft: var(--c-accent-soft);
+
+  --color-ok:        var(--c-ok);      --color-ok-bg:     var(--c-ok-bg);
+  --color-warn:      var(--c-warn);    --color-warn-bg:   var(--c-warn-bg);
+  --color-danger:    var(--c-danger);  --color-danger-bg: var(--c-danger-bg);
+
+  --color-st-new:     var(--c-st-new);     --color-st-new-bg:     var(--c-st-new-bg);
+  --color-st-sent:    var(--c-st-sent);    --color-st-sent-bg:    var(--c-st-sent-bg);
+  --color-st-voided:  var(--c-st-voided);  --color-st-voided-bg:  var(--c-st-voided-bg);
+  --color-st-billed:  var(--c-st-billed);  --color-st-billed-bg:  var(--c-st-billed-bg);
+  --color-st-paid:    var(--c-st-paid);    --color-st-paid-bg:    var(--c-st-paid-bg);
+  --color-st-offline: var(--c-st-offline); --color-st-offline-bg: var(--c-st-offline-bg);
+
+  --color-screen:   var(--c-screen);
+  --color-key:      var(--c-key);
+  --color-key-line: var(--c-key-line);
+  --color-key-ink:  var(--c-key-ink);
+
+  --shadow-card: var(--c-shadow);
+}
+
+/* ── 3. static tokens ──────────────────────────────────────────────────── */
+@theme {
+  /* Archivo — display/headings · IBM Plex Sans — body
+     IBM Plex Mono — ALL money, quantities, account codes, IDs, receipt previews.
+     A price set in the body face is a bug: money always uses font-mono +
+     tabular-nums so digits align down a column. */
+  --font-display: Archivo, system-ui, -apple-system, sans-serif;
+  --font-sans:    "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --font-mono:    "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --text-pos:   1.0625rem;  /* 17px — POS body, read standing at arm's length */
+  --text-total: 2.5rem;     /* 40px — the order total, the most-read number */
+
+  /* Touch targets. POS buttons are pressed with a thumb, on a screen someone is
+     standing at. A named token keeps that honest instead of scattering magic
+     numbers. Touch-accuracy research puts the floor near 9.2mm and shows error
+     rate flattening around 10mm; standing-kiosk guidance goes to 20mm. Apple's
+     44pt and Material's 48dp assume a SEATED user holding the device — both are
+     too small here. Verify in mm on the real hardware, not px in a browser. */
+  --spacing-touch-min: 3.5rem;  /* 56px ≈10mm — absolute floor on the POS */
+  --spacing-touch:     4rem;    /* 64px — standard POS target (set by T-04) */
+  --spacing-touch-lg:  4.5rem;  /* 72px — menu keys, function rail */
+  --spacing-touch-xl:  6rem;    /* 96px — Pay, Send to kitchen: one-touch closers */
+}
