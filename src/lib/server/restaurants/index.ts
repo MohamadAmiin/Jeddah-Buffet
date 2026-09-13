@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import type { Executor } from '../auth/session';
+import type { DbTx } from '../db/client';
 import { restaurants } from '../db/schema/restaurants';
 import { restaurantSettings } from '../db/schema/restaurant-settings';
 import { writeAudit } from '../audit';
@@ -11,6 +12,10 @@ export { isValidTimeZone, canonicalTimeZone, timeZoneSuggestions } from './time-
 // initializer list. It calls audit/ and NOTHING else, and is called by routes and
 // by auth/register.ts. CLAUDE.md's "Where code lives" does not list it; T-26 adds
 // it.
+//
+// CONVENTION, applied throughout src/lib/server: functions that WRITE take DbTx,
+// so a plain `db` handle cannot be passed where a transaction is required;
+// functions that only READ take Executor (Db | DbTx) and work with either.
 
 export type RestaurantWithSettings = {
 	id: string;
@@ -71,7 +76,7 @@ export type UpdateSettingsResult =
  * months later, what changed and when.
  */
 export async function updateSettings(
-	tx: Executor,
+	tx: DbTx,
 	restaurantId: string,
 	changes: SettingsChanges,
 	ctx: UpdateSettingsContext
@@ -172,7 +177,7 @@ export type RestaurantInitializerInput = {
  * created.
  */
 export const restaurantInitializers: Array<
-	(tx: Executor, restaurantId: string, input: RestaurantInitializerInput) => Promise<void>
+	(tx: DbTx, restaurantId: string, input: RestaurantInitializerInput) => Promise<void>
 > = [
 	async function insertSettingsRow(tx, restaurantId, input) {
 		await tx.insert(restaurantSettings).values({
@@ -183,7 +188,7 @@ export const restaurantInitializers: Array<
 ];
 
 export async function onRestaurantCreated(
-	tx: Executor,
+	tx: DbTx,
 	restaurantId: string,
 	input: RestaurantInitializerInput
 ): Promise<void> {

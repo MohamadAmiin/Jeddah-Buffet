@@ -21,7 +21,8 @@ afterAll(async () => {
 
 async function makeRestaurant(name = 'Cafe One', timeZone = 'Africa/Mogadishu'): Promise<string> {
 	const [row] = await db.insert(restaurants).values({ name }).returning();
-	await onRestaurantCreated(db, row.id, { restaurantName: name, timeZone });
+	// Registration runs in ONE transaction, so the initializers do too.
+	await db.transaction((tx) => onRestaurantCreated(tx, row.id, { restaurantName: name, timeZone }));
 	return row.id;
 }
 
@@ -166,7 +167,9 @@ describe('settingsComplete', () => {
 describe('onRestaurantCreated', () => {
 	it('inserts the settings row with the canonical time zone', async () => {
 		const [row] = await db.insert(restaurants).values({ name: 'Cafe' }).returning();
-		await onRestaurantCreated(db, row.id, { restaurantName: 'Cafe', timeZone: 'Asia/Calcutta' });
+		await db.transaction((tx) =>
+			onRestaurantCreated(tx, row.id, { restaurantName: 'Cafe', timeZone: 'Asia/Calcutta' })
+		);
 
 		const [settings] = await db
 			.select()
