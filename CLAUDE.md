@@ -46,9 +46,13 @@ src/
       auth/         cookie sessions, PIN hash + lockout, POS device registration
       permissions/  RBAC checks + owner-PIN approval gates
       audit/        audit log writer
+      restaurants/  restaurant record, settings, and the onRestaurantCreated initializer list
     pos/            IndexedDB, sync queue, service worker, device invoice sequence, print-agent client
     styles/         tokens.css — THE design tokens; no colour, size or type literal lives anywhere else
   routes/
+    login/          email + password sign-in — OUTSIDE the route groups: reachable without a session
+    register/       first-run owner registration, gated by SETUP_TOKEN — likewise outside the groups
+    logout/         form action only; a GET gets 405 — likewise outside the groups
     (dashboard)/    owner/admin: menu, purchases, expenses, reports — online only
     (pos)/          POS shell: PIN login, orders, payment, session open/close — MUST work offline
     api/            JSON endpoints: POS sync, menu version/snapshot — no printing endpoint, printing is local
@@ -56,7 +60,7 @@ src/
 
 Migrations live in `src/lib/server/db/migrations` (point `drizzle.config.ts` there), are COMMITTED, and are NEVER hand-edited once they have run — add a new one instead.
 
-House convention, not spec (spec 30/32 say only "modular monolith"): `lib/server/**` MUST NOT be imported by client-side code or by `lib/pos/`; `money/` is imported by everything and imports no sibling; `orders/` calls `accounting/`, `inventory/`, `permissions/`, `audit/`, and none of them call back.
+House convention, not spec (spec 30/32 say only "modular monolith"): `lib/server/**` MUST NOT be imported by client-side code or by `lib/pos/`; `money/` is imported by everything and imports no sibling; `orders/` calls `accounting/`, `inventory/`, `permissions/`, `audit/`, and none of them call back. `restaurants/` is called by routes and by `orders/`-style modules, and calls only `audit/`.
 
 ## Design & UI
 
@@ -125,6 +129,16 @@ When work touches one, SURFACE the question and its default, ASK, and record the
 5. Who approves refunds/voids when the owner is away → owner PIN only; Manager role later.
 6. Approval limits and lock timing → discounts above 10% and pay-outs above a set amount need approval; auto-lock after 2 minutes idle.
 7. Inventory costing method → weighted average.
+
+## Decisions already made (NOT open — do not re-litigate)
+
+Settled by `tasks/restaurant-identity-and-dashboard`. Separate from the open-decisions table above: these have answers, and changing one is a new decision, not a gap to fill.
+
+- **Validation library — `zod`, pinned exactly.** Server-side only; no schema is imported into a `.svelte` component, so the client cannot disagree with the server about what is valid.
+- **The `admin.*` permission keys are a PLAN-LEVEL EXTENSION, not spec 8 text.** Spec 8 introduces its list with "For example" and names no dashboard key. Spec 8's ten POS keys are reproduced verbatim and tested against the spec; the eight `admin.*` keys are granted to the owner only. Needing a key that is in neither list is still a reason to stop and ask.
+- **Password login lockout is a HOUSE RULE adapted from spec 7's PIN rule**, and is paired with a per-IP throttle in front of the hashing. Spec 7's five-attempts/five-minutes is written for PINs on a registered device; applied naively to a public endpoint it is a denial-of-service lever against the only owner account.
+- **Registration is first-run plus `SETUP_TOKEN`.** `/register` answers only while zero restaurants exist AND the submitted token matches. There is NO environment variable that re-opens it; additional restaurants are created with `pnpm restaurant:create`.
+- **The database has TWO roles.** `matcami` owns the tables (migrations, `pg_dump`, `db:studio`); `matcami_app` is the runtime role and owns nothing — no DDL, no `TRUNCATE`. That split is what makes row-level security a later one-line migration instead of a database re-bootstrap, and it is why `.env` carries `DATABASE_URL` alongside `MIGRATE_DATABASE_URL`. Do not point the application at the owner role. See `docs/deployment.md`.
 
 ## Do NOT build (spec 31, 28, 27, 5, 15)
 

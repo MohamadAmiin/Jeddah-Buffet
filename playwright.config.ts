@@ -28,7 +28,11 @@ export default defineConfig({
 			DATABASE_URL: TEST_DATABASE_URL,
 			MIGRATE_DATABASE_URL: process.env.MIGRATE_DATABASE_URL ?? '',
 			TEST_DATABASE_URL,
-			SETUP_TOKEN: E2E_SETUP_TOKEN
+			SETUP_TOKEN: E2E_SETUP_TOKEN,
+			// `vite preview` is a PRODUCTION build, so env.ts applies its production
+			// rules. http://localhost is the one origin where SvelteKit omits the
+			// Secure flag, which is why the journey can hold a session at all.
+			ORIGIN: 'http://localhost:4173'
 		}
 	},
 	use: { baseURL: 'http://localhost:4173' }

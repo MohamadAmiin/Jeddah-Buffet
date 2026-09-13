@@ -15,6 +15,9 @@ const alias = {
 	$lib: fileURLToPath(new URL('./src/lib', import.meta.url)),
 	'$env/dynamic/private': fileURLToPath(
 		new URL('./src/lib/server/db/test/env-stub.ts', import.meta.url)
+	),
+	'$app/environment': fileURLToPath(
+		new URL('./src/lib/server/db/test/app-environment-stub.ts', import.meta.url)
 	)
 };
 
