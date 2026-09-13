@@ -74,7 +74,7 @@ Styling is **Tailwind CSS v4** (a user decision, recorded in `tasks/project-init
 
 ## Commands & setup
 
-Every command below has been run in this repo. Node is pinned to **24.21.0** (`.nvmrc`); `engines` refuses anything else, so `nvm use` before any pnpm command. `package.json` remains the source of truth for scripts. The database is the host-installed PostgreSQL 16 — there is **no** compose file.
+Every command below has been run in this repo **except `scripts/db-bootstrap.sh`**, which needs `sudo`; the role and both databases it creates were applied by equivalent SQL instead, so the script's own text is still unexercised — run it once on a fresh machine and report anything that breaks. Node is pinned to **24.21.0** (`.nvmrc`); `engines` refuses anything else, so `nvm use` before any pnpm command. `package.json` remains the source of truth for scripts. The database is the host-installed PostgreSQL 16 — there is **no** compose file.
 
 ```bash
 nvm use                                   # 24.21.0 — engine-strict refuses anything else

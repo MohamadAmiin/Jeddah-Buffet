@@ -35,7 +35,9 @@ cp .env.example .env                      # then fill in the password you just c
 pnpm db:migrate                           # takes a backup first, then applies
 ```
 
-`scripts/db-bootstrap.sh` is idempotent and safe to re-run. It creates `matcami` and `matcami_test`,
+`scripts/db-bootstrap.sh` is **written to be** idempotent and safe to re-run, but it has not yet been
+executed in this repo — it needs `sudo`, and the role and databases were created by equivalent SQL
+instead. It is the one setup step still unproven; report anything that breaks. It creates `matcami` and `matcami_test`,
 both owned by the `matcami` role and both pinned to UTC. Ownership is not cosmetic: PostgreSQL 15+
 revoked `CREATE` on schema `public` from `PUBLIC`, and drizzle-kit needs `CREATE` on the database for
 its own `drizzle` schema.
