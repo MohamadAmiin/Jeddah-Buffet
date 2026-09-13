@@ -1,0 +1,1 @@
+DROP TABLE "_probe" CASCADE;

@@ -1,0 +1,32 @@
+# Generated or vendored — the same set eslint.config.js ignores, plus the lockfile.
+.svelte-kit/
+build/
+dist/
+node_modules/
+coverage/
+backups/
+src/lib/server/db/migrations/
+pnpm-lock.yaml
+
+# ── Documents of record. The formatter must never rewrite these. ──────────────
+#
+# tasks/      Plans are decision history (and gitignored). `prettier --write .`
+#             reached in here and rewrote a plan's RESEARCH.md; a plan is never
+#             ours to reformat.
+# docs/       docs/spec.md is the signed-off authority that outranks CLAUDE.md and
+#             is cited by section number throughout the codebase. Reflowing its
+#             tables churns 197 lines of a document nobody agreed to change.
+# CLAUDE.md   The rulebook. project-init T-10's "Done when" requires
+#             `git diff CLAUDE.md` to show changes confined to ONE section, which a
+#             whole-file reformat makes impossible to satisfy.
+# .claude/    Skill definitions, not project source.
+tasks/
+docs/
+CLAUDE.md
+.claude/
+
+# src/lib/styles/tokens.css is THE design token file, hand-laid-out in compact
+# aligned groups that Prettier explodes to one declaration per line (156 -> 197
+# lines), destroying the grouping the design system reads by. Formatting is a
+# reversible preference; delete this line if you would rather have it formatted.
+src/lib/styles/tokens.css
