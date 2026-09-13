@@ -1,0 +1,479 @@
+<title>QSR POS Layout Grammar</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* ── tokens: light is the default; dark follows the viewer ───────────── */
+:root{
+  --bg:#e9edf0; --bg-2:#dfe5e9; --raise:#ffffff; --raise-2:#f4f7f9;
+  --line:#c5cfd6; --line-soft:#dce3e8;
+  --ink:#161b20; --ink-2:#4a5661; --ink-3:#646f7a;
+  --accent:#0f6b7e; --accent-ink:#ffffff;
+  --adopt:#2c6a48; --adapt:#855a12; --reject:#a13a2e;
+  --adopt-bg:#e2efe7; --adapt-bg:#f7ecd8; --reject-bg:#f9e5e2;
+  /* the depicted terminal stays dark in both themes - it is a device, not page chrome */
+  --screen:#0f1215; --key:#2a313a; --key-line:#3a434e;
+  --shadow:0 1px 0 rgba(255,255,255,.8), 0 6px 20px -14px rgba(22,27,32,.45);
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#15181b; --bg-2:#1b1f24; --raise:#22272e; --raise-2:#2b3139;
+    --line:#333b44; --line-soft:#272d34;
+    --ink:#e6eaec; --ink-2:#a8b3bc; --ink-3:#8a949d;
+    --accent:#5cb4c9; --accent-ink:#0d1416;
+    --adopt:#5aa06f; --adapt:#d99a3c; --reject:#d97165;
+    --adopt-bg:#1b2a21; --adapt-bg:#2c2417; --reject-bg:#2c1d1b;
+    --screen:#0f1215; --key:#2a313a; --key-line:#3a434e;
+    --shadow:0 1px 0 rgba(255,255,255,.04), 0 8px 24px -12px rgba(0,0,0,.8);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+    --bg:#15181b; --bg-2:#1b1f24; --raise:#22272e; --raise-2:#2b3139;
+    --line:#333b44; --line-soft:#272d34;
+    --ink:#e6eaec; --ink-2:#a8b3bc; --ink-3:#8a949d;
+    --accent:#5cb4c9; --accent-ink:#0d1416;
+    --adopt:#5aa06f; --adapt:#d99a3c; --reject:#d97165;
+    --adopt-bg:#1b2a21; --adapt-bg:#2c2417; --reject-bg:#2c1d1b;
+    --screen:#0f1215; --key:#2a313a; --key-line:#3a434e;
+    --shadow:0 1px 0 rgba(255,255,255,.04), 0 8px 24px -12px rgba(0,0,0,.8);
+    color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{
+  background:var(--bg); color:var(--ink);
+  font:400 16px/1.6 "IBM Plex Sans",system-ui,-apple-system,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1120px; margin:0 auto; padding-inline:20px; padding-block:48px 72px;}
+h1,h2,h3{font-family:Archivo,system-ui,sans-serif; text-wrap:balance; margin:0;}
+h1{font-size:clamp(30px,5vw,46px); font-weight:700; letter-spacing:-.02em; line-height:1.08;}
+h2{font-size:clamp(21px,2.6vw,27px); font-weight:600; letter-spacing:-.01em;}
+h3{font-size:16px; font-weight:600;}
+p{margin:0; max-width:68ch;}
+a{color:var(--accent)}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace; font-variant-numeric:tabular-nums;}
+.eyebrow{
+  font-family:"IBM Plex Mono",monospace; font-size:11px; font-weight:500;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--accent);
+}
+section{margin-top:64px}
+.stack{display:flex; flex-direction:column; gap:16px}
+.stack-s{display:flex; flex-direction:column; gap:10px}
+.rule{height:1px;background:var(--line-soft);border:0;margin:0}
+
+/* ── header ───────────────────────────────────────────────────────────── */
+header .stack{gap:20px}
+.lede{font-size:18px; color:var(--ink-2); max-width:64ch}
+.correction{
+  border-left:3px solid var(--adapt); background:var(--adapt-bg);
+  padding:14px 18px; border-radius:0 6px 6px 0; max-width:68ch;
+}
+.correction strong{color:var(--ink)}
+
+/* ── POS mockup ───────────────────────────────────────────────────────── */
+.screenwrap{overflow-x:auto; padding-bottom:6px;}
+.pos{
+  min-width:840px; background:var(--screen); color:#e9edf0;
+  border:1px solid var(--line); border-radius:10px; overflow:hidden;
+  box-shadow:var(--shadow); font-size:13px;
+}
+.pos-status{
+  display:flex; align-items:center; gap:14px; flex-wrap:nowrap;
+  background:#1a1f25; border-bottom:1px solid #2c343d; padding:9px 14px;
+  font-family:"IBM Plex Mono",monospace; font-size:11.5px; color:#9aa7b2;
+}
+.pos-status .who{color:#e9edf0; font-weight:500}
+.chip{
+  padding:3px 9px; border-radius:4px; font-weight:500;
+  border:1px solid #3a434e; background:#232a32; color:#cfd8df;
+}
+.chip.dine{border-color:#3d6b7a; background:#16323a; color:#8fd2e3}
+.chip.sync{border-color:#7a5a1e; background:#332a14; color:#e8bd6b}
+.pos-status .spacer{margin-left:auto}
+.pos-body{display:grid; grid-template-columns:104px 1fr 292px;}
+.rail{background:#1a1f25; border-right:1px solid #2c343d; padding:10px 8px; display:flex; flex-direction:column; gap:7px;}
+.rail button, .rail .fx{
+  font:500 11.5px/1.25 "IBM Plex Sans",sans-serif; color:#c3cdd5; text-align:center;
+  background:var(--key); border:1px solid var(--key-line); border-radius:5px;
+  padding:11px 4px; cursor:default; min-height:46px;
+  display:flex; align-items:center; justify-content:center;
+}
+.rail .fx.warn{color:#e8a58f; border-color:#5e3a33}
+.grid-zone{padding:10px 12px 14px; min-width:0}
+.tabs{display:flex; gap:6px; margin-bottom:11px; flex-wrap:wrap}
+.tab{
+  font:500 11.5px/1 "IBM Plex Sans",sans-serif; padding:8px 13px; border-radius:5px;
+  background:#20262d; border:1px solid #2f3841; color:#a8b4be;
+}
+.tab[aria-current]{background:#1d4e5b; border-color:#2f7d90; color:#bfe8f2}
+.keys{display:grid; grid-template-columns:repeat(4,1fr); gap:7px}
+.key{
+  background:var(--key); border:1px solid var(--key-line); border-radius:6px;
+  padding:12px 9px; min-height:62px; display:flex; flex-direction:column;
+  justify-content:space-between; gap:4px;
+}
+.key .n{font:500 12.5px/1.2 "IBM Plex Sans",sans-serif; color:#e3e9ee}
+.key .p{font-family:"IBM Plex Mono",monospace; font-size:11px; color:#8e9ba5}
+.key.cat-main{border-left:3px solid #4f8fb0}
+.key.cat-side{border-left:3px solid #b08a4f}
+.key.cat-drink{border-left:3px solid #6fa87d}
+/* guest check */
+.check{background:#12161a; border-left:1px solid #2c343d; display:flex; flex-direction:column; min-width:0}
+.check-head{
+  padding:9px 13px; border-bottom:1px solid #2c343d; display:flex; justify-content:space-between;
+  font-family:"IBM Plex Mono",monospace; font-size:11px; color:#8e9ba5;
+}
+.lines{padding:9px 13px; display:flex; flex-direction:column; gap:9px; flex:1}
+.line{display:grid; grid-template-columns:18px 1fr auto; gap:9px; align-items:start}
+.st{
+  font-family:"IBM Plex Mono",monospace; font-size:9.5px; font-weight:600; line-height:1.45;
+  text-align:center; border-radius:3px; padding:1px 0;
+}
+.st.new{background:#243745; color:#8fd2e3}
+.st.sent{background:#1f3326; color:#8fd0a0}
+.st.void{background:#3a2523; color:#e0938a}
+.line .nm{font-size:12.5px; color:#e3e9ee; line-height:1.35}
+.line .mod{display:block; font-size:11px; color:#8e9ba5; padding-left:9px}
+.line .amt{font-family:"IBM Plex Mono",monospace; font-size:12px; color:#e3e9ee}
+.line.voided .nm,.line.voided .amt{color:#7b868f; text-decoration:line-through}
+.totals{border-top:1px solid #2c343d; padding:10px 13px; display:flex; flex-direction:column; gap:5px;
+  font-family:"IBM Plex Mono",monospace; font-size:11.5px; color:#9aa7b2}
+.totals div{display:flex; justify-content:space-between}
+.totals .grand{color:#e9edf0; font-size:17px; font-weight:600; padding-top:5px; border-top:1px solid #2c343d; margin-top:3px}
+.tender{display:grid; grid-template-columns:1fr 1fr; gap:7px; padding:11px 13px; border-top:1px solid #2c343d}
+.tender .t{
+  font:600 12px/1 "IBM Plex Sans",sans-serif; text-align:center; padding:15px 6px;
+  border-radius:6px; background:var(--key); border:1px solid var(--key-line); color:#dbe3e9;
+}
+.tender .t.pay{grid-column:1/-1; background:#18606f; border-color:#2f8ea3; color:#ecfbff; font-size:14px; padding:17px}
+/* zone markers */
+.zm{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:19px; height:19px; border-radius:50%; flex:none;
+  background:var(--accent); color:var(--accent-ink);
+  font-family:"IBM Plex Mono",monospace; font-size:11px; font-weight:600; line-height:1;
+}
+.zm-abs{position:absolute; top:7px; left:7px; z-index:2}
+.rel{position:relative}
+
+/* ── tables ───────────────────────────────────────────────────────────── */
+.tablewrap{overflow-x:auto; border:1px solid var(--line-soft); border-radius:8px; background:var(--raise)}
+table{border-collapse:collapse; width:100%; min-width:660px; font-size:14.5px}
+th,td{text-align:left; padding:13px 15px; vertical-align:top; border-bottom:1px solid var(--line-soft)}
+thead th{
+  font-family:"IBM Plex Mono",monospace; font-size:10.5px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--ink-3); font-weight:500; background:var(--raise-2);
+}
+tbody tr:last-child td{border-bottom:0}
+td .zm{margin-right:7px; vertical-align:middle}
+.verdict{
+  display:inline-block; font-family:"IBM Plex Mono",monospace; font-size:10.5px; font-weight:600;
+  letter-spacing:.07em; text-transform:uppercase; padding:3px 8px; border-radius:4px; white-space:nowrap;
+}
+.v-adopt{background:var(--adopt-bg); color:var(--adopt)}
+.v-adapt{background:var(--adapt-bg); color:var(--adapt)}
+.v-reject{background:var(--reject-bg); color:var(--reject)}
+
+/* ── spec block ───────────────────────────────────────────────────────── */
+.specs{display:grid; grid-template-columns:repeat(auto-fit,minmax(232px,1fr)); gap:1px; background:var(--line-soft); border:1px solid var(--line-soft); border-radius:8px; overflow:hidden}
+.spec{background:var(--raise); padding:17px 18px; display:flex; flex-direction:column; gap:5px}
+.spec .v{font-family:"IBM Plex Mono",monospace; font-size:25px; font-weight:600; color:var(--ink); letter-spacing:-.02em}
+.spec .v small{font-size:13px; font-weight:400; color:var(--ink-3)}
+.spec .k{font-size:13px; color:var(--ink-2); line-height:1.45}
+.spec .src{font-family:"IBM Plex Mono",monospace; font-size:10.5px; color:var(--ink-3)}
+
+/* ── divergence + gotcha lists ────────────────────────────────────────── */
+.cols{display:grid; grid-template-columns:repeat(auto-fit,minmax(292px,1fr)); gap:18px}
+.card{background:var(--raise); border:1px solid var(--line-soft); border-radius:8px; padding:19px 20px; display:flex; flex-direction:column; gap:9px}
+.card.flag{border-left:3px solid var(--reject)}
+.card h3{color:var(--ink)}
+.card p{font-size:14px; color:var(--ink-2)}
+.card .tag{font-family:"IBM Plex Mono",monospace; font-size:10.5px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3)}
+ul.gotchas{list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:13px}
+ul.gotchas li{display:grid; grid-template-columns:auto 1fr; gap:13px; align-items:baseline; font-size:14.5px; color:var(--ink-2); max-width:82ch}
+ul.gotchas .num{font-family:"IBM Plex Mono",monospace; font-size:11.5px; color:var(--accent); font-weight:500}
+ul.gotchas b{color:var(--ink); font-weight:600}
+
+/* ── sources ──────────────────────────────────────────────────────────── */
+.srcs{display:flex; flex-direction:column; gap:9px; font-size:13.5px}
+.srcs a{text-decoration:none; border-bottom:1px solid var(--line)}
+.srcs a:hover{border-bottom-color:var(--accent)}
+.srcs span{color:var(--ink-3); font-family:"IBM Plex Mono",monospace; font-size:11px}
+footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line-soft); color:var(--ink-3); font-size:13px}
+:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+@media (max-width:640px){
+  .wrap{padding-block:34px 52px}
+  section{margin-top:48px}
+}
+</style>
+
+<div class="wrap">
+
+<header class="stack">
+  <div class="eyebrow">Field study · counter POS</div>
+  <h1>The layout grammar of a quick-service POS</h1>
+  <p class="lede">What NCR and Oracle actually publish about designing a till screen — and which of it survives contact with a dine-in restaurant that has tables, rounds of ordering and split bills.</p>
+  <div class="correction">
+    <strong>There is no single “KFC POS.”</strong> KFC runs different stacks by market and franchisee. Yum!’s own platform, <em>Byte by Yum!</em> (formerly <span class="mono">Poseidon</span>), was in roughly <span class="mono">7,000</span> restaurants across all four brands at the end of 2025 — against KFC’s 30,000+ international restaurants alone — and management says KFC “requires expanded deployment over time.” No Byte interface screenshots have been published. The useful reference isn’t a photo of a KFC till; it’s the design manuals its vendors publish openly.
+  </div>
+</header>
+
+<section>
+  <div class="stack">
+    <div class="eyebrow">The canonical layout</div>
+    <h2>Four zones, one of which never moves</h2>
+    <p style="color:var(--ink-2)">Drawn below with <em>matcami’s</em> content — a dine-in check at table 4 — rather than a fast-food one, so the gaps show. Numbers key to the table underneath.</p>
+  </div>
+
+  <div class="screenwrap" style="margin-top:22px">
+    <div class="pos" role="img" aria-label="Mockup of a point-of-sale screen: status bar, left function rail, category tabs, item grid, and a permanent guest check with totals and tender buttons.">
+
+      <div class="pos-status">
+        <span class="zm">1</span>
+        <span class="who">Amina · Cashier</span>
+        <span class="chip dine">Dine-in · Table 4</span>
+        <span class="chip sync">◆ OFFLINE · 3 unsynced</span>
+        <span class="spacer"></span>
+        <span>Business day 12 Sep</span>
+        <span>POS1</span>
+      </div>
+
+      <div class="pos-body">
+
+        <div class="rail rel">
+          <span class="zm zm-abs">2</span>
+          <div class="fx" style="margin-top:18px">Tables</div>
+          <div class="fx">Send to<br>kitchen</div>
+          <div class="fx">Split<br>bill</div>
+          <div class="fx">Discount</div>
+          <div class="fx warn">Void</div>
+          <div class="fx warn">Refund</div>
+        </div>
+
+        <div class="grid-zone rel">
+          <div class="tabs" style="padding-left:26px">
+            <span class="zm zm-abs">3</span>
+            <span class="tab" aria-current="true">Mains</span>
+            <span class="tab">Sides</span>
+            <span class="tab">Drinks</span>
+            <span class="tab">Desserts</span>
+          </div>
+          <div class="keys rel">
+            <span class="zm zm-abs" style="top:-2px; left:-2px">4</span>
+            <div class="key cat-main"><span class="n">Burger</span><span class="p">8.00</span></div>
+            <div class="key cat-main"><span class="n">Chicken Wrap</span><span class="p">7.50</span></div>
+            <div class="key cat-main"><span class="n">Grilled Fish</span><span class="p">11.00</span></div>
+            <div class="key cat-main"><span class="n">Beef Steak</span><span class="p">14.50</span></div>
+            <div class="key cat-side"><span class="n">Fries</span><span class="p">2.50</span></div>
+            <div class="key cat-side"><span class="n">Side Salad</span><span class="p">3.00</span></div>
+            <div class="key cat-drink"><span class="n">Cola</span><span class="p">2.00</span></div>
+            <div class="key cat-drink"><span class="n">Water</span><span class="p">1.00</span></div>
+          </div>
+        </div>
+
+        <div class="check rel">
+          <span class="zm zm-abs" style="left:auto; right:9px">5</span>
+          <div class="check-head"><span>ORDER #1042</span><span>OPEN</span></div>
+          <div class="lines">
+            <div class="line">
+              <span class="st sent">SENT</span>
+              <span class="nm">Burger<span class="mod">+ Extra Cheese · 0.50</span><span class="mod">− No Tomato</span></span>
+              <span class="amt">8.50</span>
+            </div>
+            <div class="line">
+              <span class="st sent">SENT</span>
+              <span class="nm">Fries</span><span class="amt">2.50</span>
+            </div>
+            <div class="line voided">
+              <span class="st void">VOID</span>
+              <span class="nm">Grilled Fish<span class="mod">Kitchen error · appr. Owner</span></span>
+              <span class="amt">11.00</span>
+            </div>
+            <div class="line">
+              <span class="st new">NEW</span>
+              <span class="nm">Cola ×2</span><span class="amt">4.00</span>
+            </div>
+          </div>
+          <div class="totals rel">
+            <span class="zm zm-abs" style="left:auto; right:9px; top:9px">6</span>
+            <div><span>Subtotal</span><span>15.00</span></div>
+            <div><span>Discount</span><span>−1.50</span></div>
+            <div><span>Tax 10%</span><span>1.35</span></div>
+            <div class="grand"><span>TOTAL</span><span>14.85</span></div>
+          </div>
+          <div class="tender rel">
+            <span class="zm zm-abs" style="left:auto; right:9px">7</span>
+            <div class="t" style="margin-top:16px">Exact<br>14.85</div>
+            <div class="t" style="margin-top:16px">Next $<br>15.00</div>
+            <div class="t pay">Pay</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="stack">
+    <div class="eyebrow">Zone by zone</div>
+    <h2>What the manuals say, and what you should do</h2>
+  </div>
+  <div class="tablewrap" style="margin-top:22px">
+    <table>
+      <thead><tr><th style="width:19%">Zone</th><th style="width:42%">What NCR &amp; Oracle publish</th><th style="width:39%">For matcami</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="zm">1</span><b>Status bar</b></td>
+          <td>Simphony carries a four-panel status bar. Offline state is a <b>permanently visible two-part indicator in the chrome</b> — never a toast. Toast goes further: a full-width yellow banner after ~40s, plus an explicit list of what still works.</td>
+          <td><span class="verdict v-adopt">Adopt</span><br>Spec §6 already mandates the unsynced count always on screen. The vendors independently arrived at the same rule — that’s confirmation, not coincidence. Go further than Simphony’s two small text labels.</td>
+        </tr>
+        <tr>
+          <td><span class="zm">2</span><b>Function rail</b></td>
+          <td>Aloha reserves a fixed region for standard buttons whose size and position cannot be moved. Destructive functions sit with the rest.</td>
+          <td><span class="verdict v-adapt">Adapt</span><br>Keep the rail, but separate the seven owner-PIN actions visually. They must be fast to reach deliberately and hard to hit by accident — opposing forces the QSR layout never had to resolve.</td>
+        </tr>
+        <tr>
+          <td><span class="zm">3</span><b>Category tabs</b></td>
+          <td>Categories are reached by <b>tabs, not drill-down-and-back</b>. Simphony’s tabbed template caps near 50 tabs and 50 buttons per tab. Oracle pulls buttons in via Screen Lookups that auto-group, sort and paginate — menu items are not hand-placed.</td>
+          <td><span class="verdict v-adopt">Adopt</span><br>Tabs, and generate the grid from the menu snapshot rather than positioning buttons by hand. A hand-placed grid is a second source of truth that drifts from §5’s menu version.</td>
+        </tr>
+        <tr>
+          <td><span class="zm">4</span><b>Item grid</b></td>
+          <td>MICROS’s fast-food layouts ran <span class="mono">35</span> and <span class="mono">54</span> keys. Aloha exposes grid geometry as absolute pixels — rows, columns, per-button size and spacing — hand-tuned, not fluid. Vendor advice: most-ordered items on the default panel.</td>
+          <td><span class="verdict v-adapt">Adapt</span><br>Absolute-pixel grids assume a fixed terminal. A browser app on unknown hardware can’t. Pin a target resolution, then verify the touch target in <span class="mono">mm</span>, not <span class="mono">px</span>.</td>
+        </tr>
+        <tr>
+          <td><span class="zm">5</span><b>Guest check</b></td>
+          <td>The check pane is <b>permanent; everything else swaps around it</b>. Stated rationale: the operator must never navigate away to see what’s been rung in. Modals are for exceptions only — errors, reason codes, approvals.</td>
+          <td><span class="verdict v-adopt">Adopt</span><br>The single most transferable rule on this page. Aloha encodes void-vs-delete by item <em>text colour</em> alone — don’t. WCAG 1.4.1, and 1 in 12 men has red-green CVD. Carry a glyph too.</td>
+        </tr>
+        <tr>
+          <td><span class="zm">6</span><b>Totals</b></td>
+          <td>Discount, tax and total stacked directly above tender, monospaced and right-aligned for column scanning.</td>
+          <td><span class="verdict v-adopt">Adopt</span><br>One formatter, integer cents in and a string out. §17’s “one rounding rule in one function” is a UI rule as much as a domain one — the screen must never round independently.</td>
+        </tr>
+        <tr>
+          <td><span class="zm">7</span><b>Tender</b></td>
+          <td>Called out as <b>the highest-value real estate on the screen</b>; the target is one-touch close. Quick tenders come in two documented flavours: exact amount due, and next-highest-dollar.</td>
+          <td><span class="verdict v-adopt">Adopt</span><br>Cheap to build, disproportionately loved. But card and mobile can’t auto-complete offline (§6) — those tenders must visibly disable, not fail after the tap.</td>
+        </tr>
+        <tr>
+          <td colspan="2"><b>Kitchen Display System</b> — every vendor assumes a KDS receives the order.</td>
+          <td><span class="verdict v-reject">Reject</span><br>Explicitly on the do-not-build list. Kitchen tickets print to ESC/POS. Don’t let a borrowed pattern smuggle a KDS into the MVP.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="stack">
+    <div class="eyebrow">Hard numbers</div>
+    <h2>What to build against</h2>
+  </div>
+  <div class="specs" style="margin-top:22px">
+    <div class="spec">
+      <span class="v">20 <small>mm</small></span>
+      <span class="k">Touch target from the standing-kiosk literature — roughly <span class="mono">111</span> CSS px, about 2.5× Apple’s 44pt.</span>
+      <span class="src">kiosk human-factors · px conversion is arithmetic, not a published figure</span>
+    </div>
+    <div class="spec">
+      <span class="v">9.2 <small>mm</small></span>
+      <span class="k">Research-backed floor for accurate finger use. Error rate falls with size up to ~10mm, then flattens.</span>
+      <span class="src">touch-target research</span>
+    </div>
+    <div class="spec">
+      <span class="v">500 <small>nits</small></span>
+      <span class="k">Real counter hardware, with anti-glare coating and optical bonding. A browser app on a generic tablet will be <em>dimmer</em> than what it replaces.</span>
+      <span class="src">POS hardware specs</span>
+    </div>
+    <div class="spec">
+      <span class="v">85 <small>dBA</small></span>
+      <span class="k">Counter and kitchen noise routinely hits the occupational action level. Audio can never be the primary confirmation channel.</span>
+      <span class="src">occupational noise standards</span>
+    </div>
+    <div class="spec">
+      <span class="v">1 <small>in 12</small></span>
+      <span class="k">Men with red-green colour vision deficiency — which rules out colour alone for the free/occupied and NEW/SENT/VOIDED states.</span>
+      <span class="src">WCAG SC 1.4.1, Level A</span>
+    </div>
+    <div class="spec">
+      <span class="v">32<small> / </small>48</span>
+      <span class="k">Characters per line on thermal receipts. A separate design problem from the screen: no colour, no images, <span class="mono">COPY</span> on reprints.</span>
+      <span class="src">ESC/POS · spec §11</span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="stack">
+    <div class="eyebrow">The gap</div>
+    <h2>Four things no QSR layout solves</h2>
+    <p style="color:var(--ink-2)">A counter till closes one transaction at a time. Yours doesn’t — and this is exactly where the borrowed grammar runs out.</p>
+  </div>
+  <div class="cols" style="margin-top:22px">
+    <div class="card">
+      <span class="tag">Spec §13</span>
+      <h3>The check is long-lived</h3>
+      <p>QSR: ring, pay, clear. Yours: a table opens, items arrive in rounds over an hour, the bill prints, more items land and re-open it. <span class="mono">OPEN → BILLED → PAID</span> needs to read at a glance — and BILLED has no QSR equivalent at all.</p>
+    </div>
+    <div class="card">
+      <span class="tag">Spec §13</span>
+      <h3>A table map is a primary screen</h3>
+      <p>No QSR reference has one. Free vs occupied plus open amount, transfer and merge — a whole screen the manuals are silent on. Its state colours need the same non-colour redundancy as the check.</p>
+    </div>
+    <div class="card">
+      <span class="tag">Spec §13</span>
+      <h3>Split and merge bills</h3>
+      <p>Split by item, split equally, split a payment across methods. Direct manipulation of a check that already exists — nothing in the QSR grammar covers it, and it’s where mis-taps cost real money.</p>
+    </div>
+    <div class="card flag">
+      <span class="tag">Spec §8 · §14</span>
+      <h3>Owner approval, done properly</h3>
+      <p>Aloha signals a persistent “Manager Mode” with a <b>green border around the whole screen</b> — worth stealing. But Simphony lets the void <em>reason code</em> be switched off entirely. §14 makes it mandatory. Don’t inherit that flexibility.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="stack">
+    <div class="eyebrow">From operators, not vendors</div>
+    <h2>What actually goes wrong</h2>
+  </div>
+  <ul class="gotchas" style="margin-top:22px">
+    <li><span class="num">01</span><span><b>Taps are the unit of measure.</b> Operators count added taps, not seconds, and adding one to a checkout flow is the single most-hated change they report. Sub-second lag between item adds is described as system failure during a rush.</span></li>
+    <li><span class="num">02</span><span><b>Errors cluster on modifiers, not items.</b> In one 2025 drive-thru study, roughly half of all order errors were a <em>single missed modifier</em>. Your recipe deductions ride on modifiers too — so a mis-tap there corrupts stock, not just the plate.</span></li>
+    <li><span class="num">03</span><span><b>Shared manager PINs are the normal failure.</b> Approval still happens; it just stops identifying anyone. Your audit row stores the approver — which only means something if each person has their own PIN and nobody lends it.</span></li>
+    <li><span class="num">04</span><span><b>Gloves and grease are permanent, not occasional.</b> The FDA Food Code bans bare-hand contact with ready-to-eat food, so a till shared with food handling is operated gloved. Practitioners note grease on capacitive glass even shortly after handwashing.</span></li>
+    <li><span class="num">05</span><span><b>Unannounced layout changes are treated as an incident.</b> Staff get retrained mid-shift; tiles shrink below usable. A menu edit that reflows the grid during service is the same event — §5’s version bump has a human cost.</span></li>
+    <li><span class="num">06</span><span><b>Cloud dependence takes the drawer down too.</b> McDonald’s closed restaurants worldwide for hours in March 2024 over a third-party config change. Your offline-first design is the right call; this is what it’s insuring against.</span></li>
+    <li><span class="num">07</span><span><b>Steal Simphony’s battery interlock.</b> Below 5% it blocks opening a check entirely, warns at 15%, logs both, and the warning can’t be dismissed. A tablet dying mid-order with unsynced operations is your worst case — and it’s preventable in the UI.</span></li>
+  </ul>
+</section>
+
+<section>
+  <div class="stack">
+    <div class="eyebrow">Sources</div>
+    <h2>Where this came from</h2>
+    <p style="color:var(--ink-2)">Vendor manuals and trade press, not the SEO farms that dominate this search. 91 of 111 findings were documented rather than inferred.</p>
+    <div class="srcs" style="margin-top:6px">
+      <a href="https://investors.yum.com/news-events/financial-releases/news-details/2025/Introducing-Byte-by-Yum-an-AI-Driven-Restaurant-Technology-Platform-Powering-Customer-and-Team-Member-Experiences-Worldwide/default.aspx">Introducing Byte by Yum! — Yum! Brands investor release <span>· 6 Feb 2025</span></a>
+      <a href="https://www.nrn.com/quick-service/yum-brands-has-created-an-ai-powered-platform-to-house-all-of-its-technology-solutions">Yum! consolidates its tech under one platform — Nation’s Restaurant News <span>· 6 Feb 2025</span></a>
+      <a href="https://www.fool.com/earnings/call-transcripts/2026/02/04/yum-brands-yum-q4-2025-earnings-call-transcript/">Yum! Brands Q4 2025 earnings call — the 7,000-restaurant Smart Ops figure <span>· 4 Feb 2026</span></a>
+      <a href="https://www.restaurantdive.com/news/yum-accelerates-technology-deployment-globally-2023/706952/">Yum accelerates technology deployment — Restaurant Dive, on Poseidon <span>· 8 Feb 2024</span></a>
+      <a href="https://www.restaurantdive.com/news/yum-brands-integrates-taco-bell-kfc-pizza-hut-tech-in-ai-backed-platform/739398/">Yum Brands launches integrated tech platform — Restaurant Dive <span>· 2025</span></a>
+      <a href="https://hospitalitytech.com/kfc-remotely-monitors-pos-activities-real-time">KFC remotely monitors POS activities in real time — Hospitality Technology</a>
+      <a href="https://chainstoreage.com/scandinavian-kfc-franchisee-integrates-operations-cloud-pos">Scandinavian KFC franchisee moves to cloud POS — Chain Store Age</a>
+    </div>
+    <p style="color:var(--ink-3); font-size:13.5px; margin-top:4px">Layout, panel and grid detail comes from NCR Voyix’s <em>Aloha Quick Service</em> manuals and Oracle’s <em>Simphony POS User Guide</em> — both publish annotated screenshots and pixel-level grid specifications.</p>
+  </div>
+</section>
+
+<footer>
+  matcami · design reference. Adopt/adapt/reject verdicts are judgement calls against the spec, not vendor guidance — argue with them.
+</footer>
+
+</div>

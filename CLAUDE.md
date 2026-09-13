@@ -47,6 +47,7 @@ src/
       permissions/  RBAC checks + owner-PIN approval gates
       audit/        audit log writer
     pos/            IndexedDB, sync queue, service worker, device invoice sequence, print-agent client
+    styles/         tokens.css — THE design tokens; no colour, size or type literal lives anywhere else
   routes/
     (dashboard)/    owner/admin: menu, purchases, expenses, reports — online only
     (pos)/          POS shell: PIN login, orders, payment, session open/close — MUST work offline
@@ -57,9 +58,23 @@ Migrations live in `src/lib/server/db/migrations` (point `drizzle.config.ts` the
 
 House convention, not spec (spec 30/32 say only "modular monolith"): `lib/server/**` MUST NOT be imported by client-side code or by `lib/pos/`; `money/` is imported by everything and imports no sibling; `orders/` calls `accounting/`, `inventory/`, `permissions/`, `audit/`, and none of them call back.
 
+## Design & UI
+
+Styling is **Tailwind CSS v4** (a user decision, recorded in `tasks/project-init.md`; configured in CSS via `@theme` — there is no `tailwind.config.js` and must not be). Tokens live in `src/lib/styles/tokens.css`, imported by `src/app.css` — the ONLY place a colour, size or type value is defined. Write `bg-raise text-ink p-touch`; an arbitrary value like `bg-[#123456]` or `p-[57px]` in a component is a bug — add a token instead. Full reference `docs/design-system.md`; the researched layout grammar, with adopt/adapt/reject verdicts, is `docs/pos-layout-grammar.html`.
+
+- **Light is the default.** The bare `:root` holds the COMPLETE light palette; dark is `@media (prefers-color-scheme:dark)` guarded as `:root:not([data-theme="light"])`, plus a `:root[data-theme="dark"]` stamp so an explicit choice wins either way. Every `--c-*` MUST exist in the bare `:root` — one defined only inside a media or `[data-theme]` block is invisible in the un-stamped state. Themeable tokens are exposed to Tailwind via **`@theme inline`**, which is required: plain `@theme` bakes the light value into the utility, while `inline` emits `var(--c-bg)` so the utility follows the theme.
+- **The POS shell stays dark in BOTH themes** (`--screen`, `--key`, `--key-ink`). It is a device surface, not page chrome. Do not theme it.
+- **Colour NEVER carries meaning alone** — pair every status with its glyph. Item `NEW ◇` / `SENT ▲` / `VOIDED ✕` (struck through, with reason + approver); order `OPEN ○` / `BILLED ◐` / `PAID ●` / `VOIDED ✕` / `REFUNDED ↩`; table free `○` / occupied `●` + open amount; sync online `●` / offline `◆` + unsynced count. (WCAG 1.4.1; ~1 in 12 men has red-green CVD.)
+- **Money renders through the money module's formatter**, in `--font-mono` with `tabular-nums`, right-aligned, negatives with a leading `−` AND `--danger`. Each line shows the price and tax rate STORED on it. The UI never does money arithmetic and never rounds (invariants 1, 7).
+- **Touch targets** on the POS: floor `touch-min` 56px, standard `touch` 64px, keys `touch-lg` 72px, Pay / Send-to-kitchen `touch-xl` 96px (`p-touch`, `min-h-touch-xl`). Dashboard uses Tailwind's default scale. Apple 44pt and Material 48dp assume a seated user holding the device — too small for a counter.
+- **The guest check is permanent**; tabs and the item grid swap around it. Modals are for reason codes, owner approval and errors only — never ordinary ordering.
+- **Offline state is permanent chrome** carrying the unsynced count (spec 6), never a toast. A control disabled by a non-empty queue must say why rather than sit dead. Card and mobile tenders visibly disable offline — they never fail after the tap (invariant 5).
+- **Receipts are a separate problem**: 32 or 48 fixed characters, no colour, monospace, `COPY` on reprints (spec 11). None of the screen tokens apply.
+- **WCAG AA (4.5:1) at normal text size, in both themes**, for every text-on-surface pair. Verify before adding a colour.
+
 ## Commands & setup
 
-ASSUMED toolchain — the repo is empty, nothing is installed. The commit that scaffolds tooling MUST make these real or rewrite this block; until then they are a proposal, not fact.
+Scaffolding is in progress via `tasks/project-init.md` (T-01…T-10; **T-05 done**). `package.json` is real — treat IT as the source of truth for scripts, not this block, which **T-10 owns making true**. Node is pinned to **24.21.0** (`.nvmrc`); `engines` refuses anything else, so `nvm use` before any pnpm command. The commit that scaffolds tooling MUST make these real or rewrite this block; until then they are a proposal, not fact.
 
 ```bash
 pnpm install
@@ -103,9 +118,9 @@ When work touches one, SURFACE the question and its default, ASK, and record the
 
 Delivery · multiple branches, terminals, warehouses or tenants · Kitchen Display System · waiter handhelds · Manager role and remote approvals, advanced RBAC, advanced employee management · sub-recipes and batch prep · supplier management, Accounts Receivable, payroll, bank reconciliation, any accounting beyond spec 23's chart — the Accounts Payable *account* (2000) IS in the MVP, supplier management is not · change-only menu sync · Redis and server WebSocket push · biometrics · advanced analytics · summary tables, materialized views and background report jobs (plain indexed SQL until a report is measurably slow, spec 27). Leave seams, not implementations: keep `device_id` on POS-created rows so a second terminal is a data change, not a rewrite.
 
-## Task routing & skill map — PLANNED, not yet built
+## Task routing & skill map
 
-`.claude/skills/` DOES NOT EXIST YET; these skills are the next thing to build. Until one exists read the cited spec sections, and create the skill as part of the first real task in that area.
+`plan-feature` (brainstorm → risk panel → approval gate → `tasks/`) and `execute-plan` (worktree → commit per task → verify → PR) EXIST in `.claude/skills/`. Everything in the table below is still PLANNED — until one exists, read the cited spec sections.
 
 | Task smells like | Code | Spec | Skill (planned) |
 |---|---|---|---|

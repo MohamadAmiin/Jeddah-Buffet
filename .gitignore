@@ -37,3 +37,7 @@ pnpm-debug.log*
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Database dumps (pnpm db:backup) — will contain PIN hashes, session
+# tokens and the audit log. Never committed.
+backups/
