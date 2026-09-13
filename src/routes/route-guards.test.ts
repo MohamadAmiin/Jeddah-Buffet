@@ -10,7 +10,7 @@
 // what would notice. Do not delete them as duplicated effort.
 
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // Imported from the SINGLE SOURCE that hooks.server.ts also imports and
@@ -103,10 +103,18 @@ describe('every route is guarded or deliberately public', () => {
 		expect([...PUBLIC_ROUTE_IDS].sort()).toEqual(['/', '/login', '/register']);
 	});
 
-	// The walk searches SOURCE TEXT, so it can be satisfied by a guard call in a
-	// comment or in dead code. It is a cheap tripwire; route-guards.integration.
-	// test.ts is the real evidence.
-	it('is understood to be a tripwire, not proof', () => {
-		expect(GUARD_CALLS).toContain('requirePermission');
+	// The walk searches SOURCE TEXT, so it can be satisfied by a guard call sitting
+	// in a comment or in dead code. It is a cheap TRIPWIRE, and the real evidence
+	// lives elsewhere. Assert those files EXIST rather than asserting a constant
+	// against itself, which was the previous version of this test and could not
+	// fail:
+	//   - permissions/guards.test.ts EXECUTES the three guards and asserts 403/303
+	//   - route-guards.integration.test.ts drives the real hook
+	//   - e2e/auth.spec.ts issues real HTTP requests
+	it('defers to tests that actually execute the guards', () => {
+		const here = fileURLToPath(new URL('.', import.meta.url));
+		expect(existsSync(join(here, 'route-guards.integration.test.ts'))).toBe(true);
+		expect(existsSync(join(here, '../lib/server/permissions/guards.test.ts'))).toBe(true);
+		expect(existsSync(join(here, '../../e2e/auth.spec.ts'))).toBe(true);
 	});
 });

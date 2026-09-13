@@ -43,10 +43,45 @@ export async function resetDb(): Promise<void> {
 	await getPool().query(`TRUNCATE ${TABLES.join(', ')} RESTART IDENTITY CASCADE`);
 }
 
+/**
+ * A session-scoped advisory lock held for the WHOLE run.
+ *
+ * The integration project and the e2e journey share matcami_test, and the reset
+ * above truncates every table. Two runners at once therefore destroy each other's
+ * fixtures mid-test, and the symptoms point AWAY from the cause: foreign-key
+ * violations, duplicate emails, and a 303 where a 403 was expected — in the file
+ * headed MANDATORY (spec 29), so a real permission regression would be
+ * indistinguishable from the noise.
+ *
+ * This makes a second runner WAIT instead. It is a plain pg_advisory_lock, not
+ * xact-scoped, held on a dedicated connection for the run's duration.
+ */
+const RUN_LOCK_KEY = 8_123_704_551;
+let lockClient: pg.Client | undefined;
+
+export async function acquireRunLock(): Promise<void> {
+	if (lockClient) return;
+	const url = process.env.TEST_DATABASE_URL;
+	if (!url) throw new Error('TEST_DATABASE_URL is not set — refusing to take the run lock.');
+	const client = new pg.Client({ connectionString: url });
+	await client.connect();
+	// Blocks until whoever holds it finishes, rather than interleaving with them.
+	await client.query('select pg_advisory_lock($1)', [RUN_LOCK_KEY]);
+	lockClient = client;
+}
+
+export async function releaseRunLock(): Promise<void> {
+	if (!lockClient) return;
+	await lockClient.query('select pg_advisory_unlock($1)', [RUN_LOCK_KEY]);
+	await lockClient.end();
+	lockClient = undefined;
+}
+
 /** Close the pool. Called from the integration setup's afterAll. */
 export async function closeResetPool(): Promise<void> {
 	if (pool) {
 		await pool.end();
 		pool = undefined;
 	}
+	await releaseRunLock();
 }

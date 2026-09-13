@@ -55,11 +55,16 @@ describe('loginFailPayload', () => {
 		expect(Object.keys(payload)).toEqual(['email', 'message']);
 		expect(payload).not.toHaveProperty('password');
 
-		// The generic MESSAGE legitimately contains the word "password" ("Email or
-		// password is incorrect"), so assert the value never appears rather than
-		// that the word never does.
-		const submitted = 'hunter2-the-actual-secret';
-		expect(JSON.stringify(loginFailPayload('owner@cafe.com'))).not.toContain(submitted);
+		// The helper takes no password at all — which IS the guarantee. Assert that
+		// property directly rather than searching the output for a value the
+		// function was never given, which would pass no matter what it returned.
+		expect(loginFailPayload.length).toBeLessThanOrEqual(2);
+		// And the payload's keys are fixed, whatever is passed alongside.
+		expect(Object.keys(loginFailPayload('a@b.c', { retryAfterMs: 5 })).sort()).toEqual([
+			'email',
+			'message',
+			'retryAfterMs'
+		]);
 	});
 
 	it('uses one generic message, so a locked account is indistinguishable', () => {

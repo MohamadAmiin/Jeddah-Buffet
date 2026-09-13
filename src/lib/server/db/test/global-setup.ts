@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { acquireRunLock, releaseRunLock } from './reset';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 
@@ -28,6 +29,10 @@ export default async function setup() {
 		);
 	}
 
+	// Hold the run lock for the WHOLE run, so a concurrent `pnpm test:e2e` (which
+	// shares this database and truncates it) waits rather than interleaving.
+	await acquireRunLock();
+
 	const pool = new pg.Pool({ connectionString: url, options: '-c timezone=UTC' });
 	try {
 		// Drizzle's RUNTIME migrator, not `drizzle-kit push`. Two reasons:
@@ -41,4 +46,9 @@ export default async function setup() {
 	} finally {
 		await pool.end();
 	}
+
+	// Vitest calls the returned function after the whole project run.
+	return async () => {
+		await releaseRunLock();
+	};
 }

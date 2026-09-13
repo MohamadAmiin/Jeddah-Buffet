@@ -136,6 +136,21 @@ describe('MANDATORY (spec 29): every (dashboard) route returns 403 for a non-own
 		expect(result.location).toBeUndefined();
 	});
 
+	// T-23's Done-when names "a direct POST to the action". A form action is a
+	// separately reachable POST endpoint, so assert the METHOD too — the makeEvent
+	// helper already took a method parameter that nothing passed.
+	it.each(DASHBOARD_ROUTE_IDS)('%s returns 403 for a cashier POSTing directly', async (routeId) => {
+		const { token } = await makeUser('cashier');
+		const event = makeEvent(routeId, token, 'POST');
+		let status: number | undefined;
+		try {
+			await runBothHandlers(event);
+		} catch (thrown) {
+			status = (thrown as { status?: number }).status;
+		}
+		expect(status).toBe(403);
+	});
+
 	it.each(DASHBOARD_ROUTE_IDS)('%s lets the owner through', async (routeId) => {
 		const { token } = await makeUser('owner');
 		const result = await runHook(routeId, token);

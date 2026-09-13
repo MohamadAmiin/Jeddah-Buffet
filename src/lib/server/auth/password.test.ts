@@ -54,11 +54,27 @@ describe('password hashing (argon2id, PHC format)', () => {
 		// Produced with m=8192 (below the current 19456). Re-derivation must use the
 		// parameters FROM THE STRING, or an existing owner could never log in again
 		// after the cost factor is raised.
-		const weak = '$argon2id$v=19$m=8192,t=2,p=1$c2FsdHNhbHRzYWx0MTI$' + '';
-		// Build it for real rather than hand-rolling a tag:
-		const { argon2Sync, randomBytes } = await import('node:crypto');
+		// Built for real rather than hand-rolled, so the parameters in the string
+		// genuinely match the tag — and built with the ASYNC argon2, because T-10's
+		// Done-when greps src/ for the SYNCHRONOUS form and requires no hits. That
+		// form blocks the event loop, which on a public login endpoint is a
+		// denial-of-service primitive; the ban is worth keeping mechanical, so this
+		// fixture must not be the one exception that blunts the grep.
+		const { argon2, randomBytes } = await import('node:crypto');
+		const { promisify } = await import('node:util');
+		const argon2Async = promisify(argon2) as (
+			algorithm: 'argon2id',
+			params: {
+				message: Buffer;
+				nonce: Buffer;
+				parallelism: number;
+				tagLength: number;
+				memory: number;
+				passes: number;
+			}
+		) => Promise<Buffer>;
 		const nonce = randomBytes(16);
-		const tag = argon2Sync('argon2id', {
+		const tag = await argon2Async('argon2id', {
 			message: Buffer.from('legacy password', 'utf8'),
 			nonce,
 			parallelism: 1,
@@ -72,7 +88,8 @@ describe('password hashing (argon2id, PHC format)', () => {
 			'$' +
 			tag.toString('base64').replace(/=+$/, '');
 
-		expect(weak).toBeTruthy(); // keeps the explanatory literal above meaningful
+		// The parameters really are weaker than the current constants.
+		expect(legacy).toContain('m=8192');
 		expect(await verifyPassword(legacy, 'legacy password')).toBe(true);
 		expect(needsRehash(legacy)).toBe(true);
 	});

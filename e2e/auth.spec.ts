@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { resetDb, closeResetPool } from '../src/lib/server/db/test/reset';
+import { resetDb, closeResetPool, acquireRunLock } from '../src/lib/server/db/test/reset';
 import { E2E_SETUP_TOKEN } from '../playwright.config';
 
 // DATABASE CHOICE, stated as the task requires: this spec runs against the TEST
@@ -24,6 +24,11 @@ const EMAIL = 'owner@e2e.test';
 const PASSWORD = 'a strong enough password';
 
 test.beforeAll(async () => {
+	// Wait for any concurrent integration run: both share matcami_test and both
+	// truncate it. Without this, a simultaneous `pnpm test` makes this journey fail
+	// at step 2 with "Registration is closed: a restaurant already exists" — a
+	// symptom that points nowhere near the cause.
+	await acquireRunLock();
 	await resetDb();
 });
 
