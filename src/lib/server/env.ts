@@ -48,3 +48,27 @@ export const DATABASE_URL = required('DATABASE_URL');
 // worth deciding deliberately there. T-02 of this plan specifies it as validated,
 // and that is what ships today.
 export const MIGRATE_DATABASE_URL = required('MIGRATE_DATABASE_URL');
+
+/**
+ * OPTIONAL. The one-time secret that opens /register while zero restaurants
+ * exist. When it is unset, /register refuses every submission regardless of the
+ * restaurant count — a freshly deployed instance must not be claimable by the
+ * first stranger who finds its hostname.
+ *
+ * Unset it again once the owner has registered.
+ */
+export const SETUP_TOKEN: string | null = env.SETUP_TOKEN || null;
+
+// An operator should never have to guess whether the registration window is open.
+// Stated without a database query, because this module is read at import time and
+// must not do I/O: the restaurant-count half of the condition is reported by
+// /register's own load, which already knows it.
+if (SETUP_TOKEN) {
+	console.info(
+		'[matcami] SETUP_TOKEN is set: /register will accept a first restaurant while none exists. Unset it after the owner has registered.'
+	);
+} else {
+	console.info(
+		'[matcami] SETUP_TOKEN is not set: /register will refuse every submission. Set it to register the first restaurant.'
+	);
+}
