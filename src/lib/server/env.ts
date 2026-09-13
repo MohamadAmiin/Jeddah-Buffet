@@ -9,7 +9,21 @@
 // $env/dynamic/private, not $env/static/private: adapter-node reads the
 // environment at runtime, so a static import would bake build-time values into
 // the production bundle.
+import { argon2 } from 'node:crypto';
 import { env } from '$env/dynamic/private';
+
+// Fail at BOOT, not at the owner's first login. crypto.argon2 first shipped in
+// Node v24.7.0, and package.json's engines floor is >=24.21.0 to match — but
+// engines is advisory once node_modules exists, so assert the runtime directly.
+// Without this the failure surfaces as `TypeError: crypto.argon2 is not a
+// function` during registration, long after install, build and every non-hashing
+// test have passed.
+if (typeof argon2 !== 'function') {
+	throw new Error(
+		'This runtime has no crypto.argon2. matcami requires Node >= 24.21.0 ' +
+			'(crypto.argon2 landed in v24.7.0). Run `nvm use` — .nvmrc pins the version.'
+	);
+}
 
 function required(name: string): string {
 	const value = env[name];
