@@ -25,6 +25,17 @@ if (!dbName.endsWith('_test')) {
 	);
 }
 
+// The REAL modules under test — src/hooks.server.ts and every +page.server.ts —
+// import $lib/server/db/client, which reads DATABASE_URL. Point that at the test
+// database, which the guard above has already proved ends in "_test", so those
+// modules operate on matcami_test instead of development data. Without this, a
+// session created by a test in matcami_test is invisible to the hook, which would
+// look for it in the development database.
+//
+// Set before any test file is imported: setupFiles run ahead of the module graph.
+process.env.DATABASE_URL = url;
+process.env.MIGRATE_DATABASE_URL = process.env.MIGRATE_DATABASE_URL ?? url;
+
 // Reset between tests HERE rather than per-test, so a new test file cannot forget
 // it. Deliberately NOT a transaction-rollback wrapper: two tests in this plan need
 // genuinely committed, concurrent transactions — T-14's "two concurrent
