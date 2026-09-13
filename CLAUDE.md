@@ -74,19 +74,31 @@ Styling is **Tailwind CSS v4** (a user decision, recorded in `tasks/project-init
 
 ## Commands & setup
 
-Scaffolding is in progress via `tasks/project-init.md` (T-01…T-10; **T-05 done**). `package.json` is real — treat IT as the source of truth for scripts, not this block, which **T-10 owns making true**. Node is pinned to **24.21.0** (`.nvmrc`); `engines` refuses anything else, so `nvm use` before any pnpm command. The commit that scaffolds tooling MUST make these real or rewrite this block; until then they are a proposal, not fact.
+Every command below has been run in this repo. Node is pinned to **24.21.0** (`.nvmrc`); `engines` refuses anything else, so `nvm use` before any pnpm command. `package.json` remains the source of truth for scripts. The database is the host-installed PostgreSQL 16 — there is **no** compose file.
 
 ```bash
+nvm use                                   # 24.21.0 — engine-strict refuses anything else
 pnpm install
-docker compose up -d db     # PostgreSQL; DATABASE_URL in .env (never commit .env)
+pnpm exec playwright install chromium     # browser binary, separate from the npm package
+
+bash scripts/db-bootstrap.sh <password>   # role `matcami` + matcami/matcami_test, both UTC; needs sudo
+cp .env.example .env                      # then fill in the password; .env is NEVER committed
+
 pnpm dev
-pnpm db:generate            # drizzle-kit — SQL from src/lib/server/db/schema
-pnpm db:migrate             # apply — ALWAYS back up first (spec 29)
-pnpm db:studio
-pnpm test                   # Vitest, unit
-pnpm test:e2e               # Playwright
-pnpm check && pnpm lint
+pnpm build                                # adapter-node → build/index.js
+pnpm check && pnpm lint                   # svelte-check; prettier --check . && eslint .
+pnpm format                               # prettier --write .
+pnpm test                                 # Vitest: unit + integration
+pnpm test:unit                            # unit project only
+pnpm test:integration                     # integration only — refuses any DB not ending in _test
+pnpm test:e2e                             # Playwright, against the production build
+pnpm db:generate                          # drizzle-kit — SQL from src/lib/server/db/schema
+pnpm db:migrate                           # runs db:backup FIRST, automatically (spec 29), then migrates
+pnpm db:backup                            # pg_dump into backups/ (gitignored)
+pnpm db:studio                            # row editor over the live DB — never edit a posted record
 ```
+
+Three pins look wrong and are not: **Node 24.21.0** (`vitest@5` excludes Node 25 outright), **TypeScript 6.0.3** not 7.x (the only version `@sveltejs/kit`, `svelte-check` and `typescript-eslint` all accept), and **`@types/node` 24.13.4** (must match the Node 24 runtime, so neither the `latest` 22.x nor the `ts6.0` tag's 26.x). Every dependency is pinned exactly, with no `^` or `~`. `README.md` has the details.
 
 ## Domain glossary
 
