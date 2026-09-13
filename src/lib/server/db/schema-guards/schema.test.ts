@@ -2,17 +2,22 @@ import { describe, it, expect } from 'vitest';
 import { getTableColumns, is } from 'drizzle-orm';
 import { PgTable, getTableConfig } from 'drizzle-orm/pg-core';
 
-import * as restaurantsSchema from './restaurants';
-import * as restaurantSettingsSchema from './restaurant-settings';
-import * as usersSchema from './users';
-import * as sessionsSchema from './sessions';
-import * as auditSchema from './audit';
+import * as restaurantsSchema from '../schema/restaurants';
+import * as restaurantSettingsSchema from '../schema/restaurant-settings';
+import * as usersSchema from '../schema/users';
+import * as sessionsSchema from '../schema/sessions';
+import * as auditSchema from '../schema/audit';
 
 // Tables are DISCOVERED from the schema modules' exports, never from a
 // hand-maintained list of table names — a hand-maintained list is a list someone
 // forgets to update, which is exactly the failure these tests exist to prevent.
 // Adding a table to an existing file is picked up automatically; adding a new
-// FILE needs one import line here, the same property drizzle.config.ts has.
+// FILE needs one import line here.
+//
+// These guards live OUTSIDE src/lib/server/db/schema/ deliberately: drizzle-kit
+// readdirSync()s that folder with no extension filter and require()s everything
+// in it, so a test file there makes pnpm db:generate and pnpm db:studio abort
+// with "Vitest cannot be imported in a CommonJS module".
 const modules = {
 	...restaurantsSchema,
 	...restaurantSettingsSchema,
