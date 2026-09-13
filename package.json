@@ -22,7 +22,9 @@
 		"db:generate": "drizzle-kit generate",
 		"db:migrate": "pnpm db:backup && drizzle-kit migrate",
 		"db:studio": "drizzle-kit studio",
-		"db:backup": "bash scripts/db-backup.sh"
+		"db:backup": "bash scripts/db-backup.sh",
+		"auth:reset-owner": "tsx scripts/reset-owner-password.ts",
+		"restaurant:create": "tsx scripts/create-restaurant.ts"
 	},
 	"dependencies": {
 		"drizzle-orm": "0.45.2",
