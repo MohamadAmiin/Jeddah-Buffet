@@ -74,14 +74,14 @@ Styling is **Tailwind CSS v4** (a user decision, recorded in `tasks/project-init
 
 ## Commands & setup
 
-Every command below has been run in this repo **except `scripts/db-bootstrap.sh`**, which needs `sudo`; the role and both databases it creates were applied by equivalent SQL instead, so the script's own text is still unexercised — run it once on a fresh machine and report anything that breaks. Node is pinned to **24.21.0** (`.nvmrc`); `engines` refuses anything else, so `nvm use` before any pnpm command. `package.json` remains the source of truth for scripts. The database is the host-installed PostgreSQL 16 — there is **no** compose file.
+Every command below has been run in this repo. The database has TWO roles: `matcami` **owns** the tables (migrations, `pg_dump`, `db:studio`) and `matcami_app` is the **runtime** role, which owns nothing — so `db-bootstrap.sh` takes two passwords and `.env` carries `DATABASE_URL` (runtime) alongside `MIGRATE_DATABASE_URL` and `TEST_DATABASE_URL` (owner). Node is pinned to **24.21.0** (`.nvmrc`); `engines` refuses anything else, so `nvm use` before any pnpm command. `package.json` remains the source of truth for scripts. The database is the host-installed PostgreSQL 16 — there is **no** compose file.
 
 ```bash
 nvm use                                   # 24.21.0 — engine-strict refuses anything else
 pnpm install
 pnpm exec playwright install chromium     # browser binary, separate from the npm package
 
-bash scripts/db-bootstrap.sh <password>   # role `matcami` + matcami/matcami_test, both UTC; needs sudo
+bash scripts/db-bootstrap.sh <owner-pw> <app-pw>   # roles matcami + matcami_app, both DBs UTC; needs sudo
 cp .env.example .env                      # then fill in the password; .env is NEVER committed
 
 pnpm dev

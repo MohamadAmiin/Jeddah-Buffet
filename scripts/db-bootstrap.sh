@@ -39,7 +39,38 @@ psql_super() { sudo -u postgres psql -X -q --no-psqlrc "$@"; }
 # does not interpolate :'vars' inside a dollar-quoted $$ ... $$ body, so a DO
 # block could only get the password by string-pasting it into SQL, which is
 # injection-prone. :'pw' below is quoted by psql itself.
+#
+# The password is fed on STDIN, not via -c: psql performs variable interpolation
+# only on input it reads from stdin or a file. With -c the literal text :'pw'
+# reaches the server and it answers `syntax error at or near ":"`, which means the
+# role is never created. Measured, not assumed.
 role_exists=$(psql_super -tAc "SELECT 1 FROM pg_roles WHERE rolname = '$ROLE'")
+app_role_exists=$(psql_super -tAc "SELECT 1 FROM pg_roles WHERE rolname = '$APP_ROLE'")
+
+# Validate EVERY password we will need BEFORE changing anything. Exiting halfway
+# is the failure this ordering exists to prevent: the app-role block sits between
+# the owner role and the database loop, so a late `exit 1` would leave the owner
+# role created and neither database in existence — a half-bootstrapped cluster
+# that the next documented step (pnpm db:migrate) then dies against.
+missing=''
+if [ "$role_exists" != "1" ] && [ -z "$PASSWORD" ]; then
+  missing="$missing
+  - $ROLE (the OWNER) needs a password: argument 1, or MATCAMI_DB_PASSWORD"
+fi
+if [ "$app_role_exists" != "1" ] && [ -z "$APP_PASSWORD" ]; then
+  missing="$missing
+  - $APP_ROLE (the RUNTIME role) needs a password: argument 2, or MATCAMI_APP_DB_PASSWORD"
+fi
+if [ -n "$missing" ]; then
+  {
+    echo "Nothing was changed. These roles do not exist and no password was supplied:$missing"
+    echo
+    echo "Usage: bash scripts/db-bootstrap.sh <owner-password> <app-password>"
+    echo "   or: MATCAMI_DB_PASSWORD=<pw> MATCAMI_APP_DB_PASSWORD=<pw> bash scripts/db-bootstrap.sh"
+  } >&2
+  exit 1
+fi
+
 if [ "$role_exists" = "1" ]; then
   echo "role $ROLE: already exists, left untouched"
   if [ -n "$PASSWORD" ]; then
@@ -48,13 +79,8 @@ if [ "$role_exists" = "1" ]; then
     echo "        sudo -u postgres psql -c \"ALTER ROLE $ROLE PASSWORD '<password>'\""
   fi
 else
-  [ -n "$PASSWORD" ] || {
-    echo "Role $ROLE does not exist and no password was given." >&2
-    echo "Usage: bash scripts/db-bootstrap.sh <password>" >&2
-    echo "   or: MATCAMI_DB_PASSWORD=<password> bash scripts/db-bootstrap.sh" >&2
-    exit 1
-  }
-  psql_super -v pw="$PASSWORD" -c "CREATE ROLE $ROLE LOGIN PASSWORD :'pw'"
+  # Password presence was already validated above, before any mutation.
+  psql_super -v pw="$PASSWORD" <<<"CREATE ROLE $ROLE LOGIN PASSWORD :'pw'"
   echo "role $ROLE: created"
 fi
 
@@ -68,7 +94,6 @@ fi
 # rewrite and no privilege re-grant. This script creates NO policy.
 #
 # Deliberately NOT granted: SUPERUSER, CREATEDB, CREATEROLE, BYPASSRLS.
-app_role_exists=$(psql_super -tAc "SELECT 1 FROM pg_roles WHERE rolname = '$APP_ROLE'")
 if [ "$app_role_exists" = "1" ]; then
   echo "role $APP_ROLE: already exists, left untouched"
   if [ -n "$APP_PASSWORD" ]; then
@@ -77,13 +102,8 @@ if [ "$app_role_exists" = "1" ]; then
     echo "        sudo -u postgres psql -c \"ALTER ROLE $APP_ROLE PASSWORD '<password>'\""
   fi
 else
-  [ -n "$APP_PASSWORD" ] || {
-    echo "Role $APP_ROLE does not exist and no app password was given." >&2
-    echo "Usage: bash scripts/db-bootstrap.sh <owner-password> <app-password>" >&2
-    echo "   or: MATCAMI_APP_DB_PASSWORD=<password> bash scripts/db-bootstrap.sh" >&2
-    exit 1
-  }
-  psql_super -v pw="$APP_PASSWORD" -c "CREATE ROLE $APP_ROLE LOGIN PASSWORD :'pw'"
+  # Password presence was already validated above, before any mutation.
+  psql_super -v pw="$APP_PASSWORD" <<<"CREATE ROLE $APP_ROLE LOGIN PASSWORD :'pw'"
   echo "role $APP_ROLE: created (owns nothing, by design)"
 fi
 
