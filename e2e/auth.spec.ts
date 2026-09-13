@@ -105,7 +105,17 @@ test('the owner registers, works, signs out and signs back in', async ({ page, c
 	await expect(page).toHaveURL(/\/dashboard$/);
 	await expect(page.getByRole('heading', { name: RENAMED })).toBeVisible();
 
-	// ── 10. /register is closed ────────────────────────────────────────────────
+	// ── 10. GET /logout is refused over REAL HTTP ──────────────────────────────
+	// Asserted here because only a real request proves the status. Before the
+	// explicit 405 load, a signed-in GET returned 500 with
+	// "Missing +page.svelte component for route /logout" in the server log.
+	const logoutGet = await page.request.get('/logout');
+	expect(logoutGet.status()).toBe(405);
+	// ...and the session still works afterwards: a GET must not log anyone out.
+	await page.goto('/dashboard');
+	await expect(page).toHaveURL(/\/dashboard$/);
+
+	// ── 11. /register is closed ────────────────────────────────────────────────
 	//
 	// TWO behaviours, and which one you see depends on whether you are signed in.
 	// The plan's journey expects a 404 here, but the HOOK runs before T-19's load:

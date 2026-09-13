@@ -188,11 +188,24 @@ describe('session handling in the hook', () => {
 
 describe('GET /logout is not a thing', () => {
 	// A logout reachable by GET is triggerable by any image tag on any page.
-	// SvelteKit returns 405 for a GET at a route with actions and no load; the
-	// module having no `load` export is what makes that true.
-	it('exports actions and NO load', async () => {
+	//
+	// Assert the STATUS the load actually produces, not the module's shape. The
+	// earlier version of this test checked that no `load` was exported, on the
+	// premise that SvelteKit then answers 405 — which is false for a GET
+	// (page_methods includes GET, so it renders the page and throws
+	// "Missing +page.svelte component"). That premise made the test pass while the
+	// real response was a 500.
+	it('GET /logout is refused with 405', async () => {
 		const mod = await import('./logout/+page.server');
 		expect(mod.actions).toBeDefined();
-		expect((mod as Record<string, unknown>).load).toBeUndefined();
+		expect(mod.load).toBeDefined();
+
+		let status: number | undefined;
+		try {
+			await (mod.load as (e: unknown) => unknown)(makeEvent('/logout'));
+		} catch (thrown) {
+			status = (thrown as { status?: number }).status;
+		}
+		expect(status).toBe(405);
 	});
 });

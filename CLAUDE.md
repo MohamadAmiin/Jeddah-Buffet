@@ -52,7 +52,7 @@ src/
   routes/
     login/          email + password sign-in — OUTSIDE the route groups: reachable without a session
     register/       first-run owner registration, gated by SETUP_TOKEN — likewise outside the groups
-    logout/         form action only; a GET gets 405 — likewise outside the groups
+    logout/         form action only; its load returns 405 so a GET cannot sign anyone out — likewise outside the groups
     (dashboard)/    owner/admin: menu, purchases, expenses, reports — online only
     (pos)/          POS shell: PIN login, orders, payment, session open/close — MUST work offline
     api/            JSON endpoints: POS sync, menu version/snapshot — no printing endpoint, printing is local
