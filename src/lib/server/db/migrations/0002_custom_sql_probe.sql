@@ -1,0 +1,14 @@
+-- Harmless no-op. This migration exists ONLY to prove the hand-written SQL path
+-- is wired, because invariant 3 will need it: the database itself must reject an
+-- unbalanced journal entry AT COMMIT, which in PostgreSQL means a
+-- CREATE CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED. drizzle-kit
+-- cannot generate that from schema files, so it can only arrive this way.
+--
+-- Hand-written SQL is created ONLY with `drizzle-kit generate --custom`, which
+-- registers the file in migrations/meta/_journal.json. A .sql file dropped into
+-- this folder by hand is never registered and is silently never applied — and
+-- for invariant 3 that failure is the dangerous kind: you would believe the
+-- balance constraint exists while the database has no such trigger, and every
+-- test asserting "the DB rejects an unbalanced entry" would pass for the wrong
+-- reason.
+DO $$ BEGIN END $$;
