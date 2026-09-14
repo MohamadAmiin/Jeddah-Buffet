@@ -6,7 +6,7 @@
 	// VOIDED ✕, OPEN ○, BILLED ◐, PAID ●, REFUNDED ↩) and the table and sync states.
 	// They are documented in docs/design-system.md section 3 and their tokens exist
 	// (--c-st-*), but no order, item, table or sync row exists in this repository —
-	// src/lib/server/orders/ is a README only. Adding them now would coin a
+	// the orders module is a README with no code yet. Adding them now would coin a
 	// client-side status vocabulary before the columns that define it exist. Extend
 	// this component deliberately, in the plan that adds those columns.
 
