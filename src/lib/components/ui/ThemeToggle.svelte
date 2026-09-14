@@ -10,24 +10,37 @@
 	// hydration — the defect this design exists to avoid.
 
 	import { onMount } from 'svelte';
-	import { THEME_COOKIE, THEME_MAX_AGE_SECONDS, parseTheme, type Theme } from '$lib/theme';
+	import {
+		DEFAULT_THEME,
+		THEME_COOKIE,
+		THEME_MAX_AGE_SECONDS,
+		parseTheme,
+		type Theme
+	} from '$lib/theme';
 
 	let selected = $state<Theme | null>(null);
 
 	onMount(() => {
 		// Read on mount, never at module top level or in the component body: this
 		// component is server-rendered as part of the dashboard layout and `document`
-		// does not exist there. Initialised from the ATTRIBUTE the server already
-		// stamped — the rendered truth — rather than from the cookie, which is merely
-		// how it got there. The first server-rendered frame therefore shows System
-		// pressed and hydration corrects it; that settles a button's pressed state
-		// only, because the page itself is already correctly themed by the SSR stamp.
+		// does not exist there.
+		//
+		// Initialised from the COOKIE, not from the stamped attribute. It used to read
+		// the attribute — the rendered truth — and that worked while there were two
+		// values and one absence. There are now three values, and `system` is stamped
+		// as NO attribute, which is indistinguishable from "never chose". Reading the
+		// attribute would show System as unselected for the one viewer who picked it.
+		// The cookie is the only place the three states are all representable.
 		//
 		// onMount rather than $effect: `selected` is genuine mutable state — the click
 		// handlers below write it too — so svelte/prefer-writable-derived is right
 		// that an $effect whose only job is assignment should not be one, and wrong
 		// that this could be a $derived.
-		selected = parseTheme(document.documentElement.dataset.theme);
+		const cookie = document.cookie
+			.split('; ')
+			.find((c) => c.startsWith(`${THEME_COOKIE}=`))
+			?.slice(THEME_COOKIE.length + 1);
+		selected = parseTheme(cookie) ?? DEFAULT_THEME;
 	});
 
 	// A Secure cookie sent over plain HTTP is discarded by the browser, and the
@@ -60,31 +73,40 @@
 	}
 
 	function chooseSystem() {
+		// System is now WRITTEN, not expired. The default changed to light, so the
+		// absence of a cookie no longer means "follow the OS" — it means "never
+		// chose", and that resolves to light. Deleting the cookie here would
+		// therefore silently return the viewer to light instead of to their OS.
 		try {
-			document.cookie = `${THEME_COOKIE}=; path=/; max-age=0; samesite=lax${secureFlag()}`;
+			document.cookie = `${THEME_COOKIE}=system; path=/; max-age=${THEME_MAX_AGE_SECONDS}; path=/; samesite=lax${secureFlag()}`;
 		} catch {
 			// As above.
 		}
 		// REMOVE the attribute entirely — that is what hands control back to
 		// tokens.css's @media (prefers-color-scheme: dark) block. Setting it to
-		// "system" or to "" would leave an attribute matching neither
-		// :root[data-theme="dark"] nor :root:not([data-theme="light"]) correctly.
-		// There are two cookie values and one absence; keep it that way.
+		// "system" would leave an attribute matching neither :root[data-theme="dark"]
+		// nor :root:not([data-theme="light"]) correctly. The COOKIE says system; the
+		// DOM says nothing, which is how system looks in the cascade.
 		delete document.documentElement.dataset.theme;
 
-		// The mirror-image check: here the cookie is EXPIRED rather than written, so
-		// there is no value to compare — assert its ABSENCE. Without this the same
-		// failure hides where it is hardest to notice: the owner clicks System, the
-		// deletion is blocked, and the page comes back dark tomorrow.
-		const cleared = !document.cookie.split('; ').some((c) => c.startsWith(`${THEME_COOKIE}=`));
-		selected = cleared ? null : parseTheme(document.documentElement.dataset.theme);
+		// The mirror-image check: confirm the cookie really holds `system`. Without
+		// it the same failure hides where it is hardest to notice — the owner clicks
+		// System, the write is blocked, and the page comes back light tomorrow.
+		const persisted = document.cookie.split('; ').some((c) => c === `${THEME_COOKIE}=system`);
+		selected = persisted ? 'system' : parseTheme(document.documentElement.dataset.theme);
 	}
 
 	// The selected option is distinguishable by a surface AND a border AND weight, not
 	// by hue alone — colour never carries meaning alone. aria-pressed is what a
 	// screen-reader user gets; a sighted user gets the words.
-	const chosen = 'bg-raise-2 border-control-line text-ink font-medium';
-	const notChosen = 'border-transparent text-ink-2';
+	// RAIL tokens, not page tokens. This control is rendered inside the coloured
+	// navigation rail and nowhere else, and the page inks are built for a light
+	// ground: --c-ink-2 on --c-rail measures 1.23:1, which is what an unselected
+	// label looked like before this — legible only if you already knew it was there.
+	// --c-rail-ink-2 is 4.71 on the rail, and the selected pill inverts to a
+	// rail-ink fill with rail-coloured text at 6.13.
+	const chosen = 'bg-rail-ink border-rail-ink text-rail font-medium';
+	const notChosen = 'border-transparent text-rail-ink-2 hover:border-rail-line';
 </script>
 
 <!-- Each button's accessible name is EXACTLY its own word. No "Switch to…" prefix and
@@ -112,9 +134,9 @@
 	</button>
 	<button
 		type="button"
-		aria-pressed={selected === null}
+		aria-pressed={selected === 'system'}
 		onclick={chooseSystem}
-		class={`rounded-control border px-2 py-1 text-xs ${selected === null ? chosen : notChosen}`}
+		class={`rounded-control border px-2 py-1 text-xs ${selected === 'system' ? chosen : notChosen}`}
 	>
 		System
 	</button>

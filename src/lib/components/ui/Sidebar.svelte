@@ -5,10 +5,15 @@
 	// no session, which is why `pathname` is passed in rather than read from the
 	// router — the layout owns that, and this file stays testable and portable.
 	//
-	// The rail is a SURFACE (bg-raise) with one decorative hairline against the page
+	// The rail is a COLOURED OBJECT (bg-rail), not a page surface. It has its own
+	// small token family — rail / rail-active / rail-ink / rail-ink-2 / rail-line —
+	// because a saturated block has to hold white text, a selected row, muted labels
+	// and a visible edge, and the page tokens have no legal value for any of those on
+	// a teal ground. Every pair is measured in tokens.css.
 	// ground, not a strip of links floating on the ground. Nine flat items are a
 	// list; four groups are a structure.
 	import { resolve } from '$app/paths';
+	import { RAIL_COOKIE, RAIL_MAX_AGE_SECONDS } from '$lib/rail';
 	import ThemeToggle from './ThemeToggle.svelte';
 
 	type IconName =
@@ -29,13 +34,40 @@
 		restaurantName,
 		displayName,
 		role,
-		pathname
+		pathname,
+		collapsed = false
 	}: {
 		restaurantName: string | null;
 		displayName: string;
 		role: string;
 		pathname: string;
+		/**
+		 * Rendered by the server from the matcami_rail cookie, so the rail arrives in
+		 * its final width on the first frame rather than snapping shut after
+		 * hydration. Only the toggle below writes it.
+		 */
+		collapsed?: boolean;
 	} = $props();
+
+	// An OVERRIDE, not a copy. `let x = $state(collapsed)` would capture the prop
+	// once and then ignore it, which Svelte warns about and which would go wrong the
+	// first time a navigation delivered a different server value. Until the owner
+	// touches the control, the server's value governs; after that, theirs does.
+	let override = $state<boolean | null>(null);
+	const isCollapsed = $derived(override ?? collapsed);
+
+	function toggleRail() {
+		override = !isCollapsed;
+		try {
+			const value = override ? 'collapsed' : 'expanded';
+			const secure = location.protocol === 'https:' ? '; secure' : '';
+			document.cookie = `${RAIL_COOKIE}=${value}; path=/; max-age=${RAIL_MAX_AGE_SECONDS}; samesite=lax${secure}`;
+		} catch {
+			// A blocked cookie write must not break the control. The rail still
+			// collapses for this page view; it simply will not be remembered, which is
+			// the honest outcome rather than a dead button.
+		}
+	}
 
 	// One entry per dashboard permission key, in the order an owner sets the
 	// restaurant up. Only Overview and Settings have routes; the other seven render
@@ -81,15 +113,21 @@
 	// surface when the row is not current, so the accent bar costs no reflow when it
 	// moves. (The sample draws that bar at 3px; no border-width token exists and an
 	// arbitrary value is forbidden, so it is the 4px step here.)
-	const row =
-		'relative flex min-h-10 items-center gap-2.5 rounded-control border-l-4 px-2.5 text-caption whitespace-nowrap';
+	const row = $derived(
+		'relative flex min-h-10 items-center gap-2.5 rounded-control border-l-4 px-2.5 text-caption whitespace-nowrap' +
+			// Collapsed, the row is an icon in a square: centre it and drop the gap, or
+			// the icon sits left of centre against a 4px bar.
+			(isCollapsed ? ' lg:justify-center lg:gap-0 lg:px-0' : '')
+	);
 
 	// THE CURRENT ITEM CARRIES THREE SIGNALS, not one: the soft accent fill, accent
 	// text and icon, and the bar — plus aria-current="page" for anyone who reads the
 	// page rather than sees it. Colour never carries meaning alone (WCAG 1.4.1).
-	const current = 'border-l-accent bg-accent-soft text-accent font-semibold';
-	const link = 'border-l-raise text-ink font-medium hover:bg-bg-2';
-	const soon = 'border-l-raise text-ink-2';
+	const current = 'border-l-rail-ink bg-rail-active text-rail-ink font-semibold';
+	// hover uses rail-RAISE, not rail-active: active is now the accent, and a row
+	// under the pointer must not look like the page you are on.
+	const link = 'border-l-rail text-rail-ink font-medium hover:bg-rail-raise';
+	const soon = 'border-l-rail text-rail-ink-2';
 
 	// Initials only, and aria-hidden — the name is written beside it. Split on
 	// whitespace so a one-word display name still yields one letter.
@@ -168,27 +206,62 @@
      parts of the product are built. -->
 <aside
 	aria-label="Workspace"
-	class="bg-raise border-line flex min-w-0 flex-col border-b lg:sticky lg:top-0 lg:h-screen lg:w-65 lg:shrink-0 lg:border-r lg:border-b-0"
+	class={`bg-rail border-rail-line flex min-w-0 flex-col border-b transition-[width] duration-150 lg:sticky lg:top-0 lg:h-screen lg:shrink-0 lg:border-r lg:border-b-0 ${isCollapsed ? 'lg:w-18' : 'lg:w-65'}`}
 >
 	<!-- BRAND. The mark is one letter of the display face on an accent tile — type,
 	     not an asset: nothing to commission, nothing to cache, and it re-colours with
 	     the theme because it names roles rather than colours. aria-hidden, because
 	     the restaurant name is written beside it. -->
-	<div class="flex flex-none items-center gap-3 px-4 pt-5 pb-4">
+	<div
+		class={`flex flex-none items-center gap-3 pt-5 pb-4 ${isCollapsed ? 'px-2 lg:flex-col lg:gap-2 lg:px-0' : 'px-4'}`}
+	>
 		<span
 			aria-hidden="true"
-			class="bg-accent text-accent-ink font-display rounded-control shadow-flat grid size-10 flex-none place-items-center text-title"
+			class="bg-rail-ink text-rail font-display rounded-control grid size-10 flex-none place-items-center text-title"
 		>
 			m
 		</span>
-		<div class="flex min-w-0 flex-col">
-			<!-- A REAL heading element, and the only h1 on every dashboard screen.
-			     e2e/auth.spec.ts asserts getByRole('heading', { name: <restaurant> })
-			     twice — after registration and again after the rename — so a styled div
-			     breaks the journey even though it looks identical. -->
-			<h1 class="text-section text-ink break-words">{restaurantName ?? 'matcami'}</h1>
-			<p class="text-caption text-ink-2">Owner workspace</p>
+		<!-- A REAL heading element, and the only h1 on every dashboard screen.
+		     e2e/auth.spec.ts asserts getByRole('heading', { name: <restaurant> }) twice
+		     — after registration and again after the rename — so a styled div breaks
+		     the journey even though it looks identical.
+
+		     COLLAPSED, the wrapper is .sr-only rather than removed. The heading must
+		     stay in the accessibility tree and in the DOM: hiding it with `display:none`
+		     would take the h1 off the page entirely and break both assertions, and
+		     would leave a screen-reader user on a dashboard with no name. -->
+		<div class={`flex min-w-0 flex-col ${isCollapsed ? 'lg:sr-only' : ''}`}>
+			<h1 class="text-section text-rail-ink break-words">{restaurantName ?? 'matcami'}</h1>
+			<p class="text-caption text-rail-ink-2">Owner workspace</p>
 		</div>
+
+		<!-- The collapse control. lg only: below it the rail is a horizontal row of
+		     the same items, which has no width to give back.
+
+		     Its accessible name says what will HAPPEN, not what the state is — a
+		     button called "Collapsed" leaves a screen-reader user guessing whether
+		     that is a description or a destination. aria-expanded carries the state. -->
+		<button
+			type="button"
+			onclick={toggleRail}
+			aria-expanded={!isCollapsed}
+			aria-controls="rail-nav"
+			class={`border-rail-line text-rail-ink-2 hover:text-rail-ink hover:border-rail-ink-2 rounded-control hidden size-8 flex-none place-items-center border lg:grid ${isCollapsed ? '' : 'ml-auto'}`}
+		>
+			<span class="sr-only">{isCollapsed ? 'Expand the sidebar' : 'Collapse the sidebar'}</span>
+			<svg
+				aria-hidden="true"
+				viewBox="0 0 24 24"
+				class="size-4"
+				fill="none"
+				stroke="currentColor"
+				stroke-width="1.75"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+			>
+				<path d={isCollapsed ? 'M9 6l6 6-6 6' : 'M15 6l-6 6 6 6'} />
+			</svg>
+		</button>
 	</div>
 
 	<!-- THE SCROLL CONTAINER. scroll-py reserves room for the 2px focus ring plus its
@@ -196,6 +269,7 @@
 	     group makes that room real scrollable content — padding alone does not, and
 	     the ring on the last row is then clipped away at the scrollport edge. -->
 	<nav
+		id="rail-nav"
 		aria-label="Dashboard sections"
 		class="flex min-w-0 flex-none scroll-py-1.5 flex-row items-center gap-1.5 overflow-x-auto overflow-y-hidden px-4 pt-1 pb-2 lg:min-h-0 lg:flex-1 lg:flex-col lg:items-stretch lg:gap-0 lg:overflow-x-hidden lg:overflow-y-auto lg:px-3 lg:pb-1.5"
 	>
@@ -207,7 +281,7 @@
 				     reader says "Catalogue" instead of spelling it. -->
 				<p
 					id={group.id}
-					class="text-eyebrow text-ink-3 border-line-soft mx-0.5 flex-none border-l py-1 pl-3.5 uppercase lg:mx-0 lg:mt-4 lg:mb-1.5 lg:border-l-0 lg:py-0"
+					class={`text-eyebrow text-rail-ink-2 border-rail-line mx-0.5 flex-none border-l py-1 pl-3.5 uppercase lg:mx-0 lg:mt-4 lg:mb-1.5 lg:border-l-0 lg:py-0 ${isCollapsed ? 'lg:sr-only lg:mt-3' : ''}`}
 				>
 					{group.label}
 				</p>
@@ -224,8 +298,11 @@
 								aria-current={pathname === item.href ? 'page' : undefined}
 								class={`${row} ${pathname === item.href ? current : link}`}
 							>
-								{@render icon(item.icon, pathname === item.href ? 'text-accent' : 'text-ink-2')}
-								<span class="min-w-0">{item.label}</span>
+								{@render icon(
+									item.icon,
+									pathname === item.href ? 'text-rail-ink' : 'text-rail-ink-2'
+								)}
+								<span class={`min-w-0 ${isCollapsed ? 'lg:sr-only' : ''}`}>{item.label}</span>
 							</a>
 						{:else}
 							<!--
@@ -241,10 +318,10 @@
 								overflow and the DOCUMENT scrolls sideways on a phone.
 							-->
 							<span aria-disabled="true" class={`${row} ${soon}`}>
-								{@render icon(item.icon, 'text-ink-3')}
-								<span class="min-w-0">{item.label}</span>
+								{@render icon(item.icon, 'text-rail-ink-2')}
+								<span class={`min-w-0 ${isCollapsed ? 'lg:sr-only' : ''}`}>{item.label}</span>
 								<span
-									class="text-eyebrow text-ink-3 bg-bg-2 ml-auto flex-none rounded-full px-1.5 py-0.5 font-mono uppercase"
+									class={`text-eyebrow text-rail-ink-2 border-rail-line ml-auto flex-none rounded-full border px-1.5 py-0.5 font-mono uppercase ${isCollapsed ? 'lg:sr-only' : ''}`}
 								>
 									Soon<span class="sr-only"> — not built yet</span>
 								</span>
@@ -267,39 +344,48 @@
 	     are not built — has been removed. Each row already says "Soon" beside its own
 	     label, which is where a reader looks; repeating it as a block of prose under
 	     the nav made it the largest piece of text in the rail while saying the least. -->
-	<p class="text-caption text-ink-2 flex-none px-4 pb-4 lg:hidden">
+	<p class="text-caption text-rail-ink-2 flex-none px-4 pb-4 lg:hidden">
 		The row above scrolls sideways; all nine sections are in it.
 	</p>
 
 	<div
-		class="border-line-soft mt-auto flex flex-none flex-row flex-wrap items-center gap-3 border-t px-4 py-4 lg:flex-col lg:items-stretch"
+		class={`border-rail-line mt-auto flex flex-none flex-row flex-wrap items-center gap-3 border-t py-4 lg:flex-col ${isCollapsed ? 'px-2 lg:items-center lg:gap-2 lg:px-0' : 'px-4 lg:items-stretch'}`}
 	>
-		<div class="flex min-w-0 items-center gap-2.5">
+		<div class={`flex min-w-0 items-center gap-2.5 ${isCollapsed ? 'lg:gap-0' : ''}`}>
 			<span
 				aria-hidden="true"
-				class="bg-accent-soft text-accent grid size-9 flex-none place-items-center rounded-full font-mono text-caption font-semibold"
+				class="bg-rail-active text-rail-ink grid size-9 flex-none place-items-center rounded-full font-mono text-caption font-semibold"
 			>
 				{initials}
 			</span>
-			<div class="flex min-w-0 flex-col">
-				<span class="text-caption text-ink font-medium break-words">{displayName}</span>
+			<!-- sr-only, not removed: collapsing the rail is a visual choice and must not
+			     take the signed-in identity out of the accessibility tree. -->
+			<div class={`flex min-w-0 flex-col ${isCollapsed ? 'lg:sr-only' : ''}`}>
+				<span class="text-caption text-rail-ink font-medium break-words">{displayName}</span>
 				<!-- The role is a fact about the signed-in person, not a decoration: it is
 				     what decides which of these sections will ever be reachable. -->
-				<span class="text-eyebrow text-ink-2 uppercase">{role}</span>
+				<span class="text-eyebrow text-rail-ink-2 uppercase">{role}</span>
 			</div>
 		</div>
 
-		<ThemeToggle />
+		<!-- Hidden outright when collapsed, not shrunk. It is three labelled buttons
+		     and 72px cannot hold them legibly; an unreadable control is worse than an
+		     absent one, and expanding the rail brings it straight back. This is a
+		     display choice with no accessibility cost — the theme is still whatever it
+		     was, and nothing else in the product depends on this control being present. -->
+		<div class={isCollapsed ? 'lg:hidden' : 'contents'}>
+			<ThemeToggle />
+		</div>
 
 		<!--
 			A FORM, never an anchor. /logout refuses GET (its load returns 405), so a
 			link would be triggerable by any image tag on any page. The design carries
 			that: "Sign out" is a submit button and it looks like one.
 		-->
-		<form method="POST" action="/logout" class="ml-auto lg:ml-0">
+		<form method="POST" action="/logout" class={`ml-auto ${isCollapsed ? 'lg:ml-0' : 'lg:ml-0'}`}>
 			<button
 				type="submit"
-				class="border-control-line text-ink hover:bg-raise-2 rounded-control text-caption flex items-center justify-center gap-2 border px-3 py-2 font-medium lg:w-full"
+				class={`border-rail-line text-rail-ink hover:bg-rail-raise rounded-control text-caption flex items-center justify-center border font-medium ${isCollapsed ? 'lg:size-10 lg:gap-0 lg:px-0 gap-2 px-3 py-2' : 'gap-2 px-3 py-2 lg:w-full'}`}
 			>
 				<svg
 					class="size-4 flex-none"
@@ -315,7 +401,7 @@
 					<path d="M11 12h9" />
 					<path d="m17.5 8.5 3.5 3.5-3.5 3.5" />
 				</svg>
-				<span>Sign out</span>
+				<span class={isCollapsed ? 'lg:sr-only' : ''}>Sign out</span>
 			</button>
 		</form>
 	</div>

@@ -285,7 +285,21 @@ const TEXT_PAIRS: Array<[string, string]> = GROUNDS.flatMap((g) =>
 const ON_FILL_PAIRS: Array<[string, string]> = [
 	['accent-ink', 'accent'],
 	['danger-ink', 'danger'],
-	['disabled-ink', 'disabled-bg']
+	['disabled-ink', 'disabled-bg'],
+	// The navigation rail is a coloured object, so everything it holds is an
+	// on-fill pair. The page inks are built for a light ground and are illegible
+	// here — --c-ink-2 on --c-rail measures 1.23:1 — which is precisely why the
+	// rail has its own family and why those pairs are asserted rather than assumed.
+	['rail-ink', 'rail'],
+	['rail-ink', 'rail-active'], // the SELECTED row's label, on the accent
+	['rail-ink-2', 'rail'],
+	['rail-ink-2', 'rail-raise'], // hover, and any pill that takes a fill
+	['rail', 'rail-ink'] // the brand tile: rail-coloured letter on a white square
+	// NOT ['rail-ink-2', 'rail-active']: the muted ink never lands on the selected
+	// row. It did when rail-active was a deeper teal that the Soon pill used as a
+	// fill; the pill now takes a border and rail-active means "the page you are on",
+	// where the label is rail-ink. Asserting a pair the product cannot render is how
+	// a census stops describing the product.
 ];
 
 // WCAG 1.4.11 — UI component boundaries and focus indicators, 3:1.
@@ -295,7 +309,14 @@ const NON_TEXT_PAIRS: Array<[string, string]> = [
 	['control-line', 'bg-2'],
 	['control-line', 'raise-2'],
 	['ring', 'bg'],
-	['ring', 'raise']
+	['ring', 'raise'],
+	['rail-line', 'rail'],
+	// The SELECTED ROW'S INDICATOR, not its fill. --c-rail-active on --c-rail is
+	// 1.54:1 by design — a quiet wash, because the selection is carried by the left
+	// bar (this pair), by font weight and by aria-current, never by the fill alone.
+	// Asserting the fill at 3:1 would be applying a boundary rule to something that
+	// is not a boundary, and would force a selected row loud enough to shout.
+	['rail-ink', 'rail']
 ];
 
 describe('the contrast floor holds in BOTH themes', () => {

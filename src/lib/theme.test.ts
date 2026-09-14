@@ -7,15 +7,26 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { THEME_COOKIE, THEME_MAX_AGE_SECONDS, parseTheme, themeAttribute } from './theme';
+import {
+	DEFAULT_THEME,
+	THEME_COOKIE,
+	THEME_MAX_AGE_SECONDS,
+	parseTheme,
+	themeAttribute
+} from './theme';
 
 describe('parseTheme narrows an untrusted cookie value', () => {
 	it('accepts exactly the two real themes', () => {
 		expect(parseTheme('light')).toBe('light');
 		expect(parseTheme('dark')).toBe('dark');
+		// 'system' became a real stored value on 2026-09-14, when the default changed
+		// to light. Absence used to mean "follow the OS"; it now means "never chose",
+		// which resolves to light — so a viewer who WANTS the OS to decide needs a
+		// value to say so with.
+		expect(parseTheme('system')).toBe('system');
 	});
 
-	it.each([undefined, '', 'system', 'DARK', 'Light', 'dark ', '"dark"', 'dark" onload="x'])(
+	it.each([undefined, '', 'SYSTEM', 'DARK', 'Light', 'dark ', '"dark"', 'dark" onload="x'])(
 		'rejects %o',
 		(value) => {
 			// A cookie value is attacker-supplied and is interpolated into the opening
@@ -27,11 +38,19 @@ describe('parseTheme narrows an untrusted cookie value', () => {
 });
 
 describe('themeAttribute', () => {
-	it('emits nothing at all for the system state', () => {
+	it('emits nothing at all for an explicit system choice', () => {
 		// The EMPTY STRING is the system state: no attribute on <html>, so the
-		// @media (prefers-color-scheme: dark) block in tokens.css governs. There is
-		// deliberately no third Theme value for "system".
-		expect(themeAttribute(null)).toBe('');
+		// @media (prefers-color-scheme: dark) block in tokens.css governs.
+		expect(themeAttribute('system')).toBe('');
+	});
+
+	it('defaults a viewer who has never chosen to LIGHT', () => {
+		// null is NO COOKIE. It used to mean system — the OS decided for anyone who
+		// had never opened the control, which on a dark-mode machine meant a dark
+		// dashboard nobody asked for. The product default is light, and this single
+		// line is where that is decided.
+		expect(themeAttribute(null)).toBe('data-theme="light"');
+		expect(DEFAULT_THEME).toBe('light');
 	});
 
 	it('emits the stamp for an explicit choice', () => {

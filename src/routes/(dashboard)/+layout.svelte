@@ -31,6 +31,7 @@
 		displayName={data.displayName}
 		role={data.role}
 		pathname={page.url.pathname}
+		collapsed={data.railCollapsed}
 	/>
 
 	<!-- min-w-0 so a wide child — a table, a long unbroken string — shrinks instead

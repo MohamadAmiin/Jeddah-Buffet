@@ -69,8 +69,10 @@ test('the owner registers, works, signs out and signs back in', async ({ page, c
 	await expect(page.getByRole('button', { name: 'Dark' })).toBeVisible();
 	await expect(page.getByRole('button', { name: 'System' })).toBeVisible();
 
-	// No cookie yet, so no attribute at all — that IS the system state.
-	expect(await page.locator('html').getAttribute('data-theme')).toBeNull();
+	// No cookie yet, so the DEFAULT applies — and the default is LIGHT, stamped by
+	// the server. It used to be "system", represented by no attribute at all, which
+	// handed a dark-mode operating system a dark dashboard nobody had asked for.
+	expect(await page.locator('html').getAttribute('data-theme')).toBe('light');
 
 	// Immediately, without a reload: asserting after a navigation would prove
 	// nothing about the click.
@@ -98,11 +100,18 @@ test('the owner registers, works, signs out and signs back in', async ({ page, c
 
 	await page.reload();
 
-	// System expires the cookie AND removes the attribute — two different things,
-	// and both must happen.
+	// System WRITES `system` and removes the attribute — two different things, and
+	// both must happen. The cookie is written rather than expired: with light as the
+	// default, an absent cookie means "never chose" and resolves to light, so
+	// deleting it would return the viewer to light instead of to their OS.
 	await page.getByRole('button', { name: 'System' }).click();
 	expect(await page.locator('html').getAttribute('data-theme')).toBeNull();
-	expect((await context.cookies()).find((c) => c.name === 'matcami_theme')).toBeUndefined();
+	const systemCookie = (await context.cookies()).find((c) => c.name === 'matcami_theme');
+	expect(systemCookie?.value, 'System must be stored, not represented by absence').toBe('system');
+
+	// And it must SURVIVE a round trip: the server has to stamp nothing for it.
+	const ssrSystem = await page.request.get('/dashboard');
+	expect(await ssrSystem.text()).not.toMatch(/<html[^>]*data-theme=/);
 
 	// An explicit LIGHT choice must beat a DARK operating system. Assert the
 	// COMPUTED token, not the attribute: the attribute is written by the toggle
