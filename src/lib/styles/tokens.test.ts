@@ -291,10 +291,15 @@ const ON_FILL_PAIRS: Array<[string, string]> = [
 	// here — --c-ink-2 on --c-rail measures 1.23:1 — which is precisely why the
 	// rail has its own family and why those pairs are asserted rather than assumed.
 	['rail-ink', 'rail'],
-	['rail-ink', 'rail-active'],
+	['rail-ink', 'rail-active'], // the SELECTED row's label, on the accent
 	['rail-ink-2', 'rail'],
-	['rail-ink-2', 'rail-active'],
-	['rail', 'rail-ink']
+	['rail-ink-2', 'rail-raise'], // hover, and any pill that takes a fill
+	['rail', 'rail-ink'] // the brand tile: rail-coloured letter on a white square
+	// NOT ['rail-ink-2', 'rail-active']: the muted ink never lands on the selected
+	// row. It did when rail-active was a deeper teal that the Soon pill used as a
+	// fill; the pill now takes a border and rail-active means "the page you are on",
+	// where the label is rail-ink. Asserting a pair the product cannot render is how
+	// a census stops describing the product.
 ];
 
 // WCAG 1.4.11 — UI component boundaries and focus indicators, 3:1.

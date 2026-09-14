@@ -2,6 +2,7 @@ import type { ServerLoad } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { db } from '$lib/server/db/client';
 import { getRestaurantWithSettings } from '$lib/server/restaurants';
+import { RAIL_COOKIE, parseRail } from '$lib/rail';
 
 export const load: ServerLoad = async (event) => {
 	// admin.settings is the capability that means "may use the management
@@ -21,6 +22,10 @@ export const load: ServerLoad = async (event) => {
 	return {
 		restaurantName: restaurant?.name ?? null,
 		displayName: user.displayName,
-		role: user.role
+		role: user.role,
+		// Read here so the rail renders in its final state on the first frame. Read
+		// only — this load never writes the cookie, and the value never reaches a
+		// guard or a permission decision.
+		railCollapsed: parseRail(event.cookies.get(RAIL_COOKIE))
 	};
 };

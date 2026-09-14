@@ -93,11 +93,20 @@
      would leave every one of those with no legal token to reach for.
 
      Measured against its own ground, both themes, per WCAG 1.4.3 / 1.4.11. */
-  --c-rail:#0f6b7e;          /* the brand accent, used as a surface */
-  --c-rail-active:#0b4d5b;   /* the selected row — deeper, not lighter */
-  --c-rail-ink:#ffffff;      /* 6.13 on rail · 9.43 on active */
-  --c-rail-ink-2:#c9e7ec;    /* 4.71 on rail · 7.24 on active — group labels, Soon */
-  --c-rail-line:#93bdc6;     /* 3.02 on rail — a boundary, so 1.4.11's 3:1 applies */
+  --c-rail:#1c2b33;          /* a deep slate with a faint teal cast */
+  --c-rail-active:#0f6b7e;   /* THE ACCENT, and that is the point — see below */
+  --c-rail-ink:#ffffff;      /* 14.56 on rail · 6.13 on the selected row */
+  --c-rail-raise:#26363f;    /* hover, and any pill that needs a fill. A CUE, not a
+                                boundary: 1.17 against the rail, because a row under
+                                the pointer does not need to announce itself as
+                                loudly as the one that is selected. */
+  --c-rail-ink-2:#8fa0aa;    /* 5.39 on rail · 4.62 on raise — group labels, Soon
+                                pills, the role line. Solved against BOTH grounds,
+                                not just the rail: it happens not to land on a
+                                hovered row today, and relying on that is the kind
+                                of distinction a later change quietly breaks. */
+  --c-rail-line:#707f87;     /* 3.52 on rail · 3.02 on raise — a boundary, so
+                                1.4.11's 3:1 applies on every ground it sits on */
 
   /* Elevation ladder, per theme: the light rungs carry a white top highlight that
      is wrong on a dark ground. Elevation is NEVER a boundary — a control's edge is
@@ -128,10 +137,13 @@
     --c-st-offline:#e8bd6b; --c-st-offline-bg:#332a14;
     /* The rail in dark: a deep teal-slate, so it still reads as the same object
        rather than becoming a second page surface. */
-    --c-rail:#13272e; --c-rail-active:#2b3d43;
-    --c-rail-ink:#e6eaec;    /* 12.78 on rail · 9.37 on active */
-    --c-rail-ink-2:#a8b3bc;  /*  7.25 on rail · 5.31 on active */
-    --c-rail-line:#74878f;   /*  4.13 on rail */
+    --c-rail:#1b2329; --c-rail-active:#0f6b7e;
+    --c-rail-raise:#252f36;
+    --c-rail-ink:#ffffff;    /* 15.92 on rail */
+    --c-rail-ink-2:#8799a4;  /*  5.40 on rail · 4.63 on raise */
+    --c-rail-line:#697981;   /*  3.53 on rail · 3.02 on raise. In dark the rail is
+                                only 1.12 against the page, so this border is what
+                                separates them — exactly the job 1.4.11 gives it. */
     --c-shadow-flat:     0 1px 0 rgb(255 255 255 / .04), 0 1px 2px -1px rgb(0 0 0 / .6);
     --c-shadow-raised:   0 1px 0 rgb(255 255 255 / .04), 0 8px 24px -12px rgb(0 0 0 / .8);
     --c-shadow-floating: 0 1px 0 rgb(255 255 255 / .06), 0 22px 50px -20px rgb(0 0 0 / .9);
@@ -159,8 +171,8 @@
   --c-shadow: var(--c-shadow-raised);
   --c-danger-ink:#1a0f0d;   /* 7.06 here; white would be 2.66 */
   --c-disabled-bg:#2b3139; --c-disabled-ink:#a8b3bc;   /* 6.15 */
-  --c-rail:#13272e; --c-rail-active:#2b3d43;
-  --c-rail-ink:#e6eaec; --c-rail-ink-2:#a8b3bc; --c-rail-line:#74878f;
+  --c-rail:#1b2329; --c-rail-active:#0f6b7e; --c-rail-raise:#252f36;
+  --c-rail-ink:#ffffff; --c-rail-ink-2:#8799a4; --c-rail-line:#697981;
 }
 
 /* ── 1b. THE POS DEVICE SURFACE — LIGHT, PINNED IN BOTH THEMES ───────────────
@@ -221,8 +233,8 @@
      scope declares it. An exemption list is a list someone forgets to update, and
      the failure mode is a dark-theme viewer inheriting a dark value into a surface
      that is pinned light. */
-  --c-rail:#0f6b7e; --c-rail-active:#0b4d5b;
-  --c-rail-ink:#ffffff; --c-rail-ink-2:#c9e7ec; --c-rail-line:#93bdc6;
+  --c-rail:#1c2b33; --c-rail-active:#0f6b7e; --c-rail-raise:#26363f;
+  --c-rail-ink:#ffffff; --c-rail-ink-2:#8fa0aa; --c-rail-line:#707f87;
 }
 
 /* ── 2. themeable tokens → Tailwind utilities (bg-raise, text-ink-2, …) ─── */
@@ -265,6 +277,7 @@
 
   --color-rail:        var(--c-rail);
   --color-rail-active: var(--c-rail-active);
+  --color-rail-raise:  var(--c-rail-raise);
   --color-rail-ink:    var(--c-rail-ink);
   --color-rail-ink-2:  var(--c-rail-ink-2);
   --color-rail-line:   var(--c-rail-line);
