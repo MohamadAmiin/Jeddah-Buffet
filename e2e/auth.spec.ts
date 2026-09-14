@@ -62,6 +62,64 @@ test('the owner registers, works, signs out and signs back in', async ({ page, c
 	await expect(page.getByText('Restaurant settings')).toBeVisible();
 	await expect(page.getByText('not started', { exact: true })).toHaveCount(5);
 
+	// ── 3b. the theme control ──────────────────────────────────────────────────
+	// Labelled 3b deliberately: it leaves every existing `// ── N. … ──` label
+	// byte-identical, so a reviewer can see at a glance that no assertion moved.
+	await expect(page.getByRole('button', { name: 'Light' })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Dark' })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'System' })).toBeVisible();
+
+	// No cookie yet, so no attribute at all — that IS the system state.
+	expect(await page.locator('html').getAttribute('data-theme')).toBeNull();
+
+	// Immediately, without a reload: asserting after a navigation would prove
+	// nothing about the click.
+	await page.getByRole('button', { name: 'Dark' }).click();
+	expect(await page.locator('html').getAttribute('data-theme')).toBe('dark');
+
+	const themeCookie = (await context.cookies()).find((c) => c.name === 'matcami_theme');
+	expect(themeCookie, 'the theme preference must be persisted in a cookie').toBeDefined();
+	expect(themeCookie?.value).toBe('dark');
+	expect(themeCookie?.path).toBe('/');
+	expect(themeCookie?.sameSite).toBe('Lax');
+	// Secure only over HTTPS: this suite runs on http://localhost:4173, where a
+	// Secure cookie would be discarded by the browser. Same conditional shape the
+	// session-cookie step below uses.
+	if (new URL(page.url()).protocol === 'https:') {
+		expect(themeCookie?.secure).toBe(true);
+	}
+
+	// Only the RAW body can distinguish a server stamp from a client-side one:
+	// after hydration the toggle would have set the same attribute either way.
+	// This is the assertion protecting against a flash of the wrong theme.
+	const ssr = await page.request.get('/dashboard');
+	expect(ssr.status()).toBe(200);
+	expect(await ssr.text()).toMatch(/<html[^>]*data-theme="dark"/);
+
+	await page.reload();
+
+	// System expires the cookie AND removes the attribute — two different things,
+	// and both must happen.
+	await page.getByRole('button', { name: 'System' }).click();
+	expect(await page.locator('html').getAttribute('data-theme')).toBeNull();
+	expect((await context.cookies()).find((c) => c.name === 'matcami_theme')).toBeUndefined();
+
+	// An explicit LIGHT choice must beat a DARK operating system. Assert the
+	// COMPUTED token, not the attribute: the attribute is written by the toggle
+	// regardless of any CSS, so asserting it is identical with or without the
+	// emulation and says nothing about the cascade. The computed value is what
+	// proves the `:root:not([data-theme="light"])` guard in tokens.css does its job.
+	await page.emulateMedia({ colorScheme: 'dark' });
+	await page.getByRole('button', { name: 'Light' }).click();
+	expect(await page.locator('html').getAttribute('data-theme')).toBe('light');
+	const bg = await page.evaluate(() =>
+		getComputedStyle(document.documentElement).getPropertyValue('--c-bg').trim()
+	);
+	expect(bg).toBe('#e9edf0');
+
+	// Reset the emulation so the later steps do not run under one they never asked for.
+	await page.emulateMedia({ colorScheme: null });
+
 	// ── 4. the session token is NOT in browser storage (invariant 12) ──────────
 	// Only a real browser can confirm this, which is why it is asserted here.
 	const storage = await page.evaluate(() => ({
