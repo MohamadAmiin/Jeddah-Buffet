@@ -14,5 +14,9 @@ set -euo pipefail
 [ -f .env ] && set -a && . ./.env && set +a
 mkdir -p backups
 out="backups/matcami-$(date -u +%Y%m%d-%H%M%SZ).dump"
-pg_dump "$DATABASE_URL" --format=custom --file="$out"
+# MIGRATE_DATABASE_URL, not DATABASE_URL: a dump must read every table, which the
+# runtime role cannot do. Running pg_dump as the OWNER is also what keeps the door
+# open for row-level security later — a forced-RLS table dumped by its own owner
+# fails outright, and that would break `pnpm db:migrate`, which chains this script.
+pg_dump "$MIGRATE_DATABASE_URL" --format=custom --file="$out"
 echo "Backup written: $out"

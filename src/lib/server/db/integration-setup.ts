@@ -1,3 +1,6 @@
+import { beforeEach, afterAll } from 'vitest';
+import { resetDb, closeResetPool } from './test/reset';
+
 // FAIL CLOSED. This is the guard that stops a test run destroying development
 // data. Integration tests truncate tables; DATABASE_URL points at data somebody
 // cares about. There is deliberately NO fallback to DATABASE_URL — a fallback is
@@ -21,3 +24,27 @@ if (!dbName.endsWith('_test')) {
 			'from development and production data.'
 	);
 }
+
+// The REAL modules under test — src/hooks.server.ts and every +page.server.ts —
+// import $lib/server/db/client, which reads DATABASE_URL. Point that at the test
+// database, which the guard above has already proved ends in "_test", so those
+// modules operate on matcami_test instead of development data. Without this, a
+// session created by a test in matcami_test is invisible to the hook, which would
+// look for it in the development database.
+//
+// Set before any test file is imported: setupFiles run ahead of the module graph.
+process.env.DATABASE_URL = url;
+process.env.MIGRATE_DATABASE_URL = process.env.MIGRATE_DATABASE_URL ?? url;
+
+// Reset between tests HERE rather than per-test, so a new test file cannot forget
+// it. Deliberately NOT a transaction-rollback wrapper: two tests in this plan need
+// genuinely committed, concurrent transactions — T-14's "two concurrent
+// registrations, exactly one succeeds" and T-13's lockout, which must observe a
+// counter that survived a rejected login. A rollback wrapper makes both untestable.
+beforeEach(async () => {
+	await resetDb();
+});
+
+afterAll(async () => {
+	await closeResetPool();
+});

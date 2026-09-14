@@ -10,7 +10,10 @@ export default defineConfig({
 	schema: './src/lib/server/db/schema',
 	// CLAUDE.md requires migrations here, not drizzle's default ./drizzle.
 	out: './src/lib/server/db/migrations',
-	dbCredentials: { url: process.env.DATABASE_URL! },
+	// MIGRATE_DATABASE_URL, not DATABASE_URL: migrations create and drop tables, so
+	// they run as the OWNER role. DATABASE_URL is the runtime role, which owns
+	// nothing and would fail with "permission denied for schema public".
+	dbCredentials: { url: process.env.MIGRATE_DATABASE_URL! },
 	strict: true,
 	verbose: true
 });

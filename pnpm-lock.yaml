@@ -14,6 +14,9 @@ importers:
       pg:
         specifier: 8.23.0
         version: 8.23.0
+      zod:
+        specifier: 4.6.4
+        version: 4.6.4
     devDependencies:
       '@playwright/test':
         specifier: 1.63.0
@@ -66,6 +69,9 @@ importers:
       tailwindcss:
         specifier: 4.3.3
         version: 4.3.3
+      tsx:
+        specifier: 4.23.13
+        version: 4.23.13
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -2202,6 +2208,9 @@ packages:
   zimmerframe@1.1.5:
     resolution: {integrity: sha512-msJxIvYDYcoNL+PJsu+7qmpDWsYmAxTY+2TNYXXF0hzBzBk0BMecOqDOG/EckUoKCuKwObfbugIl8QpqHDXeFA==}
 
+  zod@4.6.4:
+    resolution: {integrity: sha512-AXSD6hvGdvRjajG/l1cC+d6IrhH+sjmPKtYeQdJIK8MFJl3LyClzS+o/YsVC+zQZPupAaeH5skwwm8YqYH7BqA==}
+
 snapshots:
 
   '@cacheable/memory@2.2.0':
@@ -3841,3 +3850,5 @@ snapshots:
   yocto-queue@0.1.0: {}
 
   zimmerframe@1.1.5: {}
+
+  zod@4.6.4: {}

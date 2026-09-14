@@ -30,20 +30,52 @@ nvm use                                   # 24.21.0
 pnpm install
 pnpm exec playwright install chromium     # browser binary, separate from the npm package
 
-bash scripts/db-bootstrap.sh <password>   # creates role `matcami` + both databases; needs sudo
+bash scripts/db-bootstrap.sh <owner-password> <app-password>   # roles + both databases; needs sudo
 cp .env.example .env                      # then fill in the password you just chose
 pnpm db:migrate                           # takes a backup first, then applies
 ```
 
-`scripts/db-bootstrap.sh` is **written to be** idempotent and safe to re-run, but it has not yet been
-executed in this repo — it needs `sudo`, and the role and databases were created by equivalent SQL
-instead. It is the one setup step still unproven; report anything that breaks. It creates `matcami` and `matcami_test`,
+`scripts/db-bootstrap.sh` is idempotent and safe to re-run. It takes **two** passwords, because there
+are two roles: `matcami` **owns** the tables (migrations, `pg_dump`, `db:studio`) and `matcami_app` is
+the **runtime** role, which owns nothing. That split is what lets row-level security be switched on
+later by one migration instead of a database re-bootstrap. It creates `matcami` and `matcami_test`,
 both owned by the `matcami` role and both pinned to UTC. Ownership is not cosmetic: PostgreSQL 15+
 revoked `CREATE` on schema `public` from `PUBLIC`, and drizzle-kit needs `CREATE` on the database for
 its own `drizzle` schema.
 
 `.env` is gitignored and must never be committed. `.env.example` is the committed template and must
 never contain a working credential.
+
+### First run: creating the owner account
+
+`/register` creates the restaurant and its owner, and it answers only while **zero restaurants exist**
+**and** `SETUP_TOKEN` is set. While that variable is unset it refuses every submission regardless of
+the restaurant count.
+
+```bash
+# 1. put a long random value in .env
+SETUP_TOKEN=$(openssl rand -hex 32)
+
+# 2. start the app and visit /register immediately
+pnpm dev          # or the production build behind HTTPS
+
+# 3. unset SETUP_TOKEN afterwards and restart
+```
+
+Do this promptly on a public host: a new host's TLS certificate appears in Certificate Transparency
+logs within minutes of issuance, and scanners follow. Once a restaurant exists, `/register` answers
+404 to anyone signed out.
+
+**Additional restaurants** are created with `pnpm restaurant:create` — never by re-opening the
+endpoint. There is deliberately no environment variable that re-opens it.
+
+**A forgotten owner password** is reset with `pnpm auth:reset-owner <email>`. It hashes through the
+same module the application uses, clears the lockout, ends every session for that owner and writes an
+audit row. Never run `UPDATE users SET password_hash = ...` by hand: that leaves no audit row, no
+session invalidation, and a hash that may not parse.
+
+For production — HTTPS, Nginx, the proxy headers, migrations in a container, and the two database
+roles — see [docs/deployment.md](docs/deployment.md).
 
 ## Everyday commands
 
@@ -65,6 +97,9 @@ pnpm db:generate          # drizzle-kit — SQL from src/lib/server/db/schema
 pnpm db:migrate           # db:backup, then drizzle-kit migrate
 pnpm db:backup            # pg_dump into backups/ (gitignored)
 pnpm db:studio            # row editor over the live database
+
+pnpm auth:reset-owner <email>   # reset the owner's password (prompts, audited)
+pnpm restaurant:create          # create an ADDITIONAL restaurant and its owner
 ```
 
 ## Three warnings
