@@ -1,82 +1,87 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { page } from '$app/state';
+	import { Alert, Button, Card, Field, PageHeader } from '$lib/components/ui';
 
 	let { data, form } = $props();
 	let submitting = $state(false);
+
+	// The action returns a `message` on BOTH paths — `Settings saved.` /
+	// `No changes to save.` on success, and fail(400, { message }) on a validation
+	// error. Tone must follow the outcome: a hardcoded success tone would render a
+	// rejected form in green with a ✓ glyph, which is the colour-plus-glyph rule
+	// carrying the WRONG meaning. page.status is 400 after a fail() and 200
+	// otherwise, so the outcome is read here without touching +page.server.ts.
+	const tone = $derived(page.status === 200 ? 'success' : 'danger');
 </script>
 
 <svelte:head>
 	<title>Settings · matcami</title>
 </svelte:head>
 
-<h2 class="font-display text-xl font-bold">Restaurant settings</h2>
+{#snippet timeZoneHint()}
+	This decides which business day a sale belongs to — a sale at 01:30 counts toward the previous
+	evening. Changing it is allowed and is recorded with the old and new values; it does not rewrite
+	anything already recorded.
+{/snippet}
+
+<!-- level={2}: the (dashboard) layout's h1 is the restaurant name. -->
+<PageHeader level={2} title="Restaurant settings" />
 
 {#if form?.message}
-	<p role="alert" class="border-line bg-raise text-ink mt-4 rounded border px-3 py-2 text-sm">
-		{form.message}
-	</p>
+	<!-- EXACTLY ONE role="alert" may be visible on this page at a time. The journey
+	     asserts against a single page.getByRole('alert') locator, so a second region
+	     is a Playwright strict-mode violation failing with "resolved to 2 elements" —
+	     which looks nothing like a styling problem. Field's per-field error carries
+	     no alert role, for this reason. -->
+	<div class="mt-4">
+		<Alert {tone}>{form.message}</Alert>
+	</div>
 {/if}
 
-<form
-	method="POST"
-	class="bg-raise border-line shadow-card mt-4 flex max-w-lg flex-col gap-4 rounded border p-4"
-	use:enhance={() => {
-		submitting = true;
-		return async ({ update }) => {
-			await update();
-			submitting = false;
-		};
-	}}
->
-	<div class="flex flex-col gap-1">
-		<label for="name" class="text-ink-2 text-sm font-medium">Restaurant name</label>
-		<input
-			id="name"
-			name="name"
-			required
-			value={data.name}
-			class="border-line bg-bg text-ink rounded border px-3 py-2"
-		/>
-	</div>
+<Card class="mt-4 max-w-lg">
+	<form
+		method="POST"
+		class="flex flex-col gap-4"
+		use:enhance={() => {
+			submitting = true;
+			return async ({ update }) => {
+				await update();
+				submitting = false;
+			};
+		}}
+	>
+		<Field id="name" name="name" label="Restaurant name" required value={data.name} />
 
-	<div class="flex flex-col gap-1">
-		<label for="timeZone" class="text-ink-2 text-sm font-medium">Time zone</label>
 		<!-- Free text with a datalist, not a select: the owner must be able to enter
-		     a zone the suggestion list omits. -->
-		<input
+		     a zone the suggestion list omits. Field takes `list`; the datalist stays
+		     here. -->
+		<Field
 			id="timeZone"
 			name="timeZone"
+			label="Time zone"
 			list="time-zones"
 			required
 			value={data.timeZone}
-			class="border-line bg-bg text-ink rounded border px-3 py-2"
+			hint={timeZoneHint}
 		/>
 		<datalist id="time-zones">
 			{#each data.timeZones as tz (tz)}
 				<option value={tz}></option>
 			{/each}
 		</datalist>
-		<p class="text-ink-3 text-xs">
-			This decides which business day a sale belongs to — a sale at 01:30 counts toward the previous
-			evening. Changing it is allowed and is recorded with the old and new values; it does not
-			rewrite anything already recorded.
-		</p>
-	</div>
 
-	<!--
-		NO fields for tax mode, tax rate, currency, approval limits or idle-lock
-		timing — not even disabled ones. Spec 33 open decisions 3, 4 and 6 are
-		unresolved, and a greyed-out field showing a plausible default is how an
-		unmade decision becomes a remembered fact.
-	-->
+		<!--
+			NO fields for tax mode, tax rate, currency, approval limits or idle-lock
+			timing — not even disabled ones. Spec 33 open decisions 3, 4 and 6 are
+			unresolved, and a greyed-out field showing a plausible default is how an
+			unmade decision becomes a remembered fact.
+		-->
 
-	<div>
-		<button
-			type="submit"
-			disabled={submitting}
-			class="bg-accent text-accent-ink rounded px-3 py-2 text-sm font-medium disabled:opacity-60"
-		>
-			{submitting ? 'Saving…' : 'Save settings'}
-		</button>
-	</div>
-</form>
+		<div>
+			<Button type="submit" variant="primary" disabled={submitting}>
+				{submitting ? 'Saving…' : 'Save settings'}
+			</Button>
+		</div>
+	</form>
+</Card>
