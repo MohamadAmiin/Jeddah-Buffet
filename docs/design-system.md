@@ -53,7 +53,15 @@ Light is the default. The viewer has **three** states, not two:
 
 **Every token must exist in the bare `:root`.** A colour whose only definition sits inside a media query or a `[data-theme]` block does not apply in the un-stamped state, and the page renders one theme's text on the other theme's ground.
 
-**The POS terminal chrome is exempt.** `--screen`, `--key`, `--key-line`, `--key-ink` stay dark in both themes. The POS shell is a *device surface*, not page chrome: dark reduces counter glare and keeps the key faces the brightest thing on screen. Do not theme them.
+**There is a FOURTH state: the POS.** `[data-surface="pos"]`, stamped on the `(pos)` route group, is a *device surface* — its appearance is a property of the hardware on the counter, not of the viewer's OS preference. It is **LIGHT and PINNED in both themes**. The dashboard themes; the till does not.
+
+*(Reversed 2026-09-14. The shell was dark in both themes, for glare; that argument was raised and overruled. The four tokens `--screen`, `--key`, `--key-line`, `--key-ink` are RETIRED — once the scope re-declares the ordinary ground names there is nothing left for them to do, and two vocabularies for one surface is what the scope removes. `src/lib/styles/tokens.test.ts` asserts they do not come back.)*
+
+**The scope pins the COMPLETE palette, not just the grounds.** This has been got wrong twice, in opposite directions, and each failure had the same shape — a surface pinned one way with inks that still themed: pinned dark with light inks put `--c-ink` on the shell at **1.08:1**; pinned light with dark inks put it on the key face at **1.21:1**. If a dark block themes a token, the POS scope declares its own value for it.
+
+**Aliases must be re-declared inside the scope.** A custom property's `var()` is substituted at **computed-value time on the element that declares it**, and the resolved literal is what inherits. The dark blocks need no copy — they target `:root`, the same element. `[data-surface="pos"]` is an element inside `<body>`, so an alias declared above it never recomputes there: without its own line, `--c-ring` inside the till stays the *page* accent.
+
+**A white key on the POS ground is 1.22:1**, so elevation alone cannot carry a control's edge. Every pressable POS surface takes a `border-control-line` boundary; `--c-line` is decorative only. WCAG 1.4.11.
 
 ---
 
@@ -157,26 +165,13 @@ The dashboard is the owner's surface: seated, mouse-driven, online only (spec 7)
 | the six `--c-st-*` | `bg-bg` and `bg-raise` | 5.14–6.65 | 6.23–10.60 |
 | `text-accent-ink` | `bg-accent` | 6.13 | 7.82 |
 
-**The twelve measured failures — never write these.** Six in each theme, and the reason the rules above are narrow.
+**There are none left.** `src/lib/styles/tokens.test.ts` recomputes the full census on every `pnpm test:unit` run — every ground token against every ink token, in every surface state — and a pair below WCAG 1.4.3's 4.5:1 fails the suite. The grounds are `bg`, `bg-2`, `raise`, `raise-2`, `accent-soft`, `ok-bg`, `warn-bg`, `danger-bg` and the six `st-*-bg`; the inks are `ink`, `ink-2`, `ink-3`, `accent`, `ok`, `warn`, `danger` and the six `st-*`. **Zero fail**, in light, in dark, and on the POS surface.
 
-| Theme | Ink | Surface | Ratio |
-|---|---|---|---|
-| light | `text-ink-3` | `bg-bg` | **4.35** |
-| light | `text-ink-3` | `bg-bg-2` | **4.03** |
-| light | `text-ink-3` | `bg-accent-soft` | **4.29** |
-| light | `text-ink-3` | `bg-ok-bg` | **4.33** |
-| light | `text-ink-3` | `bg-warn-bg` | **4.38** |
-| light | `text-ink-3` | `bg-danger-bg` | **4.23** |
-| dark | `text-danger` | `bg-raise-2` | **4.06** |
-| dark | `text-ok` | `bg-raise-2` | **4.18** |
-| dark | `text-ink-3` | `bg-raise-2` | **4.25** |
-| dark | `text-danger` | `bg-accent-soft` | **4.19** |
-| dark | `text-ok` | `bg-accent-soft` | **4.31** |
-| dark | `text-ink-3` | `bg-accent-soft` | **4.39** |
+*(Until 2026-09-14 this section listed twelve failing pairs and narrowed the legal ones around them — `text-ink-3` on `bg-raise` only, `text-ok` and `text-danger` off `bg-raise-2` and `bg-accent-soft`. The census over all fourteen grounds actually found **thirty**: the earlier sweep omitted the six `st-*-bg` grounds. Four token values closed all thirty — light `--c-ink-3` to `#5c6771`, dark `--c-ink-3` to `#97a0a8`, dark `--c-ok` to `#6eac81`, dark `--c-danger` to `#df877c` — so the restrictions are gone and every ink is legal on every ground.)*
 
-So: **`text-ink-3` is legal only on `bg-raise`** — use `text-ink-2` wherever `text-ink-3` would otherwise have sat on the page ground. **`text-ok` and `text-danger` are illegal on `bg-raise-2` and on `bg-accent-soft`.** The repair for a failing pair is always **which token is used**, never the token's value.
+**A failing pair is repaired by re-solving the token's VALUE and re-running the census — never by narrowing which pairs a screen may use.** A hand-written list of legal pairs is how thirty real failures stayed hidden: it simply did not name them.
 
-**Control borders.** An interactive control — a text input, a select, the secondary button's outline — draws its boundary with `border-control-line` (`--c-control-line`, derived from `--c-ink-3`): **5.13:1** light and **4.87:1** dark, both above the **3:1** WCAG 1.4.11 asks of a UI component boundary. `border-line` measures **1.58:1** on `bg-raise` and is for **DECORATIVE** edges only — card outlines, dividers, the header rule. The two are separate because a form control whose only boundary is a 1.58:1 line is effectively unbounded, and that is a large part of why an unstyled dashboard reads as washed out.
+**Control borders.** An interactive control — a text input, a select, the secondary button's outline — draws its boundary with `border-control-line` (`--c-control-line`, derived from `--c-ink-3`): **5.78:1** light and **4.87:1** dark, both above the **3:1** WCAG 1.4.11 asks of a UI component boundary. `border-line` measures **1.58:1** on `bg-raise` and is for **DECORATIVE** edges only — card outlines, dividers, the header rule. The two are separate because a form control whose only boundary is a 1.58:1 line is effectively unbounded, and that is a large part of why an unstyled dashboard reads as washed out.
 
 **Focus.** Every interactive element shows a `:focus-visible` ring: `2px` `outline` in `--c-ring`, with `2px` `outline-offset`. `--c-ring` derives from `--c-accent` and measures **5.21:1** on light `bg` and **7.49:1** on dark `bg`. **Never remove a focus ring without replacing it.**
 

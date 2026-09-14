@@ -76,15 +76,23 @@ const bare = parseTokens(blockOf(css, ':root {'));
 const mediaOuter = blockOf(css, '@media (prefers-color-scheme: dark)');
 const mediaDark = parseTokens(blockAt(mediaOuter, mediaOuter.indexOf(':root:not(')));
 const stampDark = parseTokens(blockOf(css, ':root[data-theme="dark"]'));
+const posScope = parseTokens(blockOf(css, '[data-surface="pos"]'));
 
-// Dark falls through the bare :root for anything it does not redeclare — the POS
-// chrome, and the two derived tokens — exactly as the cascade resolves it.
+// Dark falls through the bare :root for anything it does not redeclare — the two
+// derived aliases — exactly as the cascade resolves it. The POS scope is PINNED,
+// so it is asserted twice: as itself, and layered under a dark page. Those two must
+// be value-identical, because the till does not follow the viewer's theme.
 const palettes = {
 	light: bare,
-	dark: new Map([...bare, ...stampDark])
+	dark: new Map([...bare, ...stampDark]),
+	pos: new Map([...bare, ...posScope]),
+	'pos-under-dark': new Map([...bare, ...stampDark, ...posScope])
 } as const;
 
-const POS_CHROME = ['--c-screen', '--c-key', '--c-key-line', '--c-key-ink'];
+// Retired 2026-09-14. Once [data-surface="pos"] re-declares --c-bg / --c-raise /
+// --c-line for the till, these four had no consumer, and two vocabularies for one
+// surface is exactly what the scope removes.
+const RETIRED_CHROME = ['--c-screen', '--c-key', '--c-key-line', '--c-key-ink'];
 
 describe('the token contract', () => {
 	it('parsed a real palette out of all three blocks', () => {
@@ -124,20 +132,44 @@ describe('the token contract', () => {
 		).toEqual([]);
 	});
 
-	it('keeps the POS chrome un-themed — bare :root only, neither dark block', () => {
-		// The POS shell is a device surface, not page chrome: dark cuts counter glare
-		// and keeps the key faces the brightest thing on screen. It stays dark in BOTH
-		// themes (CLAUDE.md "Design & UI", docs/design-system.md section 2).
-		for (const token of POS_CHROME) {
-			expect(bare.has(token), `${token} must be declared in the bare :root`).toBe(true);
+	it('retired the four POS chrome tokens', () => {
+		// They are gone, and nothing may reach for them again: --c-screen/--c-key
+		// described a device surface that [data-surface="pos"] now expresses with the
+		// ordinary ground names, so a component is portable between surfaces.
+		for (const token of RETIRED_CHROME) {
+			expect(source.includes(token), `${token} is retired — remove it from tokens.css`).toBe(false);
+		}
+	});
+
+	it('pins the POS scope — it declares every token the dark blocks theme', () => {
+		// The rule this test exists to enforce: PIN EVERY TOKEN, NOT JUST THE GROUNDS.
+		// A surface pinned one way whose inks still theme is the defect that has now
+		// appeared twice — pinned dark with light inks (1.08:1), then pinned light with
+		// dark inks (1.21:1). If the dark blocks theme a token, the POS scope must
+		// declare its own value for it, or a dark-theme viewer inherits it into a
+		// permanently light surface.
+		const themed = [...stampDark.keys()];
+		const missing = themed.filter((t) => !posScope.has(t));
+		expect(
+			missing,
+			`[data-surface="pos"] must declare these or a dark viewer inherits them into a ` +
+				`pinned-light surface: ${missing.join(', ')}`
+		).toEqual([]);
+	});
+
+	it('re-declares its var() aliases inside the POS scope', () => {
+		// A custom property's var() is substituted at COMPUTED-VALUE time on the element
+		// that DECLARES it, and the resolved literal is what inherits. [data-surface="pos"]
+		// is an element inside <body>, not :root, so an alias declared above it never
+		// recomputes there. The dark blocks need no copy (same element); this scope does.
+		// A contrast assertion cannot catch this: resolve() follows var() in TEXT and
+		// would report the intended value either way. The declaration check is the defence.
+		for (const alias of [...bare.keys()].filter((k) => /^var\(--c-/.test(bare.get(k) ?? ''))) {
 			expect(
-				mediaDark.has(token),
-				`${token} must NOT be redeclared in the dark media block — the POS shell is not themed`
-			).toBe(false);
-			expect(
-				stampDark.has(token),
-				`${token} must NOT be redeclared in :root[data-theme="dark"] — the POS shell is not themed`
-			).toBe(false);
+				posScope.has(alias),
+				`${alias} is a var() alias and MUST be re-declared in [data-surface="pos"] — ` +
+					`it will not recompute there on its own`
+			).toBe(true);
 		}
 	});
 
@@ -199,7 +231,7 @@ function resolve(name: string, palette: Map<string, string>): string | null {
 	return HEX.test(value.trim()) ? value.trim() : null;
 }
 
-function ratioOf(ink: string, surface: string, theme: 'light' | 'dark'): number {
+function ratioOf(ink: string, surface: string, theme: keyof typeof palettes): number {
 	const palette = palettes[theme];
 	const a = resolve(ink, palette);
 	const b = resolve(surface, palette);
@@ -208,42 +240,66 @@ function ratioOf(ink: string, surface: string, theme: 'light' | 'dark'): number 
 	return contrast(a as string, b as string);
 }
 
-// The LEGAL pairs from docs/design-system.md section 7b, and only those. The known
-// failing pairs are deliberately NOT asserted: the grammar forbids using them, so
-// pinning them here would freeze a defect in place and make the eventual palette fix
-// look like a regression. If a pair below FAILS, stop and report it — do not fix it
-// by editing a colour value. Palette re-tuning is a decision the user deferred.
-const GROUNDS = ['bg', 'bg-2', 'raise', 'raise-2'];
-const STATUS = ['st-new', 'st-sent', 'st-voided', 'st-billed', 'st-paid', 'st-offline'];
+// THE FULL CENSUS, generated rather than listed. Every ground token against every
+// ink token, in every surface state. A failing pair is repaired by re-solving the
+// token's VALUE and re-running this census — never by removing the pair from the
+// list. The earlier hand-written "legal pairs" list hid 30 real failures simply by
+// not naming them.
+const GROUNDS = [
+	'bg',
+	'bg-2',
+	'raise',
+	'raise-2',
+	'accent-soft',
+	'ok-bg',
+	'warn-bg',
+	'danger-bg',
+	'st-new-bg',
+	'st-sent-bg',
+	'st-voided-bg',
+	'st-billed-bg',
+	'st-paid-bg',
+	'st-offline-bg'
+];
+const INKS = [
+	'ink',
+	'ink-2',
+	'ink-3',
+	'accent',
+	'ok',
+	'warn',
+	'danger',
+	'st-new',
+	'st-sent',
+	'st-voided',
+	'st-billed',
+	'st-paid',
+	'st-offline'
+];
 
-const TEXT_PAIRS: Array<[string, string]> = [
-	...GROUNDS.map((s): [string, string] => ['ink', s]),
-	...GROUNDS.map((s): [string, string] => ['ink-2', s]),
-	// raise ONLY: it is the one surface where ink-3 clears 4.5:1 in BOTH themes
-	// (5.13 light, 4.87 dark). Light raise-2 passes at 4.76, but dark raise-2 is
-	// 4.25, so asserting it would fail.
-	['ink-3', 'raise'],
-	...['accent', 'ok', 'warn', 'danger'].flatMap((ink): Array<[string, string]> => [
-		[ink, 'bg'],
-		[ink, 'raise']
-	]),
-	...STATUS.flatMap((ink): Array<[string, string]> => [
-		[ink, 'bg'],
-		[ink, 'raise']
-	]),
-	['accent-ink', 'accent']
+const TEXT_PAIRS: Array<[string, string]> = GROUNDS.flatMap((g) =>
+	INKS.map((i): [string, string] => [i, g])
+);
+
+// On-fill pairs: ink rendered ON a filled control rather than on a page ground.
+const ON_FILL_PAIRS: Array<[string, string]> = [
+	['accent-ink', 'accent'],
+	['danger-ink', 'danger'],
+	['disabled-ink', 'disabled-bg']
 ];
 
 // WCAG 1.4.11 — UI component boundaries and focus indicators, 3:1.
 const NON_TEXT_PAIRS: Array<[string, string]> = [
 	['control-line', 'raise'],
 	['control-line', 'bg'],
+	['control-line', 'bg-2'],
+	['control-line', 'raise-2'],
 	['ring', 'bg'],
 	['ring', 'raise']
 ];
 
 describe('the contrast floor holds in BOTH themes', () => {
-	for (const theme of ['light', 'dark'] as const) {
+	for (const theme of ['light', 'dark', 'pos', 'pos-under-dark'] as const) {
 		it.each(TEXT_PAIRS)(`${theme}: text-%s on bg-%s meets WCAG AA 4.5:1`, (ink, surface) => {
 			const ratio = ratioOf(ink, surface, theme);
 			expect(
@@ -251,6 +307,21 @@ describe('the contrast floor holds in BOTH themes', () => {
 				`text-${ink} on bg-${surface} measures ${ratio.toFixed(2)}:1 in ${theme}, below the ` +
 					'4.5:1 floor CLAUDE.md calls non-negotiable. Change WHICH TOKEN is used, never the ' +
 					'token’s value — see docs/design-system.md section 7b.'
+			).toBeGreaterThanOrEqual(4.5);
+		});
+
+		// Ink rendered ON a filled control, not on a page ground. This is the pair a
+		// hardcoded literal breaks: white on the LIGHT --c-danger is 6.65, but the dark
+		// palette lightens that red for legibility on a dark ground and white then
+		// measures 2.66. Every filled control names an ink role for exactly this reason.
+		it.each(ON_FILL_PAIRS)(`${theme}: text-%s on bg-%s meets WCAG AA 4.5:1`, (ink, surface) => {
+			const ratio = ratioOf(ink, surface, theme);
+			expect(
+				ratio,
+				`text-${ink} on bg-${surface} measures ${ratio.toFixed(2)}:1 in ${theme}, below the ` +
+					'4.5:1 floor. A filled control must name an ink token per surface state — never a ' +
+					'literal, and never `opacity`, which composites fill and ink together and defeats ' +
+					'this check entirely.'
 			).toBeGreaterThanOrEqual(4.5);
 		});
 
