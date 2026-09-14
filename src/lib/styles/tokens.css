@@ -86,6 +86,19 @@
   --c-cat-grills:#8a4a2b; --c-cat-rice:#7a5c12;  --c-cat-somali:#0f6b7e;
   --c-cat-drinks:#3f5ba8; --c-cat-sides:#5a4a80; --c-cat-sweets:#8f3d63;
 
+  /* THE NAVIGATION RAIL. Its own small family, because the rail is a coloured
+     object rather than a page surface: the dashboard's grounds go light-to-white
+     for reading, while the rail is a saturated block that has to hold white text,
+     a selected row, muted labels and a visible edge. Giving it --c-accent directly
+     would leave every one of those with no legal token to reach for.
+
+     Measured against its own ground, both themes, per WCAG 1.4.3 / 1.4.11. */
+  --c-rail:#0f6b7e;          /* the brand accent, used as a surface */
+  --c-rail-active:#0b4d5b;   /* the selected row — deeper, not lighter */
+  --c-rail-ink:#ffffff;      /* 6.13 on rail · 9.43 on active */
+  --c-rail-ink-2:#c9e7ec;    /* 4.71 on rail · 7.24 on active — group labels, Soon */
+  --c-rail-line:#93bdc6;     /* 3.02 on rail — a boundary, so 1.4.11's 3:1 applies */
+
   /* Elevation ladder, per theme: the light rungs carry a white top highlight that
      is wrong on a dark ground. Elevation is NEVER a boundary — a control's edge is
      --c-control-line, because a shadow does not survive a contrast check (1.4.11). */
@@ -105,8 +118,6 @@
     --c-ok:#6eac81;   --c-ok-bg:#1b2a21;
     --c-warn:#d99a3c; --c-warn-bg:#2c2417;
     --c-danger:#df877c; --c-danger-bg:#2c1d1b;
-  --c-danger-ink:#1a0f0d;   /* 7.06 here; white would be 2.66 */
-  --c-disabled-bg:#2b3139; --c-disabled-ink:#a8b3bc;   /* 6.15 */
     --c-danger-ink:#1a0f0d;   /* 7.06 here; white would be 2.66 */
     --c-disabled-bg:#2b3139; --c-disabled-ink:#a8b3bc;   /* 6.15 */
     --c-st-new:#8fd2e3;     --c-st-new-bg:#243745;
@@ -115,6 +126,12 @@
     --c-st-billed:#e8bd6b;  --c-st-billed-bg:#332a14;
     --c-st-paid:#8fd0a0;    --c-st-paid-bg:#1f3326;
     --c-st-offline:#e8bd6b; --c-st-offline-bg:#332a14;
+    /* The rail in dark: a deep teal-slate, so it still reads as the same object
+       rather than becoming a second page surface. */
+    --c-rail:#13272e; --c-rail-active:#2b3d43;
+    --c-rail-ink:#e6eaec;    /* 12.78 on rail · 9.37 on active */
+    --c-rail-ink-2:#a8b3bc;  /*  7.25 on rail · 5.31 on active */
+    --c-rail-line:#74878f;   /*  4.13 on rail */
     --c-shadow-flat:     0 1px 0 rgb(255 255 255 / .04), 0 1px 2px -1px rgb(0 0 0 / .6);
     --c-shadow-raised:   0 1px 0 rgb(255 255 255 / .04), 0 8px 24px -12px rgb(0 0 0 / .8);
     --c-shadow-floating: 0 1px 0 rgb(255 255 255 / .06), 0 22px 50px -20px rgb(0 0 0 / .9);
@@ -142,6 +159,8 @@
   --c-shadow: var(--c-shadow-raised);
   --c-danger-ink:#1a0f0d;   /* 7.06 here; white would be 2.66 */
   --c-disabled-bg:#2b3139; --c-disabled-ink:#a8b3bc;   /* 6.15 */
+  --c-rail:#13272e; --c-rail-active:#2b3d43;
+  --c-rail-ink:#e6eaec; --c-rail-ink-2:#a8b3bc; --c-rail-line:#74878f;
 }
 
 /* ── 1b. THE POS DEVICE SURFACE — LIGHT, PINNED IN BOTH THEMES ───────────────
@@ -197,6 +216,13 @@
   --c-shadow-raised:   0 1px 0 rgb(255 255 255 / .8), 0 6px 20px -14px rgb(22 27 32 / .45);
   --c-shadow-floating: 0 1px 0 rgb(255 255 255 / .9), 0 18px 44px -22px rgb(22 27 32 / .55);
   --c-shadow: var(--c-shadow-raised);
+  /* The rail at its LIGHT values. No POS screen has a navigation rail today, but
+     the pinning rule is mechanical on purpose: if a dark block themes a token, this
+     scope declares it. An exemption list is a list someone forgets to update, and
+     the failure mode is a dark-theme viewer inheriting a dark value into a surface
+     that is pinned light. */
+  --c-rail:#0f6b7e; --c-rail-active:#0b4d5b;
+  --c-rail-ink:#ffffff; --c-rail-ink-2:#c9e7ec; --c-rail-line:#93bdc6;
 }
 
 /* ── 2. themeable tokens → Tailwind utilities (bg-raise, text-ink-2, …) ─── */
@@ -236,6 +262,12 @@
   --color-cat-grills: var(--c-cat-grills); --color-cat-rice:   var(--c-cat-rice);
   --color-cat-somali: var(--c-cat-somali); --color-cat-drinks: var(--c-cat-drinks);
   --color-cat-sides:  var(--c-cat-sides);  --color-cat-sweets: var(--c-cat-sweets);
+
+  --color-rail:        var(--c-rail);
+  --color-rail-active: var(--c-rail-active);
+  --color-rail-ink:    var(--c-rail-ink);
+  --color-rail-ink-2:  var(--c-rail-ink-2);
+  --color-rail-line:   var(--c-rail-line);
 
   --shadow-card:     var(--c-shadow);
   --shadow-flat:     var(--c-shadow-flat);

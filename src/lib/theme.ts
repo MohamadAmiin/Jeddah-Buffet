@@ -14,7 +14,18 @@
 export const THEME_COOKIE = 'matcami_theme';
 export const THEME_MAX_AGE_SECONDS = 31536000; // one year, for the client to use
 
-export type Theme = 'light' | 'dark';
+/**
+ * THREE values, not two, and the third is why this changed.
+ *
+ * The default used to be "system", represented by the ABSENCE of a cookie and of
+ * an attribute. The product default is now LIGHT, so absence can no longer mean
+ * system — absence means "no choice has been made", and the answer to that is
+ * light. "system" therefore needs a value it can be stored as.
+ */
+export type Theme = 'light' | 'dark' | 'system';
+
+/** What a viewer who has never chosen gets. */
+export const DEFAULT_THEME: Theme = 'light';
 
 /**
  * Narrow an untrusted string to a Theme, or null.
@@ -27,17 +38,21 @@ export type Theme = 'light' | 'dark';
  * value "looks fine".
  */
 export function parseTheme(value: string | undefined): Theme | null {
-	return value === 'light' || value === 'dark' ? value : null;
+	return value === 'light' || value === 'dark' || value === 'system' ? value : null;
 }
 
 /**
  * The attribute to stamp on <html>, or the EMPTY STRING.
  *
- * The empty string IS the "system" state: no attribute at all, so the
- * @media (prefers-color-scheme: dark) block in tokens.css governs. There is
- * deliberately no third Theme value for "system" — absence is how system is
- * represented, in the cookie and in the DOM alike.
+ * The empty string is the "system" state: no attribute at all, so the
+ * @media (prefers-color-scheme: dark) block in tokens.css governs.
+ *
+ * `null` means NO COOKIE — the viewer has never chosen — and that resolves to
+ * DEFAULT_THEME, which is light. This is the one line that makes light the product
+ * default rather than a coin toss on the viewer's operating system. Someone who
+ * wants their OS to decide can still ask for it; they just have to ask.
  */
 export function themeAttribute(theme: Theme | null): string {
-	return theme === null ? '' : `data-theme="${theme}"`;
+	const resolved = theme ?? DEFAULT_THEME;
+	return resolved === 'system' ? '' : `data-theme="${resolved}"`;
 }
