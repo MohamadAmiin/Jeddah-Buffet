@@ -8,6 +8,7 @@
 	// (invariant 8). Hiding a button in this layout is not security.
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
+	import { ThemeToggle } from '$lib/components/ui';
 
 	let { data, children } = $props();
 
@@ -43,9 +44,9 @@
 			{data.restaurantName ?? 'matcami'}
 		</h1>
 
-		<!-- The trailing group. T-19 places ThemeToggle here, beside the display name
-		     and the sign-out form; this task adds no control and no placeholder. -->
-		<div class="ml-auto flex items-center gap-3">
+		<!-- The trailing group: theme control, display name, sign-out. -->
+		<div class="ml-auto flex flex-wrap items-center gap-3">
+			<ThemeToggle />
 			<span class="text-ink-2 text-sm">{data.displayName}</span>
 			<!--
 				A FORM, never an anchor. /logout refuses GET, and a link would be

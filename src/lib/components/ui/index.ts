@@ -8,3 +8,4 @@ export { default as Card } from './Card.svelte';
 export { default as Field } from './Field.svelte';
 export { default as PageHeader } from './PageHeader.svelte';
 export { default as StatusMark } from './StatusMark.svelte';
+export { default as ThemeToggle } from './ThemeToggle.svelte';
