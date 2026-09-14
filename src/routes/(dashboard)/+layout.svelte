@@ -29,12 +29,22 @@
 	];
 </script>
 
-<div class="bg-bg text-ink min-h-screen">
+<!-- No bg-bg/text-ink: the element base layer sets the page ground and ink on
+     `body` (src/lib/styles/base.css). -->
+<div class="min-h-screen">
+	<!-- Chrome, separated from the content by a border-line bottom edge. Wraps
+	     gracefully at narrow widths. -->
 	<header class="bg-raise border-line flex flex-wrap items-center gap-4 border-b px-4 py-3">
+		<!-- A REAL heading element. e2e/auth.spec.ts asserts
+		     getByRole('heading', { name: <the restaurant name> }) twice — after
+		     registration and again after the rename — so a styled div breaks the
+		     journey even though it looks identical. -->
 		<h1 class="font-display text-lg font-bold">
 			{data.restaurantName ?? 'matcami'}
 		</h1>
 
+		<!-- The trailing group. T-19 places ThemeToggle here, beside the display name
+		     and the sign-out form; this task adds no control and no placeholder. -->
 		<div class="ml-auto flex items-center gap-3">
 			<span class="text-ink-2 text-sm">{data.displayName}</span>
 			<!--
@@ -44,7 +54,7 @@
 			<form method="POST" action="/logout">
 				<button
 					type="submit"
-					class="border-line text-ink-2 hover:text-ink rounded border px-3 py-1 text-sm"
+					class="border-control-line text-ink hover:bg-raise-2 rounded-control border px-3 py-1 text-sm"
 				>
 					Sign out
 				</button>
@@ -52,10 +62,21 @@
 		</div>
 	</header>
 
-	<div class="flex flex-col gap-6 p-4 md:flex-row">
+	<div class="mx-auto flex max-w-page flex-col gap-6 p-4 md:flex-row">
 		<!-- Collapses above the content on narrow screens: the owner may open this
-		     on a phone, and nothing here should scroll horizontally. -->
-		<nav aria-label="Dashboard" class="md:w-56 md:shrink-0">
+		     on a phone, and nothing here should scroll horizontally.
+
+		     CONTRAST REPAIR, and it changes no colour value. The disabled entries and
+		     their `coming soon` labels use text-ink-3, which measures only 4.35:1 on
+		     the bg-bg page ground — below the 4.5:1 floor CLAUDE.md calls
+		     non-negotiable. The fix is WHICH SURFACE they sit on: this nav is a
+		     bg-raise panel, where text-ink-3 is 5.13:1 in light and 4.87:1 in dark,
+		     legal in both themes. Do not "tidy" this panel away and leave the ink-3
+		     entries on the page ground. -->
+		<nav
+			aria-label="Dashboard"
+			class="bg-raise border-line rounded-card border p-2 md:w-56 md:shrink-0"
+		>
 			<ul class="flex flex-col gap-1">
 				{#each nav as item (item.label)}
 					<li>
@@ -63,7 +84,7 @@
 							<a
 								href={resolve(item.href as '/dashboard' | '/settings')}
 								aria-current={page.url.pathname === item.href ? 'page' : undefined}
-								class="hover:bg-raise aria-[current=page]:bg-raise aria-[current=page]:text-ink text-ink-2 block rounded px-3 py-2 text-sm"
+								class="hover:bg-raise-2 aria-[current=page]:bg-raise-2 aria-[current=page]:text-ink text-ink-2 rounded-control block px-3 py-2 text-sm"
 							>
 								{item.label}
 							</a>
@@ -76,7 +97,7 @@
 							-->
 							<span
 								aria-disabled="true"
-								class="text-ink-3 flex items-center justify-between rounded px-3 py-2 text-sm"
+								class="text-ink-3 rounded-control flex items-center justify-between gap-2 px-3 py-2 text-sm"
 							>
 								{item.label}
 								<span class="text-ink-3 text-xs">coming soon</span>
