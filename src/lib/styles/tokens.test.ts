@@ -16,6 +16,8 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const TOKENS = fileURLToPath(new URL('./tokens.css', import.meta.url));
+const BASE = fileURLToPath(new URL('./base.css', import.meta.url));
+const APP_CSS = fileURLToPath(new URL('../../app.css', import.meta.url));
 const SRC = fileURLToPath(new URL('../../', import.meta.url));
 
 /**
@@ -298,5 +300,38 @@ describe('no arbitrary value escapes the token file', () => {
 			/#[0-9a-fA-F]{6}\b/.exec(text)?.[0],
 			`${label} contains a raw hex. tokens.css is the ONLY place a colour is defined.`
 		).toBeUndefined();
+	});
+});
+
+/* ── T-06's element base layer ───────────────────────────────────────────── */
+
+describe('the element base layer', () => {
+	// T-03's arbitrary-value scan covers .svelte files; base.css is a .css file, so
+	// its no-literal rule is asserted here instead.
+	it('base.css defines no colour of its own', () => {
+		const base = readFileSync(BASE, 'utf8');
+		const hex = /#[0-9a-fA-F]{6}\b/.exec(base)?.[0];
+		expect(
+			hex,
+			`src/lib/styles/base.css contains the raw hex ${hex}. The base layer applies in BOTH ` +
+				'themes, so a literal colour there freezes one theme’s value into both. Every colour ' +
+				'and every font value in that file must be a var(--…) reference.'
+		).toBeUndefined();
+	});
+
+	it('app.css imports base.css AFTER tokens.css', () => {
+		// base.css references --c-bg, --c-ink, --c-ring, --c-accent-soft and the font
+		// tokens. Imported first, those names are undefined and the declarations that
+		// use them are dropped — silently, with no error anywhere.
+		const app = readFileSync(APP_CSS, 'utf8');
+		const tokensAt = app.indexOf('./lib/styles/tokens.css');
+		const baseAt = app.indexOf('./lib/styles/base.css');
+		expect(tokensAt, 'src/app.css does not import ./lib/styles/tokens.css').toBeGreaterThan(-1);
+		expect(baseAt, 'src/app.css does not import ./lib/styles/base.css').toBeGreaterThan(-1);
+		expect(
+			baseAt,
+			'src/app.css imports base.css BEFORE tokens.css. The tokens base.css references ' +
+				'would be undefined at that point and its declarations silently dropped.'
+		).toBeGreaterThan(tokensAt);
 	});
 });
