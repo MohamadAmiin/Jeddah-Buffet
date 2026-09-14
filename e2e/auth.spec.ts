@@ -62,6 +62,14 @@ test('the owner registers, works, signs out and signs back in', async ({ page, c
 	await expect(page.getByText('Restaurant settings')).toBeVisible();
 	await expect(page.getByText('not started', { exact: true })).toHaveCount(5);
 
+	// ── 3a. the bare host, WITH a session ──────────────────────────────────────
+	// Labelled 3a deliberately: it leaves every existing `// ── N. … ──` label
+	// byte-identical. `/` is a signpost, and which way it points depends on whether
+	// the visitor is signed in. smoke.spec.ts covers the signed-OUT direction; this
+	// is the other one, and it needs a session, so it belongs here.
+	await page.goto('/');
+	await expect(page).toHaveURL(/\/dashboard$/);
+
 	// ── 3b. the theme control ──────────────────────────────────────────────────
 	// Labelled 3b deliberately: it leaves every existing `// ── N. … ──` label
 	// byte-identical, so a reviewer can see at a glance that no assertion moved.
