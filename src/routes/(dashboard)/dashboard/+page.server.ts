@@ -1,7 +1,8 @@
 import { error, type ServerLoad } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { db } from '$lib/server/db/client';
-import { settingsComplete } from '$lib/server/restaurants';
+import { getRestaurantWithSettings, settingsComplete } from '$lib/server/restaurants';
+import { recentActivity } from '$lib/server/audit';
 
 export const load: ServerLoad = async (event) => {
 	// Its own guard, even though the hook already guards the group and the layout
@@ -21,5 +22,22 @@ export const load: ServerLoad = async (event) => {
 	// a tax mode nobody chose. settingsComplete() is the extension point.
 	const settings = await settingsComplete(db, restaurantId);
 
-	return { settings };
+	// The restaurant's OWN time zone and opening date, so the screen can report the
+	// local date where the till stands rather than where the browser happens to be.
+	// Invariant 11: the clock that matters is the restaurant's.
+	const restaurant = await getRestaurantWithSettings(db, restaurantId);
+
+	// Real rows from the append-only audit log, scoped to this restaurant inside the
+	// query itself. This is the only genuinely live record the product keeps today,
+	// which is exactly why it belongs on the overview — everything else an owner
+	// would want here (takings, covers, stock) has no data behind it yet, and a
+	// zero would be indistinguishable from a broken query.
+	const activity = await recentActivity(db, restaurantId);
+
+	return {
+		settings,
+		timeZone: restaurant?.timeZone ?? null,
+		openedOn: restaurant?.createdAt ?? null,
+		activity
+	};
 };

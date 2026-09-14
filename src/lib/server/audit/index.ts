@@ -1,9 +1,13 @@
 import type { RequestEvent } from '@sveltejs/kit';
 import type { DbTx } from '../db/client';
+import type { Executor } from '../auth/session';
+import { desc, eq } from 'drizzle-orm';
 import { auditLog } from '../db/schema/audit';
+import { users } from '../db/schema/users';
 import type { AuditEvent } from './events';
 
 export type { AuditEvent, AuditEventName } from './events';
+import type { AuditEventName } from './events';
 
 /** Who did it, who it was about, and where from. */
 export type AuditEntry = AuditEvent & {
@@ -105,3 +109,51 @@ export function requestContext(event: RequestEvent): {
 // NOTHING here reads audit rows. This plan writes them and does not display
 // them; an owner-facing audit view is a later plan, and it will need its own
 // permission key.
+
+/** One row of the activity feed, already narrowed to what a screen may show. */
+export type ActivityEntry = {
+	event: AuditEventName;
+	/** The acting person's display name, or null for an unauthenticated event. */
+	actor: string | null;
+	occurredAt: Date;
+};
+
+/**
+ * The most recent audit rows for ONE restaurant, newest first.
+ *
+ * Scoped to `restaurantId` in the query itself, never filtered in the caller:
+ * there is no tenant-less audit row and there must be no tenant-less audit read.
+ *
+ * It returns `event`, the actor's display name and the timestamp — and nothing
+ * else. `details` is deliberately NOT returned: it carries per-event payloads
+ * (the email a login was attempted with, the old and new values of a settings
+ * change) that a dashboard has no reason to broadcast, and the narrower the read,
+ * the less there is to leak when a later event type is added to the union.
+ *
+ * Takes `Executor` (Db | DbTx), the type this codebase already uses for reads, so
+ * it works on the plain handle and inside a transaction alike. Nothing here writes,
+ * and invariant 2 keeps these rows append-only regardless.
+ */
+export async function recentActivity(
+	database: Executor,
+	restaurantId: string,
+	limit = 8
+): Promise<ActivityEntry[]> {
+	const rows = await database
+		.select({
+			event: auditLog.event,
+			actor: users.displayName,
+			occurredAt: auditLog.occurredAt
+		})
+		.from(auditLog)
+		.leftJoin(users, eq(auditLog.actorUserId, users.id))
+		.where(eq(auditLog.restaurantId, restaurantId))
+		.orderBy(desc(auditLog.occurredAt))
+		.limit(limit);
+
+	return rows.map((r) => ({
+		event: r.event as AuditEventName,
+		actor: r.actor,
+		occurredAt: r.occurredAt
+	}));
+}

@@ -259,14 +259,16 @@
 		<div aria-hidden="true" class="h-1.5 flex-none"></div>
 	</nav>
 
-	<p class="text-caption text-ink-2 flex-none px-4 pb-4 lg:pb-5">
-		<!-- The scroll cue is WRITTEN, not left to a scrollbar: an overlay scrollbar is
-		     invisible until you have already guessed to swipe. display:none at desktop
-		     takes it out of the accessibility tree there, where it would be a lie. -->
-		<span class="lg:hidden">The row above scrolls sideways; all nine sections are in it.</span>
-		Seven sections are listed and not built. Each arrives with its own feature — Menu with the menu builder,
-		Reports with the reporting plan — so none of them is a link today: a greyed-out item that still navigates
-		is worse than one that admits it.
+	<!-- The scroll cue is WRITTEN, not left to a scrollbar: an overlay scrollbar is
+	     invisible until you have already guessed to swipe. lg:hidden takes it out of
+	     the accessibility tree at desktop, where it would be a lie.
+
+	     The paragraph that used to sit here — explaining that the seven greyed rows
+	     are not built — has been removed. Each row already says "Soon" beside its own
+	     label, which is where a reader looks; repeating it as a block of prose under
+	     the nav made it the largest piece of text in the rail while saying the least. -->
+	<p class="text-caption text-ink-2 flex-none px-4 pb-4 lg:hidden">
+		The row above scrolls sideways; all nine sections are in it.
 	</p>
 
 	<div

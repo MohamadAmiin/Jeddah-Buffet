@@ -52,6 +52,60 @@
 	// COUNTED, never written down. "1 of 6" typed as a string is a second source of
 	// truth that goes stale the first time a step is added or completed.
 	const doneCount = $derived(steps.filter((step) => step.done).length);
+
+	// THE RESTAURANT'S OWN CLOCK, not the browser's. Invariant 11: the date a
+	// business day belongs to is decided by the restaurant's time zone, so a screen
+	// that reports "today" from the viewer's locale is reporting the wrong day for
+	// anyone travelling — and for a 01:30 sale, the wrong day for everyone.
+	//
+	// This is the LOCAL DATE, and it is deliberately not called the business date.
+	// The business date belongs to a POS session, and no session exists yet; naming
+	// it here would invent a concept the product has not built.
+	const tz = $derived(data.timeZone ?? 'UTC');
+	const localDate = $derived(
+		new Intl.DateTimeFormat('en-GB', {
+			timeZone: tz,
+			weekday: 'long',
+			day: 'numeric',
+			month: 'long'
+		}).format(new Date())
+	);
+	const localTime = $derived(
+		new Intl.DateTimeFormat('en-GB', {
+			timeZone: tz,
+			hour: '2-digit',
+			minute: '2-digit'
+		}).format(new Date())
+	);
+
+	// Audit events are a closed union (src/lib/server/audit/events.ts). Mapping them
+	// to sentences here — rather than printing the raw dotted name — keeps the
+	// vocabulary in one place, and the `details` payload never leaves the server.
+	const EVENT_TEXT: Record<string, string> = {
+		'restaurant.registered': 'Restaurant registered',
+		'user.created': 'Account created',
+		'login.success': 'Signed in',
+		'login.failed': 'Failed sign-in attempt',
+		'login.locked_out': 'Account locked after repeated failures',
+		'login.rejected_locked': 'Sign-in refused while locked',
+		logout: 'Signed out',
+		'settings.updated': 'Settings changed',
+		'user.password_reset_by_operator': 'Password reset from the command line'
+	};
+
+	const activity = $derived(
+		data.activity.map((row) => ({
+			text: EVENT_TEXT[row.event] ?? row.event,
+			actor: row.actor,
+			when: new Intl.DateTimeFormat('en-GB', {
+				timeZone: tz,
+				day: '2-digit',
+				month: 'short',
+				hour: '2-digit',
+				minute: '2-digit'
+			}).format(new Date(row.occurredAt))
+		}))
+	);
 </script>
 
 <svelte:head>
@@ -66,8 +120,77 @@
 	description="Set the restaurant up, then keep it running. This surface is online only — the POS keeps selling when the connection drops, and this one does not pretend to."
 />
 
-<div class="max-w-measure flex flex-col gap-10 px-4 pt-8 pb-16 lg:px-7">
-	<section class="flex flex-col gap-5">
+<div class="flex max-w-6xl flex-col gap-10 px-4 pt-8 pb-16 lg:px-7">
+	<!-- WHAT IS TRUE RIGHT NOW. Every figure below is read from the database or
+	     computed from the restaurant's own time zone on this render — none of it is
+	     a placeholder, and none of it is money. Takings, covers and stock are the
+	     numbers an owner actually wants here, and they are absent on purpose: no
+	     order, invoice or stock movement exists yet, and a zero on a dashboard is
+	     indistinguishable from a broken query. They arrive with their features. -->
+	<section class="flex flex-col gap-4">
+		<h3 class="sr-only">At a glance</h3>
+		<dl class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+			<div class="bg-raise border-line rounded-card shadow-flat flex flex-col gap-1 border p-4">
+				<dt class="text-eyebrow text-ink-3 uppercase">Local date</dt>
+				<dd class="text-section">{localDate}</dd>
+				<dd class="text-caption text-ink-2 font-mono tabular-nums">{localTime} · {tz}</dd>
+			</div>
+			<div class="bg-raise border-line rounded-card shadow-flat flex flex-col gap-1 border p-4">
+				<dt class="text-eyebrow text-ink-3 uppercase">Setup</dt>
+				<dd class="text-section font-mono tabular-nums">{doneCount} of {steps.length}</dd>
+				<dd class="text-caption text-ink-2">steps complete</dd>
+			</div>
+			<div class="bg-raise border-line rounded-card shadow-flat flex flex-col gap-1 border p-4">
+				<dt class="text-eyebrow text-ink-3 uppercase">Recorded events</dt>
+				<dd class="text-section font-mono tabular-nums">{data.activity.length}</dd>
+				<dd class="text-caption text-ink-2">most recent shown below</dd>
+			</div>
+			<div class="bg-raise border-line rounded-card shadow-flat flex flex-col gap-1 border p-4">
+				<dt class="text-eyebrow text-ink-3 uppercase">Selling</dt>
+				<dd class="text-section flex items-center gap-2">
+					<!-- Colour never alone: the glyph and the word both say it. -->
+					<span aria-hidden="true" class="text-st-offline font-mono">◆</span>
+					<span>Not yet</span>
+				</dd>
+				<dd class="text-caption text-ink-2">no POS session has been opened</dd>
+			</div>
+		</dl>
+	</section>
+
+	<!-- REAL ROWS from the append-only audit log, scoped to this restaurant in the
+	     query. `details` never leaves the server: it carries the email a login was
+	     tried with and the old and new values of a settings change, and a dashboard
+	     has no reason to broadcast either. -->
+	<section class="flex flex-col gap-4">
+		<div class="flex flex-col gap-2">
+			<p class="text-eyebrow text-ink-3 uppercase">Activity</p>
+			<h3 class="text-title">What has happened</h3>
+			<p class="text-body text-ink-2 max-w-measure">
+				Every sensitive action is recorded and none of these rows can be edited or deleted — a
+				correction is a new record, never a rewrite.
+			</p>
+		</div>
+
+		<Card>
+			{#if activity.length === 0}
+				<p class="text-body text-ink-2">Nothing recorded yet.</p>
+			{:else}
+				<ul class="divide-line-soft -my-2 flex list-none flex-col divide-y p-0">
+					{#each activity as row, i (i)}
+						<li class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-3">
+							<span class="text-body">{row.text}</span>
+							<span class="text-caption text-ink-2 flex items-baseline gap-3">
+								{#if row.actor}<span>{row.actor}</span>{/if}
+								<span class="font-mono tabular-nums">{row.when}</span>
+							</span>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</Card>
+	</section>
+
+	<section class="max-w-measure flex flex-col gap-5">
 		<div class="flex flex-col gap-2">
 			<p class="text-eyebrow text-ink-3 uppercase">Onboarding</p>
 			<h3 class="text-title">Getting set up</h3>
