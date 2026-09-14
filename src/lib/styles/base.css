@@ -1,0 +1,75 @@
+/* Element defaults for both surfaces — imported by src/app.css AFTER tokens.css,
+ * so every token this file references is already defined.
+ *
+ * Everything lives inside ONE `@layer base` block. Tailwind v4 processes
+ * `@layer base` through its own layer machinery; bare element selectors outside it
+ * win or lose against preflight and the utilities unpredictably.
+ *
+ * Every COLOUR and every FONT value here is a var(--…) reference. A raw hex in this
+ * file is the same bug it would be in a component, and worse: this layer applies to
+ * BOTH themes, so a literal would freeze one theme's value into both. The 2px
+ * outline width and offset, and the 0.01ms / 1 / auto in the reduced-motion block,
+ * are the only literals — they are neither colour nor type, and no token defines
+ * them.
+ */
+
+@layer base {
+	/* The page ground, set once rather than re-declared per route. */
+	body {
+		background-color: var(--c-bg);
+		color: var(--c-ink);
+	}
+
+	/* Archivo for headings (docs/design-system.md section 4). `balance` keeps a
+	   two-line heading from leaving one orphaned word on the second line. */
+	h1,
+	h2,
+	h3,
+	h4 {
+		font-family: var(--font-display);
+		text-wrap: balance;
+	}
+
+	p {
+		text-wrap: pretty;
+	}
+
+	/* A visible focus ring on every interactive element. --c-ring derives from
+	   --c-accent: 5.21:1 on light --c-bg and 7.49:1 on dark --c-bg, both well above
+	   the 3:1 WCAG 1.4.11 asks of a focus indicator. NEVER suppress this with
+	   `outline: none` — not here and not in a component. Remove a focus ring only by
+	   replacing it. */
+	:focus-visible {
+		outline: 2px solid var(--c-ring);
+		outline-offset: 2px;
+	}
+
+	/* Controls inherit the page face instead of silently falling back to the
+	   browser's own. */
+	input,
+	select,
+	textarea,
+	button {
+		font-family: inherit;
+		font-size: inherit;
+	}
+
+	::selection {
+		background-color: var(--c-accent-soft);
+		color: var(--c-ink);
+	}
+
+	/* Honour a reduced-motion preference. Vestibular disorders make large or fast
+	   motion genuinely unpleasant, and this is a setting the user has already
+	   expressed at the OS level. */
+	@media (prefers-reduced-motion: reduce) {
+		*,
+		*::before,
+		*::after {
+			animation-duration: 0.01ms !important;
+			animation-iteration-count: 1 !important;
+			transition-duration: 0.01ms !important;
+			scroll-behavior: auto !important;
+		}
+	}
+}

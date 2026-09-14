@@ -136,6 +136,77 @@ One formatter, in `src/lib/server/money`, integer cents in and a string out (inv
 
 ---
 
+## 7b. Dashboard component rules
+
+The dashboard is the owner's surface: seated, mouse-driven, online only (spec 7). It shares the token set with the POS and diverges in scale — **Tailwind's default spacing and type scale throughout**. The POS touch tokens (`p-touch`, `min-h-touch-xl`, `touch-min`, `touch-lg`) and the POS chrome tokens (`--c-screen`, `--c-key`, `--c-key-line`, `--c-key-ink`) **MUST NOT appear on any dashboard screen**. These rules are implemented once, in `src/lib/components/ui/`; a screen composes those primitives rather than retyping class strings.
+
+**Page skeleton.** A dashboard page is a `PageHeader` — heading, optional one-line description, optional action area — and then content. Content width is capped by `--container-page` (utility `max-w-page`), so a page stops at a readable measure instead of stretching across a wide monitor.
+
+**Surface hierarchy.** `bg-bg` is the page ground. `bg-raise` is a card or panel. `bg-raise-2` is an inset region nested *inside* a card. The header bar is `bg-raise` with a `border-line` bottom edge.
+
+### Legal ink-on-surface pairs
+
+**Check this table before pairing an ink with a surface. Adding a new pair means measuring it.** Ratios are WCAG relative luminance computed from the hex values in `src/lib/styles/tokens.css`. Every rule is the **intersection of both themes**, so no screen has to be reasoned about twice.
+
+| Ink | Legal on | Light | Dark |
+|---|---|---|---|
+| `text-ink` | every surface | 13.63–17.33 | 10.83–14.72 |
+| `text-ink-2` | every surface | 5.91–7.51 | 6.15–8.35 |
+| `text-ink-3` | **`bg-raise` ONLY** | 5.13 | 4.87 |
+| `text-ok`, `text-danger` | `bg-bg` and `bg-raise` **only** | 5.47–6.65 | 4.65–5.68 |
+| the six `--c-st-*` | `bg-bg` and `bg-raise` | 5.14–6.65 | 6.23–10.60 |
+| `text-accent-ink` | `bg-accent` | 6.13 | 7.82 |
+
+**The twelve measured failures — never write these.** Six in each theme, and the reason the rules above are narrow.
+
+| Theme | Ink | Surface | Ratio |
+|---|---|---|---|
+| light | `text-ink-3` | `bg-bg` | **4.35** |
+| light | `text-ink-3` | `bg-bg-2` | **4.03** |
+| light | `text-ink-3` | `bg-accent-soft` | **4.29** |
+| light | `text-ink-3` | `bg-ok-bg` | **4.33** |
+| light | `text-ink-3` | `bg-warn-bg` | **4.38** |
+| light | `text-ink-3` | `bg-danger-bg` | **4.23** |
+| dark | `text-danger` | `bg-raise-2` | **4.06** |
+| dark | `text-ok` | `bg-raise-2` | **4.18** |
+| dark | `text-ink-3` | `bg-raise-2` | **4.25** |
+| dark | `text-danger` | `bg-accent-soft` | **4.19** |
+| dark | `text-ok` | `bg-accent-soft` | **4.31** |
+| dark | `text-ink-3` | `bg-accent-soft` | **4.39** |
+
+So: **`text-ink-3` is legal only on `bg-raise`** — use `text-ink-2` wherever `text-ink-3` would otherwise have sat on the page ground. **`text-ok` and `text-danger` are illegal on `bg-raise-2` and on `bg-accent-soft`.** The repair for a failing pair is always **which token is used**, never the token's value.
+
+**Control borders.** An interactive control — a text input, a select, the secondary button's outline — draws its boundary with `border-control-line` (`--c-control-line`, derived from `--c-ink-3`): **5.13:1** light and **4.87:1** dark, both above the **3:1** WCAG 1.4.11 asks of a UI component boundary. `border-line` measures **1.58:1** on `bg-raise` and is for **DECORATIVE** edges only — card outlines, dividers, the header rule. The two are separate because a form control whose only boundary is a 1.58:1 line is effectively unbounded, and that is a large part of why an unstyled dashboard reads as washed out.
+
+**Focus.** Every interactive element shows a `:focus-visible` ring: `2px` `outline` in `--c-ring`, with `2px` `outline-offset`. `--c-ring` derives from `--c-accent` and measures **5.21:1** on light `bg` and **7.49:1** on dark `bg`. **Never remove a focus ring without replacing it.**
+
+**Button variants.** Four, and no more.
+
+| Variant | Treatment | Use |
+|---|---|---|
+| `primary` | `bg-accent` / `text-accent-ink` (6.13 light, 7.82 dark) | **one per view** — the view's main action |
+| `secondary` | transparent ground, `border-control-line`, `text-ink` | everything else |
+| `ghost` | text only, `text-ink` | tertiary actions, navigation |
+| `danger` | `--c-danger` as ink and border | destructive actions; none exists on the dashboard yet |
+
+**A disabled control must SAY WHY.** That rule is §7's and applies here identically — a control disabled without a stated reason sits dead.
+
+**Form field anatomy.** In order: label above the control, then the control, then the hint, then the error. **The label's text IS the control's accessible name**, so it is the plain field name — no required asterisk, no suffix, no marker of any kind inside the `<label>` element. Mark required-ness with the `required` attribute on the control. Errors use `role="alert"`, and **at most one `role="alert"` region is visible per page at a time**.
+
+**Card.** `bg-raise`, `border-line`, `rounded-card`, `shadow-card`, generous internal padding (`p-6` on the default scale). **Cards do not nest inside cards** — an inset region uses `bg-raise-2` with `rounded-control`.
+
+**Empty and not-started states.** A glyph plus text, never colour alone. Reuse §3's glyph vocabulary rather than coining new marks; the dashboard's only status today is onboarding-step completion (`●` done, `○` not started).
+
+**Navigation.** The current page carries `aria-current="page"`. An unavailable destination is `aria-disabled="true"` with **NO link target** and a **visible reason** — never a hidden item, and never a dead link that 404s.
+
+**Typography.** `font-display` for headings, `font-sans` for body, `font-mono` for money, quantities, account codes, invoice numbers and IDs. Headings get `text-wrap: balance`. As §4 says: **a price set in the body face is a bug.**
+
+**What must NOT appear on a dashboard screen.** The POS touch tokens; the POS chrome tokens; an arbitrary Tailwind value (`bg-[#123456]`, `p-[57px]`); a raw hex; and **any money figure at all** for as long as `src/lib/server/money/` exports no formatter — check that directory before writing one, and if it holds only a `README.md`, a money figure here could only be hardcoded, which §6 and invariants 1 and 7 forbid.
+
+**Responsive.** Single column below Tailwind's `md`; the navigation collapses above the content. **Nothing scrolls horizontally at any width.**
+
+---
+
 ## 8. Receipts are a separate problem
 
 Thermal ESC/POS output is not a screen (spec 11). Fixed **32 or 48 characters** per line, no colour, no images, monospace only. Reprints are marked `COPY`; a voided SENT item prints a `VOID` ticket to the kitchen. None of the tokens above apply — plan receipt layout in characters, and preview it in `--font-mono` at the target width.
