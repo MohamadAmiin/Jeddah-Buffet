@@ -147,8 +147,8 @@
      IBM Plex Mono — ALL money, quantities, account codes, IDs, receipt previews.
      A price set in the body face is a bug: money always uses font-mono +
      tabular-nums so digits align down a column. */
-  --font-display: Archivo, system-ui, -apple-system, sans-serif;
-  --font-sans:    "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --font-display: "Archivo Variable", Archivo, system-ui, -apple-system, sans-serif;
+  --font-sans:    "IBM Plex Sans Variable", "IBM Plex Sans", system-ui, -apple-system, sans-serif;
   --font-mono:    "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
   --text-pos:   1.0625rem;  /* 17px — POS body, read standing at arm's length */
