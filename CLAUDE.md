@@ -48,6 +48,7 @@ src/
       audit/        audit log writer
       restaurants/  restaurant record, settings, and the onRestaurantCreated initializer list
     pos/            IndexedDB, sync queue, service worker, device invoice sequence, print-agent client
+    components/ui/  shared dashboard primitives — Button, Field, Card, PageHeader, Alert, StatusMark, ThemeToggle; they implement `docs/design-system.md` §7b
     styles/         tokens.css — THE design tokens; no colour, size or type literal lives anywhere else
   routes/
     login/          email + password sign-in — OUTSIDE the route groups: reachable without a session
@@ -60,7 +61,7 @@ src/
 
 Migrations live in `src/lib/server/db/migrations` (point `drizzle.config.ts` there), are COMMITTED, and are NEVER hand-edited once they have run — add a new one instead.
 
-House convention, not spec (spec 30/32 say only "modular monolith"): `lib/server/**` MUST NOT be imported by client-side code or by `lib/pos/`; `money/` is imported by everything and imports no sibling; `orders/` calls `accounting/`, `inventory/`, `permissions/`, `audit/`, and none of them call back. `restaurants/` is called by routes and by `orders/`-style modules, and calls only `audit/`.
+House convention, not spec (spec 30/32 say only "modular monolith"): `lib/server/**` MUST NOT be imported by client-side code or by `lib/pos/`; `money/` is imported by everything and imports no sibling; `orders/` calls `accounting/`, `inventory/`, `permissions/`, `audit/`, and none of them call back. `restaurants/` is called by routes and by `orders/`-style modules, and calls only `audit/`. `lib/components/**` takes its data as props and imports nothing from `lib/server`; `src/lib/components/components.test.ts` enforces it.
 
 ## Design & UI
 
@@ -70,6 +71,9 @@ Styling is **Tailwind CSS v4** (a user decision, recorded in `tasks/project-init
 - **The POS shell stays dark in BOTH themes** (`--screen`, `--key`, `--key-ink`). It is a device surface, not page chrome. Do not theme it.
 - **Colour NEVER carries meaning alone** — pair every status with its glyph. Item `NEW ◇` / `SENT ▲` / `VOIDED ✕` (struck through, with reason + approver); order `OPEN ○` / `BILLED ◐` / `PAID ●` / `VOIDED ✕` / `REFUNDED ↩`; table free `○` / occupied `●` + open amount; sync online `●` / offline `◆` + unsynced count. (WCAG 1.4.1; ~1 in 12 men has red-green CVD.)
 - **Money renders through the money module's formatter**, in `--font-mono` with `tabular-nums`, right-aligned, negatives with a leading `−` AND `--danger`. Each line shows the price and tax rate STORED on it. The UI never does money arithmetic and never rounds (invariants 1, 7).
+- **The dashboard's layout grammar is `docs/design-system.md` §7b**, implemented by `src/lib/components/ui/`: a screen composes primitives rather than retyping class strings.
+- **Legal ink-on-surface pairs — both themes, no per-theme reasoning.** `text-ink-3` is legal ONLY on `bg-raise` (5.13:1 light, 4.87:1 dark) — use `text-ink-2` on every other surface. `text-ok` and `text-danger` are never used on `bg-raise-2` (4.18:1, 4.06:1 dark) or `bg-accent-soft` (4.31:1, 4.19:1 dark). Interactive control borders use `border-control-line`; `border-line` is decorative only, at 1.58:1 on `bg-raise`.
+- **The three typefaces are self-hosted** from pinned `@fontsource` packages. The variable packages declare the family names `Archivo Variable` and `IBM Plex Sans Variable`, so the `--font-*` stacks must keep naming what the packages declare — `src/lib/styles/fonts.test.ts` asserts it. A stack naming plain `Archivo` renders in `system-ui` with every check, lint, test and e2e spec still green.
 - **Touch targets** on the POS: floor `touch-min` 56px, standard `touch` 64px, keys `touch-lg` 72px, Pay / Send-to-kitchen `touch-xl` 96px (`p-touch`, `min-h-touch-xl`). Dashboard uses Tailwind's default scale. Apple 44pt and Material 48dp assume a seated user holding the device — too small for a counter.
 - **The guest check is permanent**; tabs and the item grid swap around it. Modals are for reason codes, owner approval and errors only — never ordinary ordering.
 - **Offline state is permanent chrome** carrying the unsynced count (spec 6), never a toast. A control disabled by a non-empty queue must say why rather than sit dead. Card and mobile tenders visibly disable offline — they never fail after the tap (invariant 5).
