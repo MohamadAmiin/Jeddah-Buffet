@@ -48,57 +48,106 @@
 			detail: 'Opening cash, sales, count, reconciliation, end-of-day report.'
 		}
 	]);
+
+	// COUNTED, never written down. "1 of 6" typed as a string is a second source of
+	// truth that goes stale the first time a step is added or completed.
+	const doneCount = $derived(steps.filter((step) => step.done).length);
 </script>
 
 <svelte:head>
 	<title>Overview · matcami</title>
 </svelte:head>
 
-<!-- level={2}: the (dashboard) layout's h1 is the restaurant name, and promoting
-     this to a second h1 would break the document outline. -->
+<!-- The page band: a raised strip separated from the working column by one
+     decorative hairline. h2, not h1 — the layout's h1 is the restaurant name, and
+     promoting this would break the document outline on every dashboard screen. -->
 <PageHeader
-	level={2}
-	title="Getting set up"
-	description="Work down this list in order. Finish the settings, then add your employees, then build the menu."
+	title="Overview"
+	description="Set the restaurant up, then keep it running. This surface is online only — the POS keeps selling when the connection drops, and this one does not pretend to."
 />
 
-<!-- ONE Card holding the rows. Cards do not nest inside cards, so each step is a
-     plain <li> with a divider, not a second Card. The <ol> stays so the sequence is
-     exposed as an ordered list. Every text-ink-3 below sits on this card's bg-raise
-     ground, where it measures 5.13:1 light and 4.87:1 dark — on the bg-bg page
-     ground it would be 4.35:1 and illegal. -->
-<Card class="mt-4">
-	<ol class="divide-line flex flex-col divide-y">
-		{#each steps as step (step.label)}
-			<li class="flex items-start gap-3 py-4 first:pt-0 last:pb-0">
-				<!--
-					A GLYPH as well as a colour. Colour never carries meaning alone
-					(WCAG 1.4.1; roughly one man in twelve has red-green CVD). StatusMark
-					is passed NO label: the screen-reader string and the visible badge
-					below are owned by this page and are asserted by the e2e journey.
-				-->
-				<StatusMark status={step.done ? 'done' : 'not-started'} />
-				<div class="min-w-0">
-					<p class="text-ink text-sm font-medium">
-						{step.label}
-						<span class="sr-only">{step.done ? ' — done' : ' — not started'}</span>
-						{#if !step.done}<span class="text-ink-3 ml-2 text-xs font-normal">not started</span
-							>{/if}
-					</p>
-					<p class="text-ink-2 mt-0.5 text-sm">{step.detail}</p>
-					{#if step.href}
-						<a
-							href={resolve(step.href as '/settings')}
-							class="text-accent mt-1 inline-block text-sm underline"
+<div class="max-w-measure flex flex-col gap-10 px-4 pt-8 pb-16 lg:px-7">
+	<section class="flex flex-col gap-5">
+		<div class="flex flex-col gap-2">
+			<p class="text-eyebrow text-ink-3 uppercase">Onboarding</p>
+			<h3 class="text-title">Getting set up</h3>
+			<p class="text-body text-ink-2">
+				Work down this list in order. Finish the settings, then add your employees, then build the
+				menu. Nothing below is faked: only the first step can be checked, because only its feature
+				exists.
+			</p>
+		</div>
+
+		<!-- PROGRESS IN WORDS FIRST. The count is the signal; the bar repeats it for
+		     anyone reading the shape rather than the sentence, and is aria-hidden so a
+		     screen reader hears the count once. Colour never carries meaning alone. -->
+		<div class="flex flex-wrap items-center gap-3">
+			<span aria-hidden="true" class="flex gap-1">
+				{#each steps as step (step.label)}
+					<span class={`h-1.5 w-9 rounded-full ${step.done ? 'bg-ok' : 'bg-line'}`}></span>
+				{/each}
+			</span>
+			<span class="text-caption text-ink-2 font-mono tabular-nums">
+				{doneCount} of {steps.length} done
+			</span>
+		</div>
+
+		<!-- ONE Card holding the rows. Cards do not nest inside cards, so each step is
+		     a plain <li> with a divider, not a second Card. The <ol> stays so the
+		     sequence is exposed as an ordered list. -->
+		<Card>
+			<ol class="divide-line-soft flex flex-col divide-y">
+				{#each steps as step (step.label)}
+					<li class="flex items-start gap-3.5 py-4 first:pt-0 last:pb-0">
+						<!--
+							A GLYPH as well as a colour. Colour never carries meaning alone
+							(WCAG 1.4.1; roughly one man in twelve has red-green CVD). StatusMark
+							is passed NO label: the screen-reader string and the visible badge
+							below are owned by this page and are asserted by the e2e journey. The
+							chip around it is this page's layout, not StatusMark's business.
+						-->
+						<span
+							class={`grid size-7 flex-none place-items-center rounded-full ${step.done ? 'bg-ok-bg' : 'bg-bg-2'}`}
 						>
-							Open settings
-						</a>
-					{/if}
-				</div>
-			</li>
-		{/each}
-	</ol>
-</Card>
+							<StatusMark status={step.done ? 'done' : 'not-started'} />
+						</span>
+						<div class="flex min-w-0 flex-col gap-0.5">
+							<div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+								<!-- font-sans overrides the base layer's display face: a six-row
+								     checklist reads as a list of things to do, not as six headings. -->
+								<h4 class="text-section text-ink font-sans">
+									{step.label}<span class="sr-only"> — {step.done ? 'done' : 'not started'}</span>
+								</h4>
+								<!--
+									aria-hidden, and it must stay that way: the heading's sr-only span
+									already carries the state, so an announced badge would say it twice.
+									The DOM text is the lowercase literal `not started` — e2e/auth.spec.ts
+									asserts getByText('not started', { exact: true }) resolves to exactly
+									five elements. `uppercase` changes the rendering only; a capitalised
+									string in the markup would break the count.
+								-->
+								<span
+									aria-hidden="true"
+									class={`text-eyebrow font-mono whitespace-nowrap uppercase ${step.done ? 'text-ok' : 'text-ink-2'}`}
+									>{step.done ? 'done' : 'not started'}</span
+								>
+							</div>
+							<p class="text-caption text-ink-2">{step.detail}</p>
+							{#if step.href}
+								<a
+									href={resolve(step.href as '/settings')}
+									class="text-caption text-accent mt-1 self-start font-medium underline underline-offset-2"
+								>
+									Open settings
+								</a>
+							{/if}
+						</div>
+					</li>
+				{/each}
+			</ol>
+		</Card>
+	</section>
+</div>
 
 <!--
 	NO MONEY FIGURES AT ALL — not revenue, not today's takings, not a zero. The

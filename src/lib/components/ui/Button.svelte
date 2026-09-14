@@ -33,7 +33,18 @@
 	// appear or never leave when `disabled` changed.
 	const describedBy = $derived(disabled && disabledReason ? reasonId : undefined);
 
-	const base = 'rounded-control px-3 py-2 text-sm font-medium disabled:opacity-60';
+	// A disabled control takes its OWN token pair — NEVER `opacity`. opacity
+	// composites the whole element, fill AND ink together, onto whatever is behind
+	// it, so it silently defeats every pair tokens.css audits: this button measured
+	// 2.70:1 label-on-fill in light and 3.69:1 in dark under disabled:opacity-60,
+	// and its fill sat at 2.70:1 against the page, below WCAG 1.4.11's 3:1. The
+	// pair below is 5.91:1 light / 6.15:1 dark and is covered by the contrast
+	// census. `disabled:` wins over the variant classes because it is declared
+	// after them in the string.
+	const base =
+		'rounded-control px-3 py-2 text-sm font-medium ' +
+		'disabled:cursor-not-allowed disabled:border disabled:border-control-line ' +
+		'disabled:bg-disabled-bg disabled:text-disabled-ink';
 
 	// primary  6.13:1 light / 7.82:1 dark
 	// secondary/ghost/danger draw on the card or page ground, where text-ink and
