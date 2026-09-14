@@ -2,6 +2,7 @@ import { error, redirect, type Handle } from '@sveltejs/kit';
 import { sequence } from '@sveltejs/kit/hooks';
 import { db } from '$lib/server/db/client';
 import { PUBLIC_ROUTE_IDS } from '$lib/public-routes';
+import { THEME_COOKIE, parseTheme, themeAttribute } from '$lib/theme';
 import {
 	SESSION_COOKIE,
 	validateSessionToken,
@@ -18,6 +19,31 @@ import {
 // this plan already puts /logout at top level, with spec 7's device registration
 // to come beside it.
 export { PUBLIC_ROUTE_IDS } from '$lib/public-routes';
+
+// The theme preference, read from a cookie and stamped on <html> BEFORE the first
+// byte reaches the browser — which is the whole reason a cookie was chosen over
+// localStorage: there is no flash of the wrong theme.
+//
+// It does NOT read event.locals: it runs before the session is resolved, and a
+// theme is not a privilege. It adds no route, no form action, no PUBLIC_ROUTE_IDS
+// entry and no permission key — the cookie is written by client JavaScript
+// (ThemeToggle) and only READ here.
+//
+// The placeholder is ALWAYS replaced, including in the system state where it is
+// replaced with an empty string. Branch on the cookie instead and the literal text
+// %matcami.theme% ships inside the <html> tag of every page — which is why
+// themeAttribute takes Theme | null and returns a string in all cases.
+//
+// String.replace with a string argument replaces only the FIRST occurrence. That is
+// correct here and src/lib/theme.test.ts pins the placeholder at exactly one. Under
+// streaming, transformPageChunk runs per chunk; the placeholder sits in the first
+// chunk, so later chunks are a harmless no-op.
+export const handleTheme: Handle = async ({ event, resolve }) => {
+	const theme = parseTheme(event.cookies.get(THEME_COOKIE));
+	return resolve(event, {
+		transformPageChunk: ({ html }) => html.replace('%matcami.theme%', themeAttribute(theme))
+	});
+};
 
 /** Route ids under this prefix additionally require the owner role. */
 const DASHBOARD_PREFIX = '/(dashboard)';
@@ -120,4 +146,4 @@ export const handleGuard: Handle = async ({ event, resolve }) => {
 // returns the socket peer unless ADDRESS_HEADER is set, so behind Nginx every
 // audit row and every throttle bucket sees 127.0.0.1 until T-26's variables are
 // configured. That degrades SILENTLY, which is why it is written down here.
-export const handle = sequence(handleSession, handleGuard);
+export const handle = sequence(handleTheme, handleSession, handleGuard);

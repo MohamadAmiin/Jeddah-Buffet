@@ -37,6 +37,14 @@
   --c-warn:#855a12;   --c-warn-bg:#f7ecd8;
   --c-danger:#a13a2e; --c-danger-bg:#f9e5e2;
 
+  /* Derived, and declared ONCE — in the bare :root only. Do NOT repeat these in
+     either dark block: they reference tokens the dark blocks already redefine,
+     and custom-property substitution resolves at USE time, so they follow the
+     theme automatically. The header rule above ("every --c-* MUST be declared in
+     the bare :root") means declared there at all — not declared in every block. */
+  --c-ring: var(--c-accent);
+  --c-control-line: var(--c-ink-3);
+
   /* domain status. Colour is NEVER the only carrier — pair each with its glyph:
      item  NEW ◇ · SENT ▲ · VOIDED ✕ (struck through)
      order OPEN ○ · BILLED ◐ · PAID ● · VOIDED ✕ · REFUNDED ↩
@@ -111,6 +119,9 @@
   --color-accent-ink:  var(--c-accent-ink);
   --color-accent-soft: var(--c-accent-soft);
 
+  --color-ring:         var(--c-ring);
+  --color-control-line: var(--c-control-line);
+
   --color-ok:        var(--c-ok);      --color-ok-bg:     var(--c-ok-bg);
   --color-warn:      var(--c-warn);    --color-warn-bg:   var(--c-warn-bg);
   --color-danger:    var(--c-danger);  --color-danger-bg: var(--c-danger-bg);
@@ -136,12 +147,18 @@
      IBM Plex Mono — ALL money, quantities, account codes, IDs, receipt previews.
      A price set in the body face is a bug: money always uses font-mono +
      tabular-nums so digits align down a column. */
-  --font-display: Archivo, system-ui, -apple-system, sans-serif;
-  --font-sans:    "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --font-display: "Archivo Variable", Archivo, system-ui, -apple-system, sans-serif;
+  --font-sans:    "IBM Plex Sans Variable", "IBM Plex Sans", system-ui, -apple-system, sans-serif;
   --font-mono:    "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
   --text-pos:   1.0625rem;  /* 17px — POS body, read standing at arm's length */
   --text-total: 2.5rem;     /* 40px — the order total, the most-read number */
+
+  /* Dashboard scale. Static, not themeable — plain @theme is correct here.
+     Yields rounded-card, rounded-control and max-w-page. */
+  --radius-card:    0.75rem;
+  --radius-control: 0.5rem;
+  --container-page: 72rem;
 
   /* Touch targets. POS buttons are pressed with a thumb, on a screen someone is
      standing at. A named token keeps that honest instead of scattering magic
