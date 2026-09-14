@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { page } from '$app/state';
+	import { Alert, Button, Card, Field, PageHeader } from '$lib/components/ui';
 
 	let { form } = $props();
 	let submitting = $state(false);
@@ -13,20 +14,23 @@
 	<title>Sign in · matcami</title>
 </svelte:head>
 
-<main class="bg-bg text-ink flex min-h-screen items-center justify-center p-6">
-	<div class="bg-raise border-line shadow-card w-full max-w-sm rounded-lg border p-6">
-		<h1 class="font-display text-2xl font-bold">Sign in</h1>
-		<p class="text-ink-2 mt-1 text-sm">Management dashboard</p>
+<!-- No bg-bg/text-ink here: the element base layer (src/lib/styles/base.css) sets
+     the page ground and ink on `body`. The full-height centring stays. -->
+<main class="flex min-h-screen items-center justify-center p-6">
+	<Card class="w-full max-w-sm">
+		<PageHeader level={1} title="Sign in" description="Management dashboard" />
 
 		{#if form?.message}
 			<!-- role="alert" so a screen reader announces the failure without the
-			     user having to go looking for it. -->
-			<p role="alert" class="border-line bg-bg-2 text-danger mt-4 rounded border px-3 py-2 text-sm">
-				{form.message}
-				{#if form.retryAfterMs}
-					Try again in {Math.ceil(form.retryAfterMs / 1000)} seconds.
-				{/if}
-			</p>
+			     user having to go looking for it. Alert carries that role. -->
+			<div class="mt-4">
+				<Alert tone="danger">
+					{form.message}
+					{#if form.retryAfterMs}
+						Try again in {Math.ceil(form.retryAfterMs / 1000)} seconds.
+					{/if}
+				</Alert>
+			</div>
 		{/if}
 
 		<form
@@ -42,38 +46,28 @@
 		>
 			<input type="hidden" name="next" value={next} />
 
-			<div class="flex flex-col gap-1">
-				<label for="email" class="text-ink-2 text-sm font-medium">Email</label>
-				<input
-					id="email"
-					name="email"
-					type="email"
-					autocomplete="username"
-					required
-					value={form?.email ?? ''}
-					class="border-line bg-bg text-ink rounded border px-3 py-2"
-				/>
-			</div>
+			<Field
+				id="email"
+				name="email"
+				type="email"
+				label="Email"
+				autocomplete="username"
+				required
+				value={form?.email ?? ''}
+			/>
 
-			<div class="flex flex-col gap-1">
-				<label for="password" class="text-ink-2 text-sm font-medium">Password</label>
-				<input
-					id="password"
-					name="password"
-					type="password"
-					autocomplete="current-password"
-					required
-					class="border-line bg-bg text-ink rounded border px-3 py-2"
-				/>
-			</div>
+			<Field
+				id="password"
+				name="password"
+				type="password"
+				label="Password"
+				autocomplete="current-password"
+				required
+			/>
 
-			<button
-				type="submit"
-				disabled={submitting}
-				class="bg-accent text-accent-ink rounded px-3 py-2 font-medium disabled:opacity-60"
-			>
+			<Button type="submit" variant="primary" disabled={submitting}>
 				{submitting ? 'Signing in…' : 'Sign in'}
-			</button>
+			</Button>
 		</form>
-	</div>
+	</Card>
 </main>
