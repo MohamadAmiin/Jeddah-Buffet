@@ -18,6 +18,7 @@
 	import { PIN_MAX_DIGITS, PIN_MIN_DIGITS } from '$lib/pin';
 	import { createIdleWatch, type IdleWatch } from '$lib/pos/idle';
 	import {
+		POS_PIN_FAILED,
 		POS_PIN_SUCCESS,
 		type CachedEmployee,
 		readCachedEmployees,
@@ -90,33 +91,50 @@
 	}
 
 	// The offline sign-in: the SAME isomorphic verifyPin the server calls, against
-	// the hash cached on this device, and on success a local record under THIS
-	// attempt's clientOpId, synced to the audit log later (invariant 10). A retry
-	// of the same attempt is a no-op in the store, never a second record.
+	// the hash cached on this device. EVERY attempt against a cached employee with a
+	// PIN is recorded locally under THIS attempt's clientOpId — a success AND a
+	// wrong PIN, because invariant 10 names failed PINs and the only offline
+	// exception it grants is timing (recorded locally, synced later), never leaving
+	// the record out. The server writes pos.pin.failed for every wrong PIN online;
+	// offline, this is that row. A retry of the same attempt is a no-op in the store.
 	async function signInOffline(id: string, pin: string, clientOpId: string) {
-		let verified = false;
 		let cached: CachedEmployee | undefined;
+		let verified = false;
 		try {
-			verified = await verifyCachedPin(id, pin);
-			if (verified) cached = (await readCachedEmployees()).find((e) => e.id === id);
+			cached = (await readCachedEmployees()).find((e) => e.id === id);
+			if (cached && cached.pinPhc !== null) verified = await verifyCachedPin(id, pin);
 		} catch {
 			message = 'No connection, and this device cannot check a PIN offline.';
 			return;
 		}
-		if (!verified || !cached) {
+		if (!cached || cached.pinPhc === null) {
+			// No employee to attempt against — nothing was checked, so nothing to record.
 			message = 'That PIN is not right. Try again.';
 			return;
 		}
+
+		const outcome = verified ? 'success' : 'failed';
+		let recorded = true;
 		try {
 			await recordOfflineLogin({
 				clientOpId,
 				employeeId: id,
-				event: POS_PIN_SUCCESS,
+				event: verified ? POS_PIN_SUCCESS : POS_PIN_FAILED,
 				occurredAt: new Date().toISOString(),
-				outcome: 'success',
+				outcome,
 				synced: false
 			});
 		} catch {
+			recorded = false;
+		}
+
+		if (!verified) {
+			message = recorded
+				? 'That PIN is not right. Try again.'
+				: 'That PIN is not right, and this device could not record the attempt.';
+			return;
+		}
+		if (!recorded) {
 			// An offline sign-in that cannot be recorded does not happen: invariant 10
 			// needs the record, and there is nowhere else to keep it.
 			message = 'No connection, and this device could not record the sign-in.';
