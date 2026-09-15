@@ -7,11 +7,12 @@
 	// carries each employee's PIN hash (pinPhc), deliberately — spec 6's offline
 	// employee switching needs it cached on this device. This screen NEVER renders
 	// it, never puts it in the DOM and never logs the response: it keeps only
-	// whether a PIN is set, and the one other place the hash may go is the
-	// IndexedDB store T-28 adds.
+	// whether a PIN is set, and the one other place the hash may go is the device's
+	// IndexedDB store (src/lib/pos/store.ts).
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { cacheEmployees, cacheSettings, readCachedEmployees } from '$lib/pos/store';
 
 	type Role = 'owner' | 'cashier' | 'waiter';
 	type DirectoryEntry = {
@@ -30,8 +31,19 @@
 		waiter: 'Waiter'
 	};
 
-	let status = $state<'loading' | 'ready' | 'not-registered' | 'offline' | 'error'>('loading');
+	let status = $state<'loading' | 'ready' | 'cached' | 'not-registered' | 'offline' | 'error'>(
+		'loading'
+	);
 	let employees = $state<Choice[]>([]);
+	let cacheWarning = $state(false);
+
+	const toChoices = (entries: DirectoryEntry[]): Choice[] =>
+		entries.map((entry) => ({
+			id: entry.id,
+			displayName: entry.displayName,
+			role: entry.role,
+			hasPin: entry.pinPhc !== null
+		}));
 
 	async function loadDirectory() {
 		status = 'loading';
@@ -39,10 +51,21 @@
 		try {
 			response = await fetch('/api/pos/employees');
 		} catch {
-			// No network. T-28 replaces this branch with a read of the employee list
-			// cached on this device, falling back to this message only when the cache
-			// is genuinely empty.
-			status = 'offline';
+			// No network: the list cached on this device, if there is one. A cached list
+			// is marked as such on screen — it must not look like a live one — and the
+			// "no cached list" message is shown only when the cache is genuinely empty.
+			let cached: DirectoryEntry[] = [];
+			try {
+				cached = await readCachedEmployees();
+			} catch {
+				// No readable cache (a private window, storage refused): same as empty.
+			}
+			if (cached.length > 0) {
+				employees = toChoices(cached);
+				status = 'cached';
+			} else {
+				status = 'offline';
+			}
 			return;
 		}
 		// 403 is the ONE device-related status the endpoint returns, and it covers all
@@ -56,14 +79,25 @@
 			status = 'error';
 			return;
 		}
-		const body = (await response.json()) as { employees: DirectoryEntry[] };
-		employees = body.employees.map((entry) => ({
-			id: entry.id,
-			displayName: entry.displayName,
-			role: entry.role,
-			hasPin: entry.pinPhc !== null
-		}));
+		const body = (await response.json()) as {
+			employees: DirectoryEntry[];
+			settings: { posIdleLockSeconds: number | null };
+		};
+		employees = toChoices(body.employees);
 		status = 'ready';
+		// Write BOTH halves of this one response through to the device, so the till can
+		// switch employees offline (spec 6) and the PIN screen can arm its idle watch.
+		// The rows go in exactly as they arrived, and the idle lock is cached AS IT
+		// ARRIVED — null stays null (no default exists; CLAUDE.md, 2026-09-15).
+		cacheWarning = false;
+		try {
+			await cacheEmployees(body.employees);
+			await cacheSettings([{ key: 'posIdleLockSeconds', value: body.settings.posIdleLockSeconds }]);
+		} catch {
+			// The live list still works; what fails is starting offline later, and a
+			// till that silently forgets is worse than one that says so.
+			cacheWarning = true;
+		}
 	}
 
 	onMount(() => {
@@ -139,6 +173,19 @@
 			</button>
 		</div>
 	{:else}
+		{#if status === 'cached'}
+			<!-- A cached list must not look like a live one. -->
+			<p class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">
+				<span aria-hidden="true" class="font-mono">◆</span>
+				No connection — this is the staff list saved on this device.
+			</p>
+		{/if}
+		{#if cacheWarning}
+			<p role="alert" class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">
+				<span aria-hidden="true" class="font-mono">◆</span>
+				This device could not save the staff list, so it cannot sign anyone in offline.
+			</p>
+		{/if}
 		{#if employees.length === 0}
 			<p class="text-ink-2">
 				No active staff yet. The owner adds staff on the dashboard’s Employees page.

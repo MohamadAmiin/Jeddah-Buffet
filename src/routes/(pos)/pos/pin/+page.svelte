@@ -16,7 +16,15 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { PIN_MAX_DIGITS, PIN_MIN_DIGITS } from '$lib/pin';
-	import { createIdleWatch } from '$lib/pos/idle';
+	import { createIdleWatch, type IdleWatch } from '$lib/pos/idle';
+	import {
+		POS_PIN_SUCCESS,
+		type CachedEmployee,
+		readCachedEmployees,
+		readCachedIdleSeconds,
+		recordOfflineLogin,
+		verifyCachedPin
+	} from '$lib/pos/store';
 
 	// An employee id is not a secret — it is already on the employee-select list.
 	const employeeId = $derived(page.url.searchParams.get('employee'));
@@ -41,11 +49,12 @@
 	});
 
 	// THE IDLE TIMEOUT IS THE RESTAURANT SETTING pos_idle_lock_seconds, never a
-	// number written here. It reaches the till through GET /api/pos/employees and
-	// the device's IndexedDB cache — T-28 replaces this `null` with
-	// readCachedIdleSeconds(). Until then, and whenever the owner has set no value,
-	// `null` is the watch's defined INERT case, and the screen says so.
-	const idleSeconds: number | null = null;
+	// number written here. It reaches the till through GET /api/pos/employees, which
+	// the employee-select screen caches in IndexedDB, and is read back ONCE after
+	// mount. `null` — the owner has set no value, or nothing is cached yet — is the
+	// watch's defined INERT case, and the screen says so.
+	let idleSeconds = $state<number | null>(null);
+	let idleRead = $state(false);
 
 	function stopTicker() {
 		if (ticker !== undefined) clearInterval(ticker);
@@ -78,6 +87,42 @@
 
 	function clear() {
 		digits = '';
+	}
+
+	// The offline sign-in: the SAME isomorphic verifyPin the server calls, against
+	// the hash cached on this device, and on success a local record under THIS
+	// attempt's clientOpId, synced to the audit log later (invariant 10). A retry
+	// of the same attempt is a no-op in the store, never a second record.
+	async function signInOffline(id: string, pin: string, clientOpId: string) {
+		let verified = false;
+		let cached: CachedEmployee | undefined;
+		try {
+			verified = await verifyCachedPin(id, pin);
+			if (verified) cached = (await readCachedEmployees()).find((e) => e.id === id);
+		} catch {
+			message = 'No connection, and this device cannot check a PIN offline.';
+			return;
+		}
+		if (!verified || !cached) {
+			message = 'That PIN is not right. Try again.';
+			return;
+		}
+		try {
+			await recordOfflineLogin({
+				clientOpId,
+				employeeId: id,
+				event: POS_PIN_SUCCESS,
+				occurredAt: new Date().toISOString(),
+				outcome: 'success',
+				synced: false
+			});
+		} catch {
+			// An offline sign-in that cannot be recorded does not happen: invariant 10
+			// needs the record, and there is nowhere else to keep it.
+			message = 'No connection, and this device could not record the sign-in.';
+			return;
+		}
+		signedIn = { displayName: cached.displayName, role: cached.role };
 	}
 
 	async function submit() {
@@ -113,9 +158,12 @@
 			}
 
 			if (response === null) {
-				// T-28 turns this branch into the offline fallback against the PIN hash
-				// cached on this device.
-				message = 'No connection. Check the network, then try again.';
+				// NO NETWORK — both tries threw, so no server has answered this attempt.
+				// Only now may the PIN hash cached on this device decide (spec 6). A
+				// server ANSWER never reaches this branch: re-checking a 401 or a 423
+				// against the cache would be an unlimited-guesses bypass of the server's
+				// five-attempts lockout.
+				await signInOffline(employeeId, digits, clientOpId);
 				return;
 			}
 
@@ -155,21 +203,37 @@
 			return;
 		}
 
-		const watch = createIdleWatch({
-			seconds: idleSeconds,
-			onIdle: () => {
-				digits = '';
-				void goto(resolve('/pos'));
+		// Read the cached idle lock once, then arm the watch with whatever came back,
+		// null included — null is the watch's inert case, not an error to retry.
+		let watch: IdleWatch | undefined;
+		let disposed = false;
+		void (async () => {
+			let seconds: number | null = null;
+			try {
+				seconds = await readCachedIdleSeconds();
+			} catch {
+				// No readable cache: the same inert null, and the screen says so.
 			}
-		});
-		const poke = () => watch.poke();
+			if (disposed) return;
+			idleSeconds = seconds;
+			idleRead = true;
+			watch = createIdleWatch({
+				seconds,
+				onIdle: () => {
+					digits = '';
+					void goto(resolve('/pos'));
+				}
+			});
+		})();
+		const poke = () => watch?.poke();
 		addEventListener('pointerdown', poke);
 		addEventListener('keydown', poke);
 
 		return () => {
+			disposed = true;
 			removeEventListener('pointerdown', poke);
 			removeEventListener('keydown', poke);
-			watch.stop();
+			watch?.stop();
 			digits = '';
 		};
 	});
@@ -283,7 +347,7 @@
 			{pending ? 'Checking…' : 'Sign in'}
 		</button>
 
-		{#if idleSeconds === null}
+		{#if idleRead && idleSeconds === null}
 			<p class="text-ink-2">Automatic return to employee select is not configured yet.</p>
 		{/if}
 	{:else}
