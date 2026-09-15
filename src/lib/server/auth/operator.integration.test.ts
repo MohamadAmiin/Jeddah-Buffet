@@ -25,7 +25,6 @@ vi.mock('../audit', async (importOriginal) => {
 });
 
 const db = testDb();
-const TOKEN = 'a-one-time-setup-token';
 const OLD = 'the original password';
 const NEW = 'the replacement password';
 
@@ -46,16 +45,9 @@ async function makeRestaurant(name: string, email: string) {
 			timeZone: 'Africa/Mogadishu',
 			ownerDisplayName: 'The Owner',
 			email,
-			password: OLD,
-			setupToken: TOKEN
+			password: OLD
 		},
-		{
-			ip: '203.0.113.1',
-			userAgent: 'test',
-			expectedSetupToken: TOKEN,
-			allowAdditionalRestaurant: true,
-			bypassSetupToken: true
-		}
+		{ mode: 'operator', ip: '203.0.113.1', userAgent: 'test' }
 	);
 	if (!result.ok) throw new Error(`setup failed: ${result.reason}`);
 	return result;

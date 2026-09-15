@@ -65,9 +65,20 @@ describe('env.ts production assertions', () => {
 		expect(mod.ORIGIN).toBe('https://pos.example.com');
 	});
 
-	it('warns — but does not throw — when ADDRESS_HEADER is unset in production', async () => {
+	// Public sign-up's per-address cap and throttle are only as good as the address.
+	// Behind a proxy with ADDRESS_HEADER unset, every visitor is 127.0.0.1: one bot's
+	// three sign-ups would close sign-up for the whole internet for a day.
+	it('refuses to start in production without ADDRESS_HEADER, naming it', async () => {
 		process.env.NODE_ENV = 'production';
 		process.env.ORIGIN = 'https://pos.example.com';
+		delete process.env.ADDRESS_HEADER;
+
+		await expect(loadEnv()).rejects.toThrow(/ADDRESS_HEADER/);
+	});
+
+	it('only warns about ADDRESS_HEADER on a loopback ORIGIN (pnpm preview, the e2e journey)', async () => {
+		process.env.NODE_ENV = 'production';
+		process.env.ORIGIN = 'http://localhost:4173';
 		delete process.env.ADDRESS_HEADER;
 
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -90,12 +101,34 @@ describe('env.ts production assertions', () => {
 
 		await expect(loadEnv()).rejects.toThrow(/DATABASE_URL/);
 	});
+});
 
-	it('treats SETUP_TOKEN as optional', async () => {
+describe('SIGNUP, the operator switch for public sign-up', () => {
+	it('is open when unset', async () => {
 		process.env.NODE_ENV = 'development';
-		delete process.env.SETUP_TOKEN;
+		delete process.env.SIGNUP;
 
-		const mod = await loadEnv();
-		expect(mod.SETUP_TOKEN).toBeNull();
+		expect((await loadEnv()).SIGNUP_OPEN).toBe(true);
+	});
+
+	it('stays open with SIGNUP=open', async () => {
+		process.env.NODE_ENV = 'development';
+		process.env.SIGNUP = 'open';
+
+		expect((await loadEnv()).SIGNUP_OPEN).toBe(true);
+	});
+
+	it('closes with SIGNUP=closed, in any letter case and with stray spaces', async () => {
+		process.env.NODE_ENV = 'development';
+		process.env.SIGNUP = ' Closed ';
+
+		expect((await loadEnv()).SIGNUP_OPEN).toBe(false);
+	});
+
+	it('refuses to start on any other value, naming the variable', async () => {
+		process.env.NODE_ENV = 'development';
+		process.env.SIGNUP = 'off';
+
+		await expect(loadEnv()).rejects.toThrow(/SIGNUP/);
 	});
 });

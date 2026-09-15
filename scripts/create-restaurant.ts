@@ -1,19 +1,17 @@
 #!/usr/bin/env node
 //
-// Create an ADDITIONAL restaurant and its owner.
+// Create a restaurant and its owner from the server.
 //
 //   pnpm restaurant:create
 //
-// This is the ONLY way to add a second restaurant. There is deliberately no
-// environment variable that re-opens /register: a flag that re-exposes an
-// unauthenticated account-creating endpoint is one forgotten variable away from
-// public signup with none of the guards public signup would need.
+// Anyone can sign up at /register (public sign-up, decided 2026-09-15). This is
+// the OPERATOR's way in: it works while SIGNUP=closed, and it is not subject to
+// the public page's per-address throttle or its 3-per-day cap, because the caller
+// already holds the database credentials.
 //
-// It calls the SAME registerRestaurant the web route calls, so the restaurant,
-// its settings row, its owner and its audit rows are created by one code path
-// with one set of rules. It bypasses only the SETUP-TOKEN gate and the first-run
-// gate — never the advisory lock, never the uniqueness checks — because the
-// caller already holds the database credentials and a token would prove nothing.
+// It calls the SAME registerRestaurant the web route calls, in 'operator' mode, so
+// the restaurant, its settings row, its owner and its audit rows are created by one
+// code path with one set of rules — the uniqueness checks included.
 import 'dotenv/config';
 import pg from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -68,15 +66,9 @@ async function main() {
 				timeZone,
 				ownerDisplayName,
 				email,
-				password,
-				setupToken: ''
+				password
 			},
-			{
-				ip: null,
-				userAgent: 'cli:create-restaurant',
-				bypassSetupToken: true,
-				allowAdditionalRestaurant: true
-			}
+			{ mode: 'operator', ip: null, userAgent: 'cli:create-restaurant' }
 		);
 
 		if (!result.ok) {

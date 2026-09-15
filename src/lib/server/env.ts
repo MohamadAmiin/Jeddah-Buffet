@@ -51,14 +51,20 @@ export const DATABASE_URL = required('DATABASE_URL');
 export const MIGRATE_DATABASE_URL = required('MIGRATE_DATABASE_URL');
 
 /**
- * OPTIONAL. The one-time secret that opens /register while zero restaurants
- * exist. When it is unset, /register refuses every submission regardless of the
- * restaurant count — a freshly deployed instance must not be claimable by the
- * first stranger who finds its hostname.
- *
- * Unset it again once the owner has registered.
+ * The operator's switch for PUBLIC sign-up (decided 2026-09-15). Unset or `open`:
+ * anyone may create a company at /register. `closed`: /register refuses every
+ * submission and /login hides its link — the brake for a bot wave, needing a
+ * restart but no Nginx edit. Any other value fails at boot: a typo must never
+ * leave an operator believing sign-up is closed while it is open.
  */
-export const SETUP_TOKEN: string | null = env.SETUP_TOKEN || null;
+const SIGNUP_SETTING = (env.SIGNUP ?? '').trim().toLowerCase();
+if (SIGNUP_SETTING !== '' && SIGNUP_SETTING !== 'open' && SIGNUP_SETTING !== 'closed') {
+	throw new Error(
+		`SIGNUP must be "open" or "closed" (got "${env.SIGNUP}"). ` +
+			'Unset means open: anyone can create a company at /register.'
+	);
+}
+export const SIGNUP_OPEN: boolean = SIGNUP_SETTING !== 'closed';
 
 /**
  * adapter-node's public origin. Required in production for SvelteKit's CSRF
@@ -117,27 +123,26 @@ if (!building && IS_PRODUCTION) {
 	}
 
 	if (!env.ADDRESS_HEADER) {
-		// A warning, not a throw: the app works, but the audit trail degrades
-		// SILENTLY, which is exactly why it is said loudly.
-		console.warn(
-			'[matcami] ADDRESS_HEADER is not set. Behind a proxy, getClientAddress() returns the ' +
-				'proxy’s address — so every audit row records 127.0.0.1 and the login throttle treats ' +
-				'all visitors as one client. Set ADDRESS_HEADER=x-forwarded-for and XFF_DEPTH=1, and ' +
-				'add `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` in Nginx.'
-		);
+		// A BOOT FAILURE since public sign-up (2026-09-15). Sign-up is throttled and
+		// capped per address; behind a proxy with this unset, getClientAddress()
+		// returns the proxy's address, so every visitor is one client — one bot's
+		// three sign-ups would close sign-up for everyone for a day, and every audit
+		// row would record 127.0.0.1. A loopback ORIGIN (pnpm preview, the e2e
+		// journey) has no proxy in front of it, so there it stays a warning.
+		const message =
+			'ADDRESS_HEADER is not set. Behind a proxy, getClientAddress() returns the ' +
+			'proxy’s address — so public sign-up’s per-address throttle and daily cap treat ' +
+			'all visitors as one client, and every audit row records 127.0.0.1. Set ' +
+			'ADDRESS_HEADER=x-forwarded-for and XFF_DEPTH=1, and add ' +
+			'`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` in Nginx.';
+		if (!isLoopback) throw new Error(message);
+		console.warn(`[matcami] ${message}`);
 	}
 }
 
-// An operator should never have to guess whether the registration window is open.
-// Stated without a database query, because this module is read at import time and
-// must not do I/O: the restaurant-count half of the condition is reported by
-// /register's own load, which already knows it.
-if (SETUP_TOKEN) {
-	console.info(
-		'[matcami] SETUP_TOKEN is set: /register will accept a first restaurant while none exists. Unset it after the owner has registered.'
-	);
-} else {
-	console.info(
-		'[matcami] SETUP_TOKEN is not set: /register will refuse every submission. Set it to register the first restaurant.'
-	);
-}
+// An operator should never have to guess whether anyone can create a company.
+console.info(
+	SIGNUP_OPEN
+		? '[matcami] Public sign-up is OPEN: anyone can create a company at /register. Set SIGNUP=closed to stop it.'
+		: '[matcami] Public sign-up is CLOSED (SIGNUP=closed): /register refuses every submission.'
+);

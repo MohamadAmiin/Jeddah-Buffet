@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { resolve } from '$app/paths';
 	import { Alert, AuthSplit, Button, Field } from '$lib/components/ui';
 
 	let { data, form } = $props();
@@ -20,105 +21,104 @@
 	evening. You can change it later.
 {/snippet}
 
-{#snippet setupTokenHint()}
-	The one-time value from the server's <code>SETUP_TOKEN</code> environment variable. It is required only
-	for the first restaurant, and should be unset afterwards.
-{/snippet}
-
 <!-- The two halves are declared as TOP-LEVEL snippets and handed to AuthSplit as
      attributes, never written as children named `form` and `brand` inside its block.
      A snippet named `form` there would shadow this page's `form` prop — the action
      result — throughout its own body, and every `form?.message` below would silently
      read the snippet instead. -->
 {#snippet formPanel()}
-	{#if form?.message}
-		<Alert tone="danger">{form.message}</Alert>
+	{#if !data.signupOpen}
+		<!-- SIGNUP=closed: the operator has stopped new sign-ups. Say so plainly, with
+		     the way back to sign-in below, rather than show a form that cannot succeed. -->
+		<Alert tone="info">Sign-up is closed right now. If you already have an account, sign in.</Alert>
+	{:else}
+		{#if form?.message}
+			<Alert tone="danger">{form.message}</Alert>
+		{/if}
+
+		<form
+			method="POST"
+			class="flex flex-col gap-4"
+			use:enhance={() => {
+				submitting = true;
+				return async ({ update }) => {
+					await update();
+					submitting = false;
+				};
+			}}
+		>
+			<Field
+				id="restaurantName"
+				name="restaurantName"
+				label="Restaurant name"
+				required
+				value={form?.restaurantName ?? ''}
+			/>
+
+			<Field
+				id="timeZone"
+				name="timeZone"
+				label="Time zone"
+				list="time-zones"
+				required
+				value={form?.timeZone || browserTimeZone}
+				hint={timeZoneHint}
+			/>
+			<!-- A datalist, not a select: the owner must be able to type a zone the
+			     suggestion list omits. Field takes `list` and renders no datalist itself. -->
+			<datalist id="time-zones">
+				{#each data.timeZones as tz (tz)}
+					<option value={tz}></option>
+				{/each}
+			</datalist>
+
+			<Field
+				id="ownerDisplayName"
+				name="ownerDisplayName"
+				label="Your name"
+				required
+				value={form?.ownerDisplayName ?? ''}
+			/>
+
+			<Field
+				id="email"
+				name="email"
+				type="email"
+				label="Email"
+				autocomplete="username"
+				required
+				value={form?.email ?? ''}
+			/>
+
+			<Field
+				id="password"
+				name="password"
+				type="password"
+				label="Password"
+				autocomplete="new-password"
+				required
+				minlength={8}
+				hint="At least 8 characters."
+			/>
+
+			<Field
+				id="passwordConfirm"
+				name="passwordConfirm"
+				type="password"
+				label="Confirm password"
+				autocomplete="new-password"
+				required
+			/>
+
+			<!-- Stretched flex child, so it fills the form measure without a width class —
+			     Button applies its own class last and a caller's would be dropped. While the
+			     request is in flight it is disabled and its LABEL says why, which is what
+			     keeps a disabled control from sitting dead. -->
+			<Button type="submit" variant="primary" disabled={submitting}>
+				{submitting ? 'Creating…' : 'Create restaurant'}
+			</Button>
+		</form>
 	{/if}
-
-	<form
-		method="POST"
-		class="flex flex-col gap-4"
-		use:enhance={() => {
-			submitting = true;
-			return async ({ update }) => {
-				await update();
-				submitting = false;
-			};
-		}}
-	>
-		<Field
-			id="restaurantName"
-			name="restaurantName"
-			label="Restaurant name"
-			required
-			value={form?.restaurantName ?? ''}
-		/>
-
-		<Field
-			id="timeZone"
-			name="timeZone"
-			label="Time zone"
-			list="time-zones"
-			required
-			value={form?.timeZone || browserTimeZone}
-			hint={timeZoneHint}
-		/>
-		<!-- A datalist, not a select: the owner must be able to type a zone the
-		     suggestion list omits. Field takes `list` and renders no datalist itself. -->
-		<datalist id="time-zones">
-			{#each data.timeZones as tz (tz)}
-				<option value={tz}></option>
-			{/each}
-		</datalist>
-
-		<Field
-			id="ownerDisplayName"
-			name="ownerDisplayName"
-			label="Your name"
-			required
-			value={form?.ownerDisplayName ?? ''}
-		/>
-
-		<Field
-			id="email"
-			name="email"
-			type="email"
-			label="Email"
-			autocomplete="username"
-			required
-			value={form?.email ?? ''}
-		/>
-
-		<Field
-			id="password"
-			name="password"
-			type="password"
-			label="Password"
-			autocomplete="new-password"
-			required
-			minlength={8}
-			hint="At least 8 characters."
-		/>
-
-		<Field
-			id="passwordConfirm"
-			name="passwordConfirm"
-			type="password"
-			label="Confirm password"
-			autocomplete="new-password"
-			required
-		/>
-
-		<Field id="setupToken" name="setupToken" label="Setup token" required hint={setupTokenHint} />
-
-		<!-- Stretched flex child, so it fills the form measure without a width class —
-		     Button applies its own class last and a caller's would be dropped. While the
-		     request is in flight it is disabled and its LABEL says why, which is what
-		     keeps a disabled control from sitting dead. -->
-		<Button type="submit" variant="primary" disabled={submitting}>
-			{submitting ? 'Creating…' : 'Create restaurant'}
-		</Button>
-	</form>
 {/snippet}
 
 <!-- NO MONEY FIGURE ON A DASHBOARD SURFACE. Nothing in this product states the
@@ -172,9 +172,10 @@
 
 <AuthSplit
 	title="Set up your restaurant"
-	caption="This creates the restaurant and its owner account. It can only be done once."
-	eyebrow="First run · one time only"
+	caption="This creates your restaurant and its owner account."
+	eyebrow="New restaurant"
 	statement="One restaurant. One till. Books that balance."
 	form={formPanel}
 	brand={brandPanel}
+	alt={{ prompt: 'Already set up?', label: 'Sign in', href: resolve('/login') }}
 />

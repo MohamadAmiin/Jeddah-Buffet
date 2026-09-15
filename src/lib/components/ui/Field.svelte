@@ -29,10 +29,10 @@
 		type?: string;
 		value?: string;
 		required?: boolean;
-		// string | Snippet, deliberately: /register's setup-token hint contains a
-		// <code> element. Svelte HTML-escapes {hint}, so a plain string prop would
-		// render the literal text `<code>SETUP_TOKEN</code>` on screen. A snippet
-		// stays type-checked and escaping-safe. NEVER use {@html} for this.
+		// string | Snippet, deliberately: a hint may need markup — a <code> element,
+		// say. Svelte HTML-escapes {hint}, so a plain string prop would render the
+		// literal tags on screen. A snippet stays type-checked and escaping-safe.
+		// NEVER use {@html} for this.
 		hint?: string | import('svelte').Snippet;
 		error?: string;
 		list?: string;
