@@ -29,7 +29,7 @@
 
 	type NavItem = {
 		label: string;
-		href: '/dashboard' | '/settings' | '/device' | '/employees' | null;
+		href: '/dashboard' | '/settings' | '/device' | '/employees' | '/menu' | null;
 		icon: IconName;
 	};
 	type NavGroup = { id: string; label: string | null; items: NavItem[] };
@@ -91,7 +91,7 @@
 			id: 'nav-catalogue',
 			label: 'Catalogue',
 			items: [
-				{ label: 'Menu', href: null, icon: 'menu' },
+				{ label: 'Menu', href: '/menu', icon: 'menu' },
 				{ label: 'Inventory', href: null, icon: 'inventory' }
 			]
 		},
