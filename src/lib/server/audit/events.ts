@@ -51,7 +51,22 @@ export type AuditEvent =
 	  }
 	| { event: 'employee.created'; details: { role: UserRole; displayName: string } }
 	| { event: 'employee.pin_set'; details: { role: UserRole } }
-	| { event: 'employee.deactivated'; details: { role: UserRole; displayName: string } };
+	| { event: 'employee.deactivated'; details: { role: UserRole; displayName: string } }
+	// ── The menu (tasks/pos-access-and-menu T-38) ──────────────────────────────
+	// Spec 3 names price changes. ONE event with a `target` discriminator: audit_log
+	// is append-only, so a modifier's id filed under an item-shaped key would be
+	// wrong forever. The amounts are decimal STRINGS of the integer minor value
+	// ("850"), because jsonb cannot hold a bigint.
+	| {
+			event: 'menu.price_changed';
+			details: {
+				target: 'item' | 'modifier';
+				targetId: string;
+				name: string;
+				oldPriceMinor: string;
+				newPriceMinor: string;
+			};
+	  };
 
 export type AuditEventName = AuditEvent['event'];
 
@@ -77,7 +92,8 @@ export const AUDIT_EVENT_NAMES = [
 	'pos.pin.locked_out',
 	'employee.created',
 	'employee.pin_set',
-	'employee.deactivated'
+	'employee.deactivated',
+	'menu.price_changed'
 ] as const satisfies readonly AuditEventName[];
 
 type AssertTrue<T extends true> = T;

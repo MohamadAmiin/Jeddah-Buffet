@@ -23,5 +23,6 @@ export const EVENT_TEXT: Record<AuditEventName, string> = {
 	'pos.pin.locked_out': 'Employee locked out at the POS after repeated failures',
 	'employee.created': 'Employee added',
 	'employee.pin_set': 'Employee PIN set',
-	'employee.deactivated': 'Employee deactivated'
+	'employee.deactivated': 'Employee deactivated',
+	'menu.price_changed': 'Menu price changed'
 };
