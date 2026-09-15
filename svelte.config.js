@@ -16,6 +16,17 @@ export default {
 		// so the adapter is not a guess.
 		adapter: adapter(),
 
+		// ABSOLUTE asset paths. SvelteKit's default (`relative: true`) writes every
+		// asset and link RELATIVE to the document (`./_app/…`), and the till's
+		// service worker answers EVERY offline navigation under /pos with ONE
+		// precached shell rendered for /pos. Served at /pos/pin, that shell's
+		// `./_app/immutable/…` resolves to /pos/_app/…, which is not precached: the
+		// JavaScript never loads and the till is dead after an offline refresh of any
+		// screen but /pos itself (e2e/pos-offline.spec.ts found it). Absolute paths
+		// let the one shell boot at any /pos URL. The app is served from the root of
+		// its origin, so nothing depends on relative paths.
+		paths: { relative: false },
+
 		// NO automatic service-worker registration. The default (`register: true`)
 		// injects `navigator.serviceWorker.register('/service-worker.js')` into EVERY
 		// server-rendered page with no `scope`, so the scope is the script's own
