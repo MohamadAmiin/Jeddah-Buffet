@@ -21,6 +21,7 @@
 		POS_PIN_FAILED,
 		POS_PIN_SUCCESS,
 		type CachedEmployee,
+		forgetDevice,
 		readBoundDeviceId,
 		readCachedEmployees,
 		readCachedIdleSeconds,
@@ -214,6 +215,13 @@
 				return;
 			}
 			if (response.status === 403) {
+				// Unknown or REVOKED: forget the cached bundle, so this till cannot sign
+				// anyone in offline from the PIN hashes it still holds.
+				try {
+					await forgetDevice();
+				} catch {
+					// No readable cache: there is nothing to forget.
+				}
 				notRegistered = true;
 				message = 'This device is no longer registered as a till.';
 				return;

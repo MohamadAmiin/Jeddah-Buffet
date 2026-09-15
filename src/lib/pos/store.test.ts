@@ -8,12 +8,15 @@ import {
 	bindDevice,
 	cacheEmployees,
 	cacheSettings,
+	forgetDevice,
 	openPosDb,
 	readBoundDeviceId,
 	readCachedEmployees,
 	readCachedIdleSeconds,
 	readCachedSetting,
+	readMenu,
 	recordOfflineLogin,
+	replaceMenu,
 	upgradeRunsForTest,
 	verifyCachedPin,
 	type CachedEmployee,
@@ -147,5 +150,34 @@ describe('the POS store', () => {
 		const rows = await offlineLogins();
 		expect(rows).toHaveLength(1);
 		expect(rows[0].deviceId).toBe('device-A');
+	});
+
+	// A till the owner REVOKED must stop signing staff in offline the moment the
+	// server says so (invariant 12): the bundle goes, the unsynced records stay.
+	it('forgets the cached bundle on revocation and keeps the unsynced records', async () => {
+		await bindDevice('device-A');
+		await cacheEmployees([employee('a1', await hashPin('1111'))]);
+		await cacheSettings([{ key: 'posIdleLockSeconds', value: 300 }]);
+		await replaceMenu({
+			version: 3,
+			restaurantId: 'restaurant-A',
+			currency: 'USD',
+			currencyExponent: 2,
+			taxMode: 'exclusive',
+			taxRateBp: 825,
+			categories: [],
+			items: [],
+			modifierGroups: []
+		});
+		await recordOfflineLogin(login('op-A', '2026-09-15T10:00:00.000Z'));
+
+		await forgetDevice();
+
+		expect(await readCachedEmployees()).toEqual([]);
+		expect(await verifyCachedPin('a1', '1111')).toBe(false);
+		expect(await readBoundDeviceId()).toBeNull();
+		expect(await readCachedIdleSeconds()).toBeNull();
+		expect(await readMenu()).toBeNull();
+		expect((await offlineLogins()).map((r) => r.clientOpId)).toEqual(['op-A']);
 	});
 });

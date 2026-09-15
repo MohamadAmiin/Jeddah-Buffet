@@ -8,6 +8,7 @@ import { compareVersions, parseSnapshot } from './menu-snapshot';
 import {
 	bindDevice,
 	openPosDb,
+	readBoundDeviceId,
 	readCachedEmployees,
 	readCachedSetting,
 	readMenu,
@@ -266,6 +267,18 @@ describe('the menu in IndexedDB', () => {
 
 		await bindDevice('device-B');
 
+		expect(await readMenu()).toBeNull();
+	});
+
+	it('forgets the device when the menu endpoint answers 403: a revoked till keeps no bundle', async () => {
+		await bindDevice('device-A');
+		await replaceMenu(parseSnapshot(payload()));
+		const revoked = (async () =>
+			new Response('Forbidden', { status: 403 })) as unknown as typeof fetch;
+
+		await expect(syncMenu(revoked)).rejects.toThrow(/403/);
+
+		expect(await readBoundDeviceId()).toBeNull();
 		expect(await readMenu()).toBeNull();
 	});
 });

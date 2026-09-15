@@ -16,6 +16,7 @@
 		bindDevice,
 		cacheEmployees,
 		cacheSettings,
+		forgetDevice,
 		readCachedEmployees,
 		syncMenu
 	} from '$lib/pos/store';
@@ -78,6 +79,14 @@
 		// three device states — no cookie, an unknown cookie, a revoked device — so
 		// there is deliberately no 401 branch.
 		if (response.status === 403) {
+			// Unknown or REVOKED: forget everything cached for this device — the staff
+			// list and its PIN hashes, the settings, the menu — so a revoked till cannot
+			// go on signing staff in offline. Unsynced records are kept.
+			try {
+				await forgetDevice();
+			} catch {
+				// No readable cache: there is nothing to forget.
+			}
 			status = 'not-registered';
 			return;
 		}

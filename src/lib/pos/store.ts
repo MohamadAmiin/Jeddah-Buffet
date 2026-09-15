@@ -267,6 +267,26 @@ export async function readBoundDeviceId(): Promise<string | null> {
 }
 
 /**
+ * Forget the device: clear the cached employees and their PIN hashes, the settings
+ * (the bound device id among them, the idle lock, the menu version) and the menu,
+ * in ONE transaction. Called whenever the server answers 403 to a device-guarded
+ * request, meaning the device is unknown or REVOKED. A till the owner revoked
+ * (invariant 12) must not go on signing staff in offline from hashes it still
+ * holds once the server has told it so. With no bound device, the PIN screen's
+ * offline path refuses. offline_logins is NEVER touched: those records are
+ * unsynced work, each stamped with the device it was made on (invariant 5).
+ */
+export function forgetDevice(): Promise<void> {
+	return withDb((db) =>
+		inTransaction(db, ['employees', 'settings', 'menu'], 'readwrite', (tx) => {
+			tx.objectStore('employees').clear();
+			tx.objectStore('settings').clear();
+			tx.objectStore('menu').clear();
+		})
+	);
+}
+
+/**
  * Check a PIN against the hash cached for `employeeId`, with the SAME isomorphic
  * verifyPin the server uses. An employee not in the cache, and a cached employee
  * with no PIN set, are `false` without calling verifyPin — never a throw. There
@@ -347,6 +367,11 @@ export async function syncMenu(fetchFn: typeof fetch = fetch): Promise<'up-to-da
 	// credentials: the device cookie is HttpOnly — it travels on the request and is
 	// never readable by this code.
 	const versionResponse = await fetchFn('/api/menu/version', { credentials: 'same-origin' });
+	if (versionResponse.status === 403) {
+		// Unknown or revoked: forget everything cached for this device.
+		await forgetDevice();
+		throw new Error('GET /api/menu/version answered 403: this device is not registered');
+	}
 	if (!versionResponse.ok) {
 		throw new Error(`GET /api/menu/version answered ${versionResponse.status}`);
 	}
@@ -366,6 +391,10 @@ export async function syncMenu(fetchFn: typeof fetch = fetch): Promise<'up-to-da
 	if (compareVersions(local, server.version) === 'up-to-date') return 'up-to-date';
 
 	const snapshotResponse = await fetchFn('/api/menu', { credentials: 'same-origin' });
+	if (snapshotResponse.status === 403) {
+		await forgetDevice();
+		throw new Error('GET /api/menu answered 403: this device is not registered');
+	}
 	if (!snapshotResponse.ok) throw new Error(`GET /api/menu answered ${snapshotResponse.status}`);
 	// Parsed BEFORE the transaction opens: a malformed payload writes nothing.
 	const snapshot = parseSnapshot(await snapshotResponse.json());

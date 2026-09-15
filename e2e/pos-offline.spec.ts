@@ -248,5 +248,27 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	await tillPage.goto(TILL_URL);
 	expect(await storeRows<OfflineRecord>(tillPage, 'offline_logins')).toHaveLength(records.length);
 
+	// ── 11. REVOKED: the till forgets its bundle and refuses offline sign-ins ───
+	// Invariant 12: the owner can revoke the device. Once the server has told the
+	// till so, it must not go on signing staff in offline from the PIN hashes it
+	// still holds. The accepted stolen-tablet GAP covers a till that never
+	// reconnects, not one that has been told. The unsynced records stay.
+	await page.getByRole('link', { name: 'POS', exact: true }).click();
+	await page.getByText('Revoke this device…').click();
+	await page.getByRole('button', { name: 'Revoke device' }).click();
+	await expect(page.getByRole('alert')).toContainText('Device revoked');
+
+	await tillPage.goto(TILL_URL);
+	await expect(tillPage.getByRole('alert')).toContainText('registration was revoked');
+	expect(await storeRows(tillPage, 'employees')).toEqual([]);
+
+	await tillPage.goto(`/pos/pin?employee=${idOf('The Cashier')}`);
+	await expect(tillPage.getByRole('heading', { name: 'Enter your PIN' })).toBeVisible();
+	await till.setOffline(true);
+	await enterPin(tillPage, '4321');
+	await expect(tillPage.getByRole('alert')).toContainText('cannot check a PIN offline');
+	await expect(tillPage.getByRole('heading', { name: /Signed in/ })).toHaveCount(0);
+	expect(await storeRows<OfflineRecord>(tillPage, 'offline_logins')).toHaveLength(records.length);
+
 	await till.close();
 });
