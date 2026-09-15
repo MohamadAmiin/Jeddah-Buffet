@@ -26,9 +26,44 @@
 	// cannot carry a control's boundary, and WCAG 1.4.11 asks 3:1 of one.
 	// --c-control-line resolves to --c-ink-3, 4.73:1 on that ground. `border-line`
 	// is decorative only and never a control edge.
+	import { onMount } from 'svelte';
+
 	let { children } = $props();
+
+	// THE CONNECTION INDICATOR — permanent chrome on every POS screen, which is why
+	// it lives in this layout and not in a page, and never a toast (spec 6). Both
+	// the glyph and the word, always: colour never carries meaning alone.
+	//
+	// Initialised to `true` so server-rendered HTML does not claim "Offline" before
+	// any listener exists; navigator does not exist during SSR, so it is read only
+	// in onMount.
+	//
+	// THERE IS NO UNSYNCED COUNT YET. Spec 6 requires the number of unsynced
+	// operations to be on screen at all times, and that number arrives with the
+	// sales plan that creates the queue. A hardcoded 0 would be a lie the moment a
+	// queue exists.
+	let online = $state(true);
+
+	onMount(() => {
+		online = navigator.onLine;
+		const up = () => (online = true);
+		const down = () => (online = false);
+		addEventListener('online', up);
+		addEventListener('offline', down);
+		return () => {
+			removeEventListener('online', up);
+			removeEventListener('offline', down);
+		};
+	});
 </script>
 
 <div data-surface="pos" class="text-pos bg-bg text-ink min-h-screen">
+	<div
+		role="status"
+		class={`flex items-center gap-2 px-4 py-2 ${online ? 'bg-ok-bg text-ok' : 'bg-st-offline-bg text-st-offline'}`}
+	>
+		<span aria-hidden="true" class="font-mono">{online ? '●' : '◆'}</span>
+		<span>{online ? 'Online' : 'Offline'}</span>
+	</div>
 	{@render children()}
 </div>
