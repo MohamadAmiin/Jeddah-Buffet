@@ -1,7 +1,17 @@
-import { desc } from 'drizzle-orm';
-import { pgTable, bigint, uuid, text, jsonb, timestamp, index } from 'drizzle-orm/pg-core';
+import { desc, sql } from 'drizzle-orm';
+import {
+	pgTable,
+	bigint,
+	uuid,
+	text,
+	jsonb,
+	timestamp,
+	index,
+	uniqueIndex
+} from 'drizzle-orm/pg-core';
 import { restaurants } from './restaurants';
 import { users } from './users';
+import { posDevices } from './pos-devices';
 
 // Spec 3: "Sensitive actions are audit-logged: logins, failed PINs, voids,
 // refunds, discounts, comps, approvals, cash drawer opens and price changes."
@@ -16,12 +26,14 @@ import { users } from './users';
 //   plan's work and nothing in THIS plan can produce one. Adding nullable
 //   columns later is a trivial migration.
 //
-//   device_id, client_op_id — the offline sync plan must add both, plus a
-//   partial UNIQUE (device_id, client_op_id), BEFORE the first device-sourced
-//   audit row is written, or a retried sync writes a duplicate that the
-//   append-only trigger then makes permanent. The trigger T-07 installs blocks
-//   UPDATE and DELETE, not ALTER TABLE, so the columns can still be added — but
-//   only before the bad rows exist.
+//   device_id, client_op_id — no longer on this list: they LANDED, with the
+//   partial UNIQUE (device_id, client_op_id), in tasks/pos-access-and-menu T-07,
+//   BEFORE the first device-sourced audit row was written — that plan's PIN
+//   logins and device registration are the first such rows. The append-only
+//   trigger of migration 0004_audit_log_append_only.sql blocks UPDATE and DELETE
+//   but not ALTER TABLE, which is why the columns could still be added, and why
+//   they had to be added before any row they deduplicate existed: a duplicate
+//   written first could never be removed. See the columns and the index below.
 export const auditLog = pgTable(
 	'audit_log',
 	{
@@ -52,6 +64,17 @@ export const auditLog = pgTable(
 		ip: text('ip'),
 		userAgent: text('user_agent'),
 
+		// Which registered till produced this row. Null for every dashboard event.
+		// RESTRICT, like every foreign key in this schema except sessions.user_id: a
+		// device that has produced an audit row can never be deleted, which is exactly
+		// why pos_devices revokes with a stamp rather than a DELETE. Nullable with no
+		// DEFAULT — every row written before this column existed came from the
+		// dashboard and has no device.
+		deviceId: uuid('device_id').references(() => posDevices.id, { onDelete: 'restrict' }),
+		// The device-generated idempotency key for the operation that produced this
+		// row. Null for anything the server originated.
+		clientOpId: text('client_op_id'),
+
 		// WHEN THE THING HAPPENED, which is not always when the row was written.
 		// Spec 6 requires offline logins to be recorded on the device and synced
 		// later; without this column such a row is stamped with the sync time and the
@@ -70,6 +93,25 @@ export const auditLog = pgTable(
 		// table needs CREATE INDEX CONCURRENTLY, which cannot run inside a
 		// transaction block — and Drizzle's migrator wraps each run in one, so it
 		// would become an out-of-band manual step in a maintenance window.
-		index('audit_log_restaurant_created_idx').on(table.restaurantId, desc(table.createdAt))
+		index('audit_log_restaurant_created_idx').on(table.restaurantId, desc(table.createdAt)),
+
+		// THE IDEMPOTENCY KEY, enforced by the database (invariant 5, spec 6). The till
+		// flushes a queued offline PIN-login event, the server commits it, and the
+		// response is lost on the way back. The till retries — that is what a sync
+		// queue does. With no key to deduplicate on, the second insert succeeds and
+		// the audit log now says the cashier signed in twice at the same instant, and
+		// because 0004's trigger blocks UPDATE and DELETE that duplicate is PERMANENT:
+		// it cannot be merged, edited or removed, and every later "who was on the
+		// till" answer is wrong for that shift.
+		//
+		// Partial on client_op_id IS NOT NULL, under PostgreSQL's default NULLS
+		// DISTINCT, so the server-originated rows — which carry no key — never
+		// collide. Do NOT "improve" this with NULLS NOT DISTINCT: the second
+		// device-less audit row of any kind would then fail. A key is unique PER
+		// DEVICE, not globally, which is why the index is on the pair — and why a row
+		// with a client_op_id but no device_id is never deduplicated at all.
+		uniqueIndex('audit_log_device_client_op_unique')
+			.on(table.deviceId, table.clientOpId)
+			.where(sql`${table.clientOpId} is not null`)
 	]
 );
