@@ -51,9 +51,13 @@ describe('allocate', () => {
 	// MANDATORY (spec 29 — property): allocation never loses or invents a minor unit.
 	it('sums back to the total exactly, in exactly `parts` shares, for 500 generated cases', () => {
 		const next = generator(20260915n);
+		const seen = new Set<number>();
 		for (let i = 0; i < 500; i++) {
 			const total = minor(between(next, -10_000_000n, 10_000_000n));
-			const parts = Number(between(next, 1n, 20n));
+			// From the HIGH bits: this generator's low bit alternates on every call and
+			// `total` is drawn first, so a low-bit draw here could only ever be even.
+			const parts = 1 + Number((next() >> 16n) % 20n);
+			seen.add(parts);
 
 			const shares = allocate(total, parts);
 
@@ -63,6 +67,13 @@ describe('allocate', () => {
 			const sorted = [...shares].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
 			expect(sorted[sorted.length - 1] - sorted[0] <= 1n).toBe(true);
 		}
+		// Every share count in [1, 20] was actually drawn — the property claims them all.
+		expect(seen.size).toBe(20);
+	});
+
+	it('gives a single share the whole total', () => {
+		expect(allocate(minor(100n), 1)).toEqual([100n]);
+		expect(allocate(minor(-7n), 1)).toEqual([-7n]);
 	});
 
 	it('refuses zero parts and a fractional number of parts', () => {
