@@ -156,6 +156,11 @@ export async function verifyEmployeePin(
 				event: 'pos.pin.locked_out',
 				details: { deviceCode: ctx.deviceCode, failedCount, lockedForMs: PIN_LOCKOUT_MS }
 			});
+			// The attempt that SETS the lock already answers "locked", for the full
+			// lockout: the till shows its countdown at once, and a retry of this very
+			// attempt — replayed from its pos.pin.locked_out row as 423 — answers the
+			// same thing the original did.
+			return { ok: false, reason: 'locked', retryAfterMs: PIN_LOCKOUT_MS };
 		} else {
 			await tx
 				.update(users)

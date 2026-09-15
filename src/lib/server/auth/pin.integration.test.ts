@@ -141,7 +141,14 @@ describe('verifyEmployeePin', () => {
 
 	it('locks the employee for five minutes on the fifth wrong PIN, and resets the counter', async () => {
 		const f = await makeFixture();
-		for (let i = 0; i < MAX_FAILED_PIN_ATTEMPTS; i++) await attempt(f, '9999');
+		const results: Awaited<ReturnType<typeof attempt>>[] = [];
+		for (let i = 0; i < MAX_FAILED_PIN_ATTEMPTS; i++) results.push(await attempt(f, '9999'));
+
+		// The attempt that SETS the lock already answers "locked", for the full window
+		// — so the till shows its countdown at once, and the PIN route's replay of that
+		// attempt (from its pos.pin.locked_out row) answers the same thing.
+		expect(results.slice(0, 4)).toEqual(Array(4).fill({ ok: false, reason: 'invalid' }));
+		expect(results[4]).toEqual({ ok: false, reason: 'locked', retryAfterMs: PIN_LOCKOUT_MS });
 
 		const row = await userRow(f.cashierId);
 		expect(Math.abs(row.pinLockedUntil!.getTime() - (T0.getTime() + PIN_LOCKOUT_MS))).toBeLessThan(
