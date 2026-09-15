@@ -15,6 +15,7 @@ import {
 	createModifier,
 	createModifierGroup,
 	getMenuVersion,
+	hasMenuItems,
 	linkModifierGroup,
 	listMenu,
 	setItemAvailability,
@@ -273,5 +274,32 @@ describe('tenant scoping', () => {
 		expect(await version(a.restaurantId)).toBe(aBefore);
 		expect(await version(b.restaurantId)).toBe(bBefore);
 		expect(await priceChanges()).toHaveLength(0);
+	});
+});
+
+describe('hasMenuItems (T-43)', () => {
+	it('is true only while the restaurant has a LIVE item — archiving the last one makes it false', async () => {
+		const r = await makeRestaurant();
+		expect(await hasMenuItems(db, r.restaurantId)).toBe(false);
+
+		const category = await db.transaction((tx) =>
+			createCategory(tx, r.restaurantId, { name: 'Drinks' })
+		);
+		const item = await db.transaction((tx) =>
+			createItem(tx, r.restaurantId, { categoryId: category.id, name: 'Tea', priceMinor: 850n })
+		);
+		if (!item.ok) throw new Error('item not created');
+		expect(await hasMenuItems(db, r.restaurantId)).toBe(true);
+
+		await db.transaction((tx) => archiveItem(tx, r.restaurantId, item.id));
+		expect(await hasMenuItems(db, r.restaurantId)).toBe(false);
+	});
+
+	it("does not count another restaurant's item", async () => {
+		const a = await withItem();
+		const b = await makeRestaurant('Cafe Two');
+
+		expect(await hasMenuItems(db, a.restaurantId)).toBe(true);
+		expect(await hasMenuItems(db, b.restaurantId)).toBe(false);
 	});
 });

@@ -5,6 +5,7 @@ import { getRestaurantWithSettings, settingsComplete } from '$lib/server/restaur
 import { recentActivity } from '$lib/server/audit';
 import { employeeSetupStatus } from '$lib/server/auth/employees';
 import { getRegisteredDevice } from '$lib/server/auth/pos-device';
+import { hasMenuItems } from '$lib/server/menu';
 
 export const load: ServerLoad = async (event) => {
 	// Its own guard, even though the hook already guards the group and the layout
@@ -30,6 +31,10 @@ export const load: ServerLoad = async (event) => {
 	// device is not a registered one.
 	const staff = await employeeSetupStatus(db, restaurantId);
 	const device = await getRegisteredDevice(db, restaurantId);
+	// The menu step, the same way: a boolean, and an archived item does not count.
+	// No second guard — this is one route with one permission, and the owner holds
+	// admin.menu as well.
+	const menuReady = await hasMenuItems(db, restaurantId);
 
 	// The restaurant's OWN time zone and opening date, so the screen can report the
 	// local date where the till stands rather than where the browser happens to be.
@@ -49,6 +54,7 @@ export const load: ServerLoad = async (event) => {
 		// The SAME predicate /device uses for "registered", deliberately: one
 		// definition of "the till is registered" for both screens.
 		deviceRegistered: device !== null && device.revokedAt === null,
+		menuReady,
 		timeZone: restaurant?.timeZone ?? null,
 		openedOn: restaurant?.createdAt ?? null,
 		activity

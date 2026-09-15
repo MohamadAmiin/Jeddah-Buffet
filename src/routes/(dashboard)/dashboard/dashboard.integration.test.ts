@@ -7,6 +7,7 @@ import { users } from '$lib/server/db/schema/users';
 import type { Principal } from '$lib/server/auth/session';
 import { registerDevice, revokeDevice } from '$lib/server/auth/pos-device';
 import { createEmployee } from '$lib/server/auth/employees';
+import { createCategory, createItem } from '$lib/server/menu';
 import { onRestaurantCreated } from '$lib/server/restaurants';
 import { load } from './+page.server';
 
@@ -20,6 +21,7 @@ type Overview = {
 	settings: { complete: boolean; missing: string[] };
 	employeesReady: boolean;
 	deviceRegistered: boolean;
+	menuReady: boolean;
 };
 
 /** A restaurant exactly as registration leaves it: settings row, time zone, one owner, nothing else. */
@@ -173,5 +175,22 @@ describe('the overview checklist', () => {
 		);
 
 		expect(status).toBe(403);
+	});
+
+	// T-43: the menu step is computed from the menu itself.
+	it('reads the menu step as done only once the restaurant has an item', async () => {
+		const a = await freshRestaurant();
+		expect((await overview(a)).menuReady).toBe(false);
+
+		const category = await db.transaction((tx) =>
+			createCategory(tx, a.restaurantId, { name: 'Drinks' })
+		);
+		// A category alone is not a menu.
+		expect((await overview(a)).menuReady).toBe(false);
+
+		await db.transaction((tx) =>
+			createItem(tx, a.restaurantId, { categoryId: category.id, name: 'Tea', priceMinor: 850n })
+		);
+		expect((await overview(a)).menuReady).toBe(true);
 	});
 });

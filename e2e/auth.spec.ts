@@ -64,6 +64,9 @@ test('the owner registers, works, signs out and signs back in', async ({ page, c
 	// twelve.
 	await expect(page.getByText('Restaurant settings')).toBeVisible();
 	await expect(page.getByText('not started', { exact: true })).toHaveCount(6);
+	// The Menu rail row is a real link now (T-39, confirmed by T-43), not a disabled
+	// "Soon" row. `exact`: the checklist's "Open menu" link would match a loose name.
+	await expect(page.getByRole('link', { name: 'Menu', exact: true })).toBeVisible();
 
 	// ── 3a. the bare host, WITH a session ──────────────────────────────────────
 	// Labelled 3a deliberately: it leaves every existing `// ── N. … ──` label

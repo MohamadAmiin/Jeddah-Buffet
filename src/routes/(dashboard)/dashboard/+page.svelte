@@ -5,7 +5,7 @@
 
 	let { data } = $props();
 
-	// The real sequence of work. The settings, employees and device steps are
+	// The real sequence of work. The settings, employees, menu and device steps are
 	// computed, because their features exist — the rest are shown as "not started"
 	// with one line saying what each will do. Progress is not faked, and nothing
 	// links to a route that does not exist.
@@ -28,9 +28,12 @@
 		},
 		{
 			label: 'Menu, categories and modifiers',
-			done: false,
-			href: null,
-			detail: 'What you sell, what it costs, and the options that change a recipe.'
+			done: data.menuReady,
+			href: '/menu',
+			cta: 'Open menu',
+			detail: data.menuReady
+				? 'Your menu has items. Prices and modifiers can be changed at any time.'
+				: 'What you sell, what it costs, and the options that change a recipe.'
 		},
 		{
 			label: 'Dining tables',
@@ -250,10 +253,12 @@
 							</div>
 							<p class="text-caption text-ink-2">{step.detail}</p>
 							{#if step.href}
-								<!-- T-43 adds '/menu' to this cast and a cta to the menu step: extend
-								     this shape rather than inventing a second one. -->
+								<!-- The cast is the union of the hrefs the steps array holds, and each
+								     linked step carries its own cta. A later step extends this shape
+								     rather than inventing a second one. -->
+
 								<a
-									href={resolve(step.href as '/settings' | '/employees' | '/device')}
+									href={resolve(step.href as '/settings' | '/employees' | '/menu' | '/device')}
 									class="text-caption text-accent mt-1 self-start font-medium underline underline-offset-2"
 								>
 									{step.cta}

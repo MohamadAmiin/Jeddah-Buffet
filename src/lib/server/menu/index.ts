@@ -618,6 +618,21 @@ export async function getMenuVersion(database: Executor, restaurantId: string): 
 }
 
 /**
+ * Does the restaurant have at least one LIVE menu item? `limit 1`, not a count:
+ * the question is "is there one", and the answer must not slow down as the menu
+ * grows. An ARCHIVED item does not count — a restaurant that archived everything
+ * it sells has not finished setting up its menu.
+ */
+export async function hasMenuItems(database: Executor, restaurantId: string): Promise<boolean> {
+	const rows = await database
+		.select({ id: menuItems.id })
+		.from(menuItems)
+		.where(and(eq(menuItems.restaurantId, restaurantId), isNull(menuItems.archivedAt)))
+		.limit(1);
+	return rows.length > 0;
+}
+
+/**
  * The live menu for the dashboard page: archived rows never appear, and a link
  * appears only between a live item and a live group. Prices stay bigint.
  */
