@@ -23,6 +23,18 @@ export type AuditEntry = AuditEvent & {
 	ip: string | null;
 	userAgent: string | null;
 	/**
+	 * The registered till this row came from, or null for a dashboard event.
+	 * T-19's idempotency lookup selects on (device_id, client_op_id), so a row
+	 * written with a clientOpId and no deviceId can never be matched to its retry.
+	 */
+	deviceId?: string | null;
+	/**
+	 * The device-generated idempotency key for the operation that produced this
+	 * row, or null when the server originated it. Backed by the partial
+	 * UNIQUE (device_id, client_op_id) WHERE client_op_id IS NOT NULL.
+	 */
+	clientOpId?: string | null;
+	/**
 	 * Defaults to now. Exists so the offline plan can record a device-time event
 	 * without altering a table whose rows cannot be updated.
 	 */
@@ -80,6 +92,8 @@ export async function writeAudit(tx: DbTx, entry: AuditEntry): Promise<void> {
 		details: entry.details,
 		ip: entry.ip,
 		userAgent: entry.userAgent,
+		deviceId: entry.deviceId ?? null,
+		clientOpId: entry.clientOpId ?? null,
 		occurredAt: entry.occurredAt ?? new Date()
 	});
 }

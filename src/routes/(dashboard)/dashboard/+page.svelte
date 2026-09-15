@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { Card, PageHeader, StatusMark } from '$lib/components/ui';
+	import { EVENT_TEXT } from './event-text';
 
 	let { data } = $props();
 
@@ -81,18 +82,6 @@
 	// Audit events are a closed union (src/lib/server/audit/events.ts). Mapping them
 	// to sentences here — rather than printing the raw dotted name — keeps the
 	// vocabulary in one place, and the `details` payload never leaves the server.
-	const EVENT_TEXT: Record<string, string> = {
-		'restaurant.registered': 'Restaurant registered',
-		'user.created': 'Account created',
-		'login.success': 'Signed in',
-		'login.failed': 'Failed sign-in attempt',
-		'login.locked_out': 'Account locked after repeated failures',
-		'login.rejected_locked': 'Sign-in refused while locked',
-		logout: 'Signed out',
-		'settings.updated': 'Settings changed',
-		'user.password_reset_by_operator': 'Password reset from the command line'
-	};
-
 	const activity = $derived(
 		data.activity.map((row) => ({
 			text: EVENT_TEXT[row.event] ?? row.event,

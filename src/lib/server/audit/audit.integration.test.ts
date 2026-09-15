@@ -2,7 +2,9 @@ import { describe, it, expect, afterAll } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { testDb, closeTestDb } from '../db/test/db';
 import { restaurants } from '../db/schema/restaurants';
+import { users } from '../db/schema/users';
 import { auditLog } from '../db/schema/audit';
+import { registerDevice } from '../auth/pos-device';
 import { writeAudit } from './index';
 
 const db = testDb();
@@ -128,5 +130,63 @@ describe('writeAudit runs inside the caller transaction (invariant 10)', () => {
 		).rejects.toThrow(/looks like a secret/);
 
 		expect(await countAuditRows()).toBe(before);
+	});
+
+	// T-07's two columns reach the table through writeAudit. This is the assertion
+	// that fails if a POS row's device and idempotency key are silently dropped —
+	// and, the other way round, if the nine dashboard callers that pass neither stop
+	// writing nulls.
+	it('lands deviceId and clientOpId in their columns, and null when they are omitted', async () => {
+		const restaurantId = await makeRestaurant();
+		const [owner] = await db
+			.insert(users)
+			.values({
+				restaurantId,
+				role: 'owner',
+				displayName: 'The Owner',
+				email: 'owner@cafe.com',
+				passwordHash: 'not-a-real-hash'
+			})
+			.returning();
+		const { deviceId } = await db.transaction((tx) =>
+			registerDevice(tx, { restaurantId, actorUserId: owner.id, label: 'Counter tablet' })
+		);
+		const clientOpId = crypto.randomUUID();
+
+		await db.transaction(async (tx) => {
+			await writeAudit(tx, {
+				restaurantId,
+				actorUserId: owner.id,
+				subjectUserId: owner.id,
+				event: 'pos.pin.success',
+				details: { deviceCode: 'POS1', role: 'owner' },
+				ip: null,
+				userAgent: null,
+				deviceId,
+				clientOpId
+			});
+			await writeAudit(tx, {
+				restaurantId,
+				actorUserId: owner.id,
+				subjectUserId: null,
+				event: 'logout',
+				details: {},
+				ip: null,
+				userAgent: null
+			});
+		});
+
+		const rows = await db
+			.select({
+				event: auditLog.event,
+				deviceId: auditLog.deviceId,
+				clientOpId: auditLog.clientOpId
+			})
+			.from(auditLog)
+			.orderBy(auditLog.id);
+		expect(rows).toEqual([
+			{ event: 'pos.pin.success', deviceId, clientOpId },
+			{ event: 'logout', deviceId: null, clientOpId: null }
+		]);
 	});
 });
