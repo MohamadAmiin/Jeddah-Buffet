@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 // re-exports — never copied, or the two would drift and this test would start
 // passing against a list that is no longer the one enforced. A relative path so
 // the unit project needs no $lib alias.
-import { PUBLIC_ROUTE_IDS } from '../lib/public-routes';
+import { PUBLIC_ROUTE_IDS, PUBLIC_ROUTE_PREFIXES, isPublicRouteId } from '../lib/public-routes';
 
 const ROUTES_DIR = fileURLToPath(new URL('.', import.meta.url));
 
@@ -60,7 +60,7 @@ describe('every route is guarded or deliberately public', () => {
 		'%s is in the public allow-list or calls a guard',
 		(_label, file) => {
 			const routeId = routeIdOf(file);
-			if (PUBLIC_ROUTE_IDS.has(routeId)) return;
+			if (isPublicRouteId(routeId)) return;
 
 			const source = readFileSync(file, 'utf8');
 			const guarded = GUARD_CALLS.some((call) => source.includes(call + '('));
@@ -84,7 +84,7 @@ describe('every route is guarded or deliberately public', () => {
 	)('%s guards INSIDE its actions, not only in load', (_label, file) => {
 		const source = readFileSync(file, 'utf8');
 		const routeId = routeIdOf(file);
-		if (PUBLIC_ROUTE_IDS.has(routeId)) return;
+		if (isPublicRouteId(routeId)) return;
 
 		// Everything from `export const actions` onward.
 		const actionsBody = source.slice(source.indexOf('export const actions'));
@@ -100,7 +100,21 @@ describe('every route is guarded or deliberately public', () => {
 	it('the allow-list is small and explicit', () => {
 		// If this grows, someone made a route public. That should be a deliberate,
 		// reviewed act — hence a test that notices.
-		expect([...PUBLIC_ROUTE_IDS].sort()).toEqual(['/', '/login', '/register']);
+		//   '/(pos)/pos' — the till's landing screen; its credential is the device
+		//     cookie plus a PIN, and it must render the registration screen when no
+		//     device exists yet, so it cannot sit behind the dashboard login.
+		//   '/api/pos/register' — authenticates from its body with the owner's
+		//     email and password, like /login, and holds no session of its own.
+		//   PUBLIC_ROUTE_PREFIXES '/(pos)/pos' — the till's child screens (pages
+		//     only, never /api), for the same reason as the landing screen.
+		expect([...PUBLIC_ROUTE_IDS].sort()).toEqual([
+			'/',
+			'/(pos)/pos',
+			'/api/pos/register',
+			'/login',
+			'/register'
+		]);
+		expect([...PUBLIC_ROUTE_PREFIXES].sort()).toEqual(['/(pos)/pos']);
 	});
 
 	// The walk searches SOURCE TEXT, so it can be satisfied by a guard call sitting
