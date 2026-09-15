@@ -1,5 +1,5 @@
 import { randomBytes, createHash } from 'node:crypto';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { Cookies } from '@sveltejs/kit';
 import type { DbTx } from '../db/client';
 import type { Executor } from './session';
@@ -153,6 +153,44 @@ export async function revokeDevice(
 			)
 		)
 		.returning({ deviceCode: posDevices.deviceCode, label: posDevices.label });
+	return rows[0] ?? null;
+}
+
+/** What the dashboard may see of a device: no token, and no token hash. */
+export type RegisteredDevice = {
+	id: string;
+	deviceCode: string; // 'POS1'
+	label: string;
+	registeredAt: Date;
+	lastSeenAt: Date | null;
+	revokedAt: Date | null;
+};
+
+/**
+ * The restaurant's MOST RECENT device, revoked or not, or null when it never had
+ * one. An EXPLICIT column list that leaves the token hash out, because the caller
+ * is a dashboard page and SvelteKit serialises its load data into the HTML and
+ * __data.json. A revoked row comes back with revokedAt set: the caller decides
+ * what that means (registered = device !== null && revokedAt === null), and
+ * filtering it out here would make that predicate dead code.
+ */
+export async function getRegisteredDevice(
+	database: Executor,
+	restaurantId: string
+): Promise<RegisteredDevice | null> {
+	const rows = await database
+		.select({
+			id: posDevices.id,
+			deviceCode: posDevices.deviceCode,
+			label: posDevices.label,
+			registeredAt: posDevices.registeredAt,
+			lastSeenAt: posDevices.lastSeenAt,
+			revokedAt: posDevices.revokedAt
+		})
+		.from(posDevices)
+		.where(eq(posDevices.restaurantId, restaurantId))
+		.orderBy(desc(posDevices.registeredAt))
+		.limit(1);
 	return rows[0] ?? null;
 }
 

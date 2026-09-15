@@ -1,11 +1,14 @@
 import { error, fail, type Actions, type ServerLoad } from '@sveltejs/kit';
-import { desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '$lib/server/db/client';
-import { posDevices } from '$lib/server/db/schema/pos-devices';
 import { requirePermission } from '$lib/server/permissions';
 import { requestContext, writeAudit } from '$lib/server/audit';
-import { revokeDevice } from '$lib/server/auth/pos-device';
+import { getRegisteredDevice, revokeDevice } from '$lib/server/auth/pos-device';
+import {
+	getRestaurantWithSettings,
+	settingsComplete,
+	updateSettings
+} from '$lib/server/restaurants';
 
 // THE DASHBOARD'S POS DEVICE PAGE — at /device, and deliberately NOT /pos and not
 // any path beginning with the characters "pos". /pos belongs to the till, and the
@@ -20,10 +23,6 @@ import { revokeDevice } from '$lib/server/auth/pos-device';
 // dashboard"), so the actor is a dashboard session; a form action gets SvelteKit's
 // built-in origin check for free on its form-encoded body; and one revocation path
 // cannot drift from a second.
-//
-// Until T-29 adds +page.svelte, a browser GET /device errors with "Missing
-// +page.svelte component" — expected between the two tasks, as /logout's shape
-// already shows.
 
 export const load: ServerLoad = async (event) => {
 	requirePermission(event, 'admin.devices');
@@ -34,18 +33,12 @@ export const load: ServerLoad = async (event) => {
 	// The restaurant's MOST RECENT device, revoked or not: the page decides what a
 	// revoked row means (registered = device && revokedAt === null), and filtering it
 	// out here would make revokedAt permanently null and that predicate dead code.
-	const [row] = await db
-		.select({
-			id: posDevices.id,
-			deviceCode: posDevices.deviceCode,
-			label: posDevices.label,
-			registeredAt: posDevices.registeredAt,
-			revokedAt: posDevices.revokedAt
-		})
-		.from(posDevices)
-		.where(eq(posDevices.restaurantId, restaurantId))
-		.orderBy(desc(posDevices.registeredAt))
-		.limit(1);
+	const row = await getRegisteredDevice(db, restaurantId);
+	// The launch gate: settingsComplete() is the one list of what a till needs
+	// before it may be opened, and the idle lock is settable on this page.
+	const settings = await settingsComplete(db, restaurantId);
+	const restaurant = await getRestaurantWithSettings(db, restaurantId);
+	if (!restaurant) error(404, 'Restaurant not found');
 
 	// AN EXPLICIT OBJECT LITERAL, never a spread row: pos_devices holds the token
 	// hash, and SvelteKit serialises load data into the page HTML and __data.json.
@@ -56,11 +49,25 @@ export const load: ServerLoad = async (event) => {
 					deviceCode: row.deviceCode,
 					label: row.label,
 					registeredAt: row.registeredAt,
+					lastSeenAt: row.lastSeenAt,
 					revokedAt: row.revokedAt
 				}
-			: null
+			: null,
+		settings: { complete: settings.complete, missing: settings.missing },
+		// Passed through as stored — null until the owner chooses. No fallback
+		// number: a fallback is a column default wearing a disguise.
+		idleLockSeconds: restaurant.posIdleLockSeconds,
+		// The restaurant's own clock for the dates on this page (invariant 11), which
+		// also keeps the server-rendered text and the hydrated text identical.
+		timeZone: restaurant.timeZone
 	};
 };
+
+const idleLockSchema = z.object({
+	posIdleLockSeconds: z.coerce.number().int().min(30).max(1800)
+});
+
+const IDLE_LOCK_RANGE_MESSAGE = 'Choose between 30 seconds and 30 minutes.';
 
 const revokeSchema = z.object({ deviceId: z.string().uuid() });
 
@@ -117,5 +124,45 @@ export const actions: Actions = {
 				? 'Device revoked. It can no longer show the PIN screen.'
 				: 'That device was already revoked.'
 		};
+	},
+
+	setIdleLock: async (event) => {
+		// admin.settings, a DIFFERENT key from the load's admin.devices: this writes a
+		// restaurant setting. Guarded here, in the action — a form action is a
+		// separately reachable POST endpoint (invariant 8).
+		const user = requirePermission(event, 'admin.settings');
+
+		const restaurantId = event.locals.restaurantId;
+		if (!restaurantId) error(500, 'No restaurant in scope');
+
+		const form = await event.request.formData();
+		const parsed = idleLockSchema.safeParse({
+			posIdleLockSeconds: form.get('posIdleLockSeconds')
+		});
+		if (!parsed.success) return fail(400, { message: IDLE_LOCK_RANGE_MESSAGE });
+
+		const { ip, userAgent } = requestContext(event);
+
+		// updateSettings() and NOTHING else: it writes the settings.updated audit row
+		// in this same transaction (invariant 10). A direct
+		// tx.update(restaurantSettings) would change the setting with no audit row.
+		const result = await db.transaction((tx) =>
+			updateSettings(
+				tx,
+				restaurantId,
+				{ posIdleLockSeconds: parsed.data.posIdleLockSeconds },
+				{ actorUserId: user.userId, ip, userAgent }
+			)
+		);
+
+		if (!result.ok) {
+			return fail(400, {
+				message:
+					result.reason === 'invalid_idle_lock'
+						? IDLE_LOCK_RANGE_MESSAGE
+						: 'That setting could not be saved.'
+			});
+		}
+		return { message: result.changed ? 'Auto-lock saved.' : 'No change to save.' };
 	}
 };
