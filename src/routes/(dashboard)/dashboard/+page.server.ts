@@ -3,6 +3,8 @@ import { requirePermission } from '$lib/server/permissions';
 import { db } from '$lib/server/db/client';
 import { getRestaurantWithSettings, settingsComplete } from '$lib/server/restaurants';
 import { recentActivity } from '$lib/server/audit';
+import { employeeSetupStatus } from '$lib/server/auth/employees';
+import { getRegisteredDevice } from '$lib/server/auth/pos-device';
 
 export const load: ServerLoad = async (event) => {
 	// Its own guard, even though the hook already guards the group and the layout
@@ -22,6 +24,13 @@ export const load: ServerLoad = async (event) => {
 	// a tax mode nobody chose. settingsComplete() is the extension point.
 	const settings = await settingsComplete(db, restaurantId);
 
+	// Two more COMPUTED steps, each reduced to a boolean here — the overview needs
+	// neither the rows nor the device. Both go back to "not started" when the data
+	// goes away: a cashier with no PIN cannot sign into the till, and a revoked
+	// device is not a registered one.
+	const staff = await employeeSetupStatus(db, restaurantId);
+	const device = await getRegisteredDevice(db, restaurantId);
+
 	// The restaurant's OWN time zone and opening date, so the screen can report the
 	// local date where the till stands rather than where the browser happens to be.
 	// Invariant 11: the clock that matters is the restaurant's.
@@ -36,6 +45,10 @@ export const load: ServerLoad = async (event) => {
 
 	return {
 		settings,
+		employeesReady: staff.cashierWithPin && staff.waiterWithPin,
+		// The SAME predicate /device uses for "registered", deliberately: one
+		// definition of "the till is registered" for both screens.
+		deviceRegistered: device !== null && device.revokedAt === null,
 		timeZone: restaurant?.timeZone ?? null,
 		openedOn: restaurant?.createdAt ?? null,
 		activity

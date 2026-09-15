@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import type { DbTx } from '../db/client';
 import type { Executor } from './session';
 import { users, type UserRole } from '../db/schema/users';
@@ -28,6 +28,32 @@ export type EmployeeRow = {
 };
 
 type AuditContext = { actorUserId: string; ip: string | null; userAgent: string | null };
+
+/**
+ * Whether the till has a cashier AND a waiter who can sign in: ACTIVE, with a PIN
+ * set. One query grouped by role; booleans out, never a hash. A cashier with no
+ * PIN, or a deactivated one, cannot sign into the till, so neither counts — the
+ * onboarding step is about the PIN, not about the row.
+ */
+export async function employeeSetupStatus(
+	database: Executor,
+	restaurantId: string
+): Promise<{ cashierWithPin: boolean; waiterWithPin: boolean }> {
+	const rows = await database
+		.select({ role: users.role })
+		.from(users)
+		.where(
+			and(
+				eq(users.restaurantId, restaurantId),
+				eq(users.isActive, true),
+				isNotNull(users.pinHash),
+				inArray(users.role, ['cashier', 'waiter'])
+			)
+		)
+		.groupBy(users.role);
+	const roles = new Set(rows.map((row) => row.role));
+	return { cashierWithPin: roles.has('cashier'), waiterWithPin: roles.has('waiter') };
+}
 
 /** Everyone on the restaurant's staff, owner included, by role then name. */
 export async function listEmployees(

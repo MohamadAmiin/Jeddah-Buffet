@@ -7,7 +7,7 @@ import { users } from '../db/schema/users';
 import { auditLog } from '../db/schema/audit';
 import type { Principal } from './session';
 import { verifyPin } from '../../pin';
-import { createEmployee, listEmployees, setEmployeePin } from './employees';
+import { createEmployee, employeeSetupStatus, listEmployees, setEmployeePin } from './employees';
 import { load, actions } from '../../../routes/(dashboard)/employees/+page.server';
 
 const db = testDb();
@@ -325,5 +325,63 @@ describe('listEmployees', () => {
 		for (const row of rows) {
 			expect(Object.keys(row).sort()).toEqual(['displayName', 'hasPin', 'id', 'isActive', 'role']);
 		}
+	});
+});
+
+describe('employeeSetupStatus', () => {
+	// Both directions: the onboarding step must go back to "not started" when the
+	// data goes away, not only forward.
+	it('counts only ACTIVE cashiers and waiters WITH a PIN', async () => {
+		const a = await makeRestaurant();
+		const status = () => employeeSetupStatus(db, a.restaurantId);
+
+		expect(await status()).toEqual({ cashierWithPin: false, waiterWithPin: false });
+
+		// A cashier row with no PIN cannot sign into the till: the step is about the
+		// PIN, not the row.
+		const [sam] = await db
+			.insert(users)
+			.values({ restaurantId: a.restaurantId, role: 'cashier', displayName: 'Sam' })
+			.returning();
+		expect(await status()).toEqual({ cashierWithPin: false, waiterWithPin: false });
+
+		await db.transaction((tx) =>
+			setEmployeePin(tx, a.restaurantId, sam.id, '1234', ctx(a.ownerId))
+		);
+		expect(await status()).toEqual({ cashierWithPin: true, waiterWithPin: false });
+
+		await db.transaction((tx) =>
+			createEmployee(
+				tx,
+				a.restaurantId,
+				{ role: 'waiter', displayName: 'Robin', pin: '5678' },
+				ctx(a.ownerId)
+			)
+		);
+		expect(await status()).toEqual({ cashierWithPin: true, waiterWithPin: true });
+
+		await db.update(users).set({ isActive: false }).where(eq(users.id, sam.id));
+		expect(await status()).toEqual({ cashierWithPin: false, waiterWithPin: true });
+	});
+
+	it("ignores the owner's PIN and another restaurant's staff", async () => {
+		const a = await makeRestaurant('a@cafe.com');
+		const b = await makeRestaurant('b@cafe.com');
+		await db.transaction((tx) =>
+			setEmployeePin(tx, a.restaurantId, a.ownerId, '1234', ctx(a.ownerId))
+		);
+		await db.transaction((tx) =>
+			createEmployee(
+				tx,
+				b.restaurantId,
+				{ role: 'cashier', displayName: 'Sam', pin: '1234' },
+				ctx(b.ownerId)
+			)
+		);
+
+		expect(await employeeSetupStatus(db, a.restaurantId)).toEqual({
+			cashierWithPin: false,
+			waiterWithPin: false
+		});
 	});
 });

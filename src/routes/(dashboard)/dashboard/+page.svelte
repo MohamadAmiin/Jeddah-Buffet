@@ -5,23 +5,25 @@
 
 	let { data } = $props();
 
-	// The real sequence of work. Only the first is computable, because only its
-	// feature exists — the rest are shown as "not started" with one line saying
-	// what each will do. Progress is not faked, and nothing links to a route that
-	// does not exist.
+	// The real sequence of work. The settings, employees and device steps are
+	// computed, because their features exist — the rest are shown as "not started"
+	// with one line saying what each will do. Progress is not faked, and nothing
+	// links to a route that does not exist.
 	const steps = $derived([
 		{
 			label: 'Restaurant settings',
 			done: data.settings.complete,
 			href: '/settings',
+			cta: 'Open settings',
 			detail: data.settings.complete
 				? 'Name and time zone are set.'
 				: `Still needed: ${data.settings.missing.join(', ')}.`
 		},
 		{
 			label: 'Employees and PINs',
-			done: false,
-			href: null,
+			done: data.employeesReady,
+			href: '/employees',
+			cta: 'Add employees',
 			detail: 'Add the cashier and waiter, each with a PIN for the POS.'
 		},
 		{
@@ -38,9 +40,11 @@
 		},
 		{
 			label: 'Register the POS device',
-			done: false,
-			href: null,
-			detail: 'Only a registered device may show the PIN screen.'
+			done: data.deviceRegistered,
+			href: '/device',
+			cta: 'Open the POS page',
+			detail:
+				'The till registers itself when the owner signs in on it once; the POS page shows it and can revoke it.'
 		},
 		{
 			label: 'Open the first POS session',
@@ -235,7 +239,7 @@
 									already carries the state, so an announced badge would say it twice.
 									The DOM text is the lowercase literal `not started` — e2e/auth.spec.ts
 									asserts getByText('not started', { exact: true }) resolves to exactly
-									five elements. `uppercase` changes the rendering only; a capitalised
+									six elements on a freshly registered restaurant. `uppercase` changes the rendering only; a capitalised
 									string in the markup would break the count.
 								-->
 								<span
@@ -246,11 +250,13 @@
 							</div>
 							<p class="text-caption text-ink-2">{step.detail}</p>
 							{#if step.href}
+								<!-- T-43 adds '/menu' to this cast and a cta to the menu step: extend
+								     this shape rather than inventing a second one. -->
 								<a
-									href={resolve(step.href as '/settings')}
+									href={resolve(step.href as '/settings' | '/employees' | '/device')}
 									class="text-caption text-accent mt-1 self-start font-medium underline underline-offset-2"
 								>
-									Open settings
+									{step.cta}
 								</a>
 							{/if}
 						</div>
