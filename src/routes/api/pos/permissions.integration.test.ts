@@ -20,6 +20,7 @@ import { POST as pinPost } from './pin/+server';
 import { GET as employeesGet } from './employees/+server';
 import { POST as registerPost } from './register/+server';
 import { GET as menuVersionGet } from '../menu/version/+server';
+import { GET as menuGet } from '../menu/+server';
 import { actions as deviceActions } from '../../(dashboard)/device/+page.server';
 
 const db = testDb();
@@ -157,6 +158,12 @@ const DEVICE_GUARDED = [
 		method: 'GET',
 		body: () => undefined,
 		handler: menuVersionGet
+	},
+	{
+		routeId: '/api/menu',
+		method: 'GET',
+		body: () => undefined,
+		handler: menuGet
 	}
 ] as const;
 

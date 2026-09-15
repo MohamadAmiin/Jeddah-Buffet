@@ -688,3 +688,31 @@ export async function listMenu(database: Executor, restaurantId: string) {
 
 	return { categories, items, modifierGroups: groups, modifiers: modifierRows, links };
 }
+
+/**
+ * The till's FULL snapshot (spec 5 — no change-only sync). The CALLER runs this in
+ * ONE repeatable-read, read-only transaction, so the version and every row come
+ * from a single database snapshot: under read committed a price edit landing
+ * between two of these queries would ship new rows stamped with the old version,
+ * and the device would believe it was current while holding a menu that is not.
+ *
+ * Live rows only; an unavailable item IS included, because the till greys a
+ * sold-out item out rather than forgetting it exists. The currency code, the tax
+ * mode and the restaurant's tax rate come back AS STORED — null while unchosen —
+ * and the currency is not looked up here: this module imports nothing from
+ * src/lib/money. Prices stay bigint; the route decides how they cross JSON.
+ */
+export async function readMenuSnapshot(database: Executor, restaurantId: string) {
+	const [settings] = await database
+		.select({
+			version: restaurantSettings.menuVersion,
+			currencyCode: restaurantSettings.currencyCode,
+			taxMode: restaurantSettings.taxMode,
+			taxRateBp: restaurantSettings.taxRateBp
+		})
+		.from(restaurantSettings)
+		.where(eq(restaurantSettings.restaurantId, restaurantId))
+		.limit(1);
+	if (!settings) throw new Error(`No settings row for restaurant ${restaurantId}`);
+	return { ...settings, ...(await listMenu(database, restaurantId)) };
+}
