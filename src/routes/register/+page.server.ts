@@ -1,38 +1,30 @@
-import { error, fail, redirect, type Actions, type ServerLoad } from '@sveltejs/kit';
+import { fail, redirect, type Actions, type ServerLoad } from '@sveltejs/kit';
 import { z } from 'zod';
 import { db } from '$lib/server/db/client';
-import { SETUP_TOKEN } from '$lib/server/env';
-import { isRegistrationOpen, registerRestaurant } from '$lib/server/auth/register';
+import { SIGNUP_OPEN } from '$lib/server/env';
+import { registerRestaurant } from '$lib/server/auth/register';
 import { setSessionCookie } from '$lib/server/auth/session';
 import { requestContext } from '$lib/server/audit';
 import { MAX_PASSWORD_BYTES } from '$lib/server/auth/password';
 import { timeZoneSuggestions } from '$lib/server/restaurants';
 
-// PUBLIC by design, listed in hooks.server.ts's PUBLIC_ROUTE_IDS. The hook sends a
-// signed-in visitor to /dashboard before this load runs.
-export const load: ServerLoad = async () => {
-	if (!(await isRegistrationOpen(db))) {
-		// 404, not a redirect and not a friendly "registration is closed" page: the
-		// existence of a closed registration endpoint is not information an anonymous
-		// visitor needs.
-		error(404, 'Not found');
-	}
-
-	if (!SETUP_TOKEN) {
-		// Open, but unusable. Name the variable so the operator can see what to do.
-		error(
-			503,
-			'Registration is not configured: the SETUP_TOKEN environment variable is not set on the server.'
-		);
-	}
-
-	return {
-		// SUGGESTIONS for the picker only. The validator is isValidTimeZone, which
-		// works by construction — this list omits UTC, Asia/Kolkata, Europe/Kyiv and
-		// others that are perfectly valid.
-		timeZones: timeZoneSuggestions()
-	};
-};
+// PUBLIC SIGN-UP (decided 2026-09-15): anyone may create a company here, at any
+// time — no setup token, no first-run gate. Listed in PUBLIC_ROUTE_IDS; the hook
+// sends a signed-in visitor to /dashboard before this load runs.
+//
+// The limits live in registerRestaurant, not here: a per-address throttle and a
+// cap of 3 new companies per address per 24 hours. This route only chooses
+// 'public' mode, and must NEVER pass 'operator', which skips both.
+//
+// With SIGNUP=closed the page still answers and says so, rather than a 404 that
+// leaves a visitor who followed a link wondering what broke.
+export const load: ServerLoad = async () => ({
+	signupOpen: SIGNUP_OPEN,
+	// SUGGESTIONS for the picker only. The validator is isValidTimeZone, which works
+	// by construction — this list omits UTC, Asia/Kolkata, Europe/Kyiv and others
+	// that are perfectly valid.
+	timeZones: SIGNUP_OPEN ? timeZoneSuggestions() : []
+});
 
 const registerSchema = z
 	.object({
@@ -48,8 +40,7 @@ const registerSchema = z
 			.email('Enter a valid email'),
 		// Length is the useful constraint; character-class rules are not.
 		password: z.string().min(8, 'Use at least 8 characters').max(MAX_PASSWORD_BYTES),
-		passwordConfirm: z.string(),
-		setupToken: z.string().min(1, 'Enter the setup token')
+		passwordConfirm: z.string()
 	})
 	.refine((data) => data.password === data.passwordConfirm, {
 		message: 'The two passwords do not match',
@@ -57,11 +48,13 @@ const registerSchema = z
 	});
 
 const REASON_MESSAGE: Record<string, string> = {
-	closed: 'Registration is closed: a restaurant already exists.',
-	bad_token: 'That setup token is not correct.',
-	email_taken: 'That email is already registered.',
+	// Saying an email is taken is an ACCEPTED risk (2026-09-15): with public sign-up,
+	// no email verification and one email per company, a sign-up form cannot hide it.
+	email_taken: 'That email is already registered. Sign in instead, or use another email.',
 	invalid_time_zone: 'That time zone is not recognised.',
-	throttled: 'Too many attempts. Please wait and try again.'
+	throttled: 'Too many attempts. Please wait and try again.',
+	signup_limit:
+		'Too many restaurants have been created from this network today. Please try again tomorrow.'
 };
 
 export const actions: Actions = {
@@ -73,17 +66,22 @@ export const actions: Actions = {
 			ownerDisplayName: form.get('ownerDisplayName'),
 			email: form.get('email'),
 			password: form.get('password'),
-			passwordConfirm: form.get('passwordConfirm'),
-			setupToken: form.get('setupToken')
+			passwordConfirm: form.get('passwordConfirm')
 		};
 
-		// Repopulate the form WITHOUT the password or the setup token.
+		// Repopulate the form WITHOUT the password.
 		const echo = {
 			restaurantName: typeof raw.restaurantName === 'string' ? raw.restaurantName : '',
 			timeZone: typeof raw.timeZone === 'string' ? raw.timeZone : '',
 			ownerDisplayName: typeof raw.ownerDisplayName === 'string' ? raw.ownerDisplayName : '',
 			email: typeof raw.email === 'string' ? raw.email : ''
 		};
+
+		// Checked HERE, not only in the load: a form action is a separately
+		// reachable POST endpoint, and a closed switch must refuse a direct POST too.
+		if (!SIGNUP_OPEN) {
+			return fail(403, { ...echo, message: 'Sign-up is closed right now.' });
+		}
 
 		const parsed = registerSchema.safeParse(raw);
 		if (!parsed.success) {
@@ -93,10 +91,6 @@ export const actions: Actions = {
 
 		const { ip, userAgent } = requestContext(event);
 
-		// registerRestaurant RE-CHECKS that registration is open inside its own
-		// transaction, under an advisory lock. The load's check is a courtesy to the
-		// user, not the gate — removing this duplication would reintroduce the race
-		// two simultaneous submissions exploit.
 		const result = await registerRestaurant(
 			db,
 			{
@@ -104,16 +98,16 @@ export const actions: Actions = {
 				timeZone: parsed.data.timeZone,
 				ownerDisplayName: parsed.data.ownerDisplayName,
 				email: parsed.data.email,
-				password: parsed.data.password,
-				setupToken: parsed.data.setupToken
+				password: parsed.data.password
 			},
-			{ ip, userAgent, expectedSetupToken: SETUP_TOKEN }
+			{ mode: 'public', ip, userAgent }
 		);
 
 		if (!result.ok) {
-			return fail(400, {
+			const limited = result.reason === 'throttled' || result.reason === 'signup_limit';
+			return fail(limited ? 429 : 400, {
 				...echo,
-				message: REASON_MESSAGE[result.reason] ?? 'Registration failed.'
+				message: REASON_MESSAGE[result.reason] ?? 'Sign-up failed.'
 			});
 		}
 

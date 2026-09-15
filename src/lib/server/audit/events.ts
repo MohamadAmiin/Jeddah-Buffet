@@ -7,7 +7,12 @@ import type { UserRole } from '../db/schema/users';
 // a password in details" as a comment is only a wish. Later plans EXTEND this
 // union — they do not widen it to accept arbitrary objects.
 export type AuditEvent =
-	| { event: 'restaurant.registered'; details: { restaurantName: string; timeZone: string } }
+	// signupKey: the address key a PUBLIC sign-up was counted under (null for the
+	// operator CLI). registerRestaurant's daily cap counts these rows.
+	| {
+			event: 'restaurant.registered';
+			details: { restaurantName: string; timeZone: string; signupKey: string | null };
+	  }
 	| { event: 'user.created'; details: { role: UserRole; displayName: string } }
 	| { event: 'login.success'; details: { email: string } }
 	| { event: 'login.failed'; details: { email: string; reason: 'bad_password' } }

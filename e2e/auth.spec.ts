@@ -1,13 +1,11 @@
 import { expect, test } from '@playwright/test';
 import { resetDb, closeResetPool, acquireRunLock } from '../src/lib/server/db/test/reset';
-import { E2E_SETUP_TOKEN } from '../playwright.config';
 
 // DATABASE CHOICE, stated as the task requires: this spec runs against the TEST
 // database (matcami_test), not development data. playwright.config.ts points the
-// preview server's DATABASE_URL at TEST_DATABASE_URL and fixes SETUP_TOKEN, and
-// the reset below clears it. That is necessary because the first step of the
-// journey only works when ZERO restaurants exist — running against development
-// data would either fail or destroy it.
+// preview server's DATABASE_URL at TEST_DATABASE_URL, and the reset below clears
+// it, so the journey starts from zero companies and a fresh daily sign-up cap.
+// Running against development data would destroy it.
 //
 // Runs against the PRODUCTION BUILD. SvelteKit's origin check is inert under
 // `vite dev`, so a dev-server run would prove nothing about the CSRF behaviour
@@ -26,8 +24,7 @@ const PASSWORD = 'a strong enough password';
 test.beforeAll(async () => {
 	// Wait for any concurrent integration run: both share matcami_test and both
 	// truncate it. Without this, a simultaneous `pnpm test` makes this journey fail
-	// at step 2 with "Registration is closed: a restaurant already exists" — a
-	// symptom that points nowhere near the cause.
+	// at a random step with a symptom that points nowhere near the cause.
 	await acquireRunLock();
 	await resetDb();
 });
@@ -36,19 +33,37 @@ test.afterAll(async () => {
 	await closeResetPool();
 });
 
-test('the owner registers, works, signs out and signs back in', async ({ page, context }) => {
-	// ── 1. /register is reachable, because no restaurant exists ────────────────
+test('the owner registers, works, signs out and signs back in', async ({
+	page,
+	context,
+	browser
+}) => {
+	// ── 0. /login points the way to sign-up ────────────────────────────────────
+	// Labelled 0 so every existing `// ── N. … ──` label stays byte-identical. The
+	// link follows the SIGNUP switch; step 7a asserts it is still there once a
+	// company exists.
+	await page.goto('/login');
+	await page.getByRole('link', { name: 'Set up your restaurant' }).click();
+	await expect(page).toHaveURL(/\/register$/);
+
+	// ── 1. /register is reachable, and anyone can sign up ──────────────────────
 	await page.goto('/register');
 	await expect(page.getByRole('heading', { name: 'Set up your restaurant' })).toBeVisible();
 
-	// ── 2. submit with a valid setup token, and land on /dashboard ─────────────
+	// ── 1a. …and it points back to sign-in ─────────────────────────────────────
+	// A pattern, not '/login': the href comes from resolve(), which may render a
+	// relative path such as ./login in the server HTML.
+	await expect(page.getByRole('link', { name: 'Sign in' })).toHaveAttribute('href', /\/login$/);
+
+	// ── 2. sign up, and land on /dashboard ─────────────────────────────────────
+	// No setup token: sign-up is public (decided 2026-09-15).
+	await expect(page.getByLabel('Setup token')).toHaveCount(0);
 	await page.getByLabel('Restaurant name').fill(RESTAURANT);
 	await page.getByLabel('Time zone').fill('Africa/Mogadishu');
 	await page.getByLabel('Your name').fill('The Owner');
 	await page.getByLabel('Email').fill(EMAIL);
 	await page.getByLabel('Password', { exact: true }).fill(PASSWORD);
 	await page.getByLabel('Confirm password').fill(PASSWORD);
-	await page.getByLabel('Setup token').fill(E2E_SETUP_TOKEN);
 	await page.getByRole('button', { name: 'Create restaurant' }).click();
 
 	await expect(page).toHaveURL(/\/dashboard$/);
@@ -190,6 +205,12 @@ test('the owner registers, works, signs out and signs back in', async ({ page, c
 	await page.getByRole('button', { name: 'Sign out' }).click();
 	await expect(page).toHaveURL(/\/login$/);
 
+	// ── 7a. /login still points to sign-up after a company exists ──────────────
+	// Public sign-up: the link follows the SIGNUP switch, not the company count.
+	// The heading first, so the assertion runs on a page that has rendered.
+	await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+	await expect(page.getByRole('link', { name: 'Set up your restaurant' })).toBeVisible();
+
 	// ── 8. /dashboard now redirects to /login WITH a next parameter ────────────
 	await page.goto('/dashboard');
 	await expect(page).toHaveURL(/\/login\?next=/);
@@ -212,22 +233,39 @@ test('the owner registers, works, signs out and signs back in', async ({ page, c
 	await page.goto('/dashboard');
 	await expect(page).toHaveURL(/\/dashboard$/);
 
-	// ── 11. /register is closed ────────────────────────────────────────────────
+	// ── 11. /register stays open ───────────────────────────────────────────────
 	//
 	// TWO behaviours, and which one you see depends on whether you are signed in.
-	// The plan's journey expects a 404 here, but the HOOK runs before T-19's load:
-	// a signed-in visitor is redirected away from /register (T-17 step 4) and never
-	// reaches the load that would 404. Both are specified; assert both rather than
-	// pretend the order is different.
+	// The hook redirects a signed-in visitor away from /register. Signed out, the
+	// form answers even though a company exists: sign-up is public.
 
 	// Signed in: redirected to /dashboard.
 	await page.goto('/register');
 	await expect(page).toHaveURL(/\/dashboard$/);
 
-	// Signed out: a genuine 404, because a restaurant now exists.
+	// Signed out: the sign-up form itself.
 	await page.getByRole('button', { name: 'Sign out' }).click();
 	await expect(page).toHaveURL(/\/login$/);
 
 	const response = await page.goto('/register');
-	expect(response?.status()).toBe(404);
+	expect(response?.status()).toBe(200);
+	await expect(page.getByRole('button', { name: 'Create restaurant' })).toBeVisible();
+
+	// ── 12. a SECOND company signs up, and sees only its own name ──────────────
+	// A fresh browser context, so nothing of the first owner's session carries over.
+	const other = await browser.newContext({ baseURL: test.info().project.use.baseURL });
+	const second = await other.newPage();
+	await second.goto('/register');
+	await second.getByLabel('Restaurant name').fill('The Second Cafe');
+	await second.getByLabel('Time zone').fill('Africa/Mogadishu');
+	await second.getByLabel('Your name').fill('The Second Owner');
+	await second.getByLabel('Email').fill('owner2@e2e.test');
+	await second.getByLabel('Password', { exact: true }).fill(PASSWORD);
+	await second.getByLabel('Confirm password').fill(PASSWORD);
+	await second.getByRole('button', { name: 'Create restaurant' }).click();
+
+	await expect(second).toHaveURL(/\/dashboard$/);
+	await expect(second.getByRole('heading', { name: 'The Second Cafe' })).toBeVisible();
+	await expect(second.getByRole('heading', { name: RENAMED })).toHaveCount(0);
+	await other.close();
 });

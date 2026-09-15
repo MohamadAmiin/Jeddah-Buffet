@@ -38,25 +38,36 @@ server {
 
   # ... ssl_certificate / ssl_certificate_key ...
 
-  # Without this, every audit row records the proxy's address and the login
-  # throttle treats all visitors as one client.
+  # Without this, every audit row records the proxy's address, and public
+  # sign-up's per-address limits treat all visitors as one client.
   proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
   proxy_set_header X-Forwarded-Proto $scheme;
   proxy_set_header Host $host;
 
-  # THE PRIMARY THROTTLE. The application's in-memory bucket (auth/throttle.ts)
-  # is a backstop only: it is process-local, resets on restart, and would not be
-  # shared if a second Node instance were ever added.
-  limit_req zone=login burst=5 nodelay;
   limit_conn addr 10;
+
+  # THE PRIMARY THROTTLE — on the credential POSTs ONLY. The application's
+  # in-memory bucket (auth/throttle.ts) is a backstop: process-local and reset on
+  # restart. Do not put limit_req on the whole server: a cold page load is ~13
+  # requests, so a server-wide 10/min limit answers 503 to half of a first visit
+  # to /register — and every sign-up is a first visit.
+  location = /login            { limit_req zone=auth   burst=5 nodelay; proxy_pass http://127.0.0.1:3000; }
+  location = /api/pos/register { limit_req zone=auth   burst=5 nodelay; proxy_pass http://127.0.0.1:3000; }
+  location = /register         { limit_req zone=signup burst=3 nodelay; proxy_pass http://127.0.0.1:3000; }
 
   location / {
     proxy_pass http://127.0.0.1:3000;
   }
 }
 
-# In the http{} block:
-limit_req_zone $binary_remote_addr zone=login:10m rate=10r/m;
+# In the http{} block. The key is EMPTY for anything but POST, and nginx does not
+# count a request whose key is empty — so loading these pages is never limited.
+map $request_method $post_key {
+  POST    $binary_remote_addr;
+  default "";
+}
+limit_req_zone $post_key zone=auth:10m rate=10r/m;
+limit_req_zone $post_key zone=signup:10m rate=3r/m;
 limit_conn_zone $binary_remote_addr zone=addr:10m;
 ```
 
@@ -65,27 +76,28 @@ Pair the `X-Forwarded-For` header with `ADDRESS_HEADER=x-forwarded-for` and
 front of the app; if you add a CDN or a second proxy, raise it to match, or the
 address read will be a header value an attacker can set.
 
-## 3. First run
+Publish the app's port on the loopback interface only (`-p 127.0.0.1:3000:3000`).
+Reachable directly, a client could send its own `X-Forwarded-For` and get a fresh
+address — and a fresh sign-up allowance — on every request.
 
-The window between deploying and the owner registering is real, and it is
-scanned: a new host's TLS certificate appears in Certificate Transparency logs
-within minutes of issuance, and scanners follow. `/register` creates the owner
-account.
+## 3. Public sign-up
 
-1. Set `SETUP_TOKEN` to a long random value in the server environment.
-2. Deploy and start the app.
-3. Register the owner **immediately**, at `https://<host>/register`.
-4. **Unset `SETUP_TOKEN` and restart.**
+Anyone can create a company at `https://<host>/register` — there is no setup token
+and no first-run step (decided 2026-09-15; it deliberately departs from spec 1 and
+31, which scope the MVP to one restaurant). What stands in front of it:
 
-While `SETUP_TOKEN` is unset, `/register` refuses every submission regardless of
-the restaurant count. Once a restaurant exists, `/register` answers 404 to anyone
-signed out, and redirects a signed-in owner to `/dashboard`.
+- Nginx's `signup` zone above, on POSTs to `/register`.
+- The application's per-address throttle, and a cap of **3 new companies per
+  address per 24 hours**, counted from the audit log, with IPv6 counted per /64.
+- `ADDRESS_HEADER`, which is required in production: without it every visitor
+  looks like the proxy, and one bot's three sign-ups would close sign-up for
+  everyone for a day.
+- **The kill switch:** set `SIGNUP=closed` and restart. `/register` then refuses
+  every submission and `/login` hides its link. Unset it, or set `open`, to reopen.
 
-Additional restaurants are created with `pnpm restaurant:create`, never by
-re-opening the endpoint. There is deliberately no environment variable that
-re-opens `/register`: a flag that re-exposes an unauthenticated account-creating
-endpoint is one forgotten variable away from public signup with none of the
-guards public signup would need.
+Companies can always be created from the server with `pnpm restaurant:create`,
+which runs the same code without the public limits. Suspending or deleting a
+company is not built.
 
 ## 4. Migrations in production
 
@@ -154,9 +166,9 @@ everything the application cannot. Treat it as a production database console.
 | `MIGRATE_DATABASE_URL` | always | The **owner** role. See the note below. |
 | `TEST_DATABASE_URL` | tests only | Must end in `_test`; the harness refuses otherwise. |
 | `ORIGIN` | production | Must be `https:` and not localhost, or the app refuses to start. |
-| `ADDRESS_HEADER` | behind a proxy | `x-forwarded-for`. Without it every audit row records the proxy. |
+| `ADDRESS_HEADER` | production | `x-forwarded-for`. The app refuses to start without it, except on a localhost `ORIGIN`. |
 | `XFF_DEPTH` | behind a proxy | `1` for a single proxy. |
-| `SETUP_TOKEN` | first run only | Unset it after the owner registers. |
+| `SIGNUP` | optional | `open` (the default when unset) or `closed`. Anything else stops the app at boot. |
 
 **One open question, recorded rather than decided.** `env.ts` currently *requires*
 `MIGRATE_DATABASE_URL` at application startup, which puts the **owner** credential

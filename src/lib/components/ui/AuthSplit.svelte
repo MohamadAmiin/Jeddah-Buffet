@@ -31,7 +31,8 @@
 		eyebrow,
 		statement,
 		form,
-		brand
+		brand,
+		alt
 	}: {
 		/**
 		 * The form half's h1. A REAL heading element: the e2e journey locates
@@ -54,6 +55,15 @@
 		form: import('svelte').Snippet;
 		/** The brand half's body: the specimen check and the line saying it is one. */
 		brand: import('svelte').Snippet;
+		/**
+		 * The OTHER door: one line under the form pointing at the sibling page —
+		 * "First time here? Set up your restaurant" on /login, "Already set up? Sign
+		 * in" on /register. Optional, and whether it exists is the CALLER's decision:
+		 * /login passes it only while /register would answer, because a link to a 404
+		 * is worse than no link. `href` must ALREADY come from resolve() in
+		 * $app/paths, as Button's does; this component never resolves it again.
+		 */
+		alt?: { prompt: string; label: string; href: string };
 	} = $props();
 </script>
 
@@ -79,6 +89,44 @@
 			</div>
 
 			{@render form()}
+
+			{#if alt}
+				<!-- The alternate door. The written label carries it; the arrow is
+				     decoration, hidden from assistive technology. The link is UNDERLINED,
+				     not only coloured: accent against the ink-2 prompt beside it is far
+				     below 3:1, so colour alone would not mark it as a link (WCAG 1.4.1).
+				     The rule is decorative, which is what makes border-line legal. -->
+				<hr class="border-line" />
+				<p class="text-ink-2 text-caption flex flex-wrap items-center gap-1.5">
+					{alt.prompt}
+					<!-- The caller passes an href ALREADY produced by resolve(), exactly as
+					     Button's callers do; the rule cannot see through the prop. Scoped to
+					     this ONE element — never ignoreLinks in eslint.config.js, which would
+					     silence the call sites too. A block rather than disable-next-line
+					     because prettier wraps this tag, putting href on a later line. -->
+					<!-- eslint-disable svelte/no-navigation-without-resolve -->
+					<a
+						href={alt.href}
+						class="text-accent inline-flex items-center gap-1.5 font-medium underline underline-offset-4"
+					>
+						{alt.label}
+						<svg
+							aria-hidden="true"
+							class="size-4 shrink-0"
+							viewBox="0 0 16 16"
+							fill="none"
+							stroke="currentColor"
+							stroke-width="1.6"
+							stroke-linecap="round"
+							stroke-linejoin="round"
+						>
+							<path d="M2.5 8h10" />
+							<path d="M8.75 4.25 12.5 8l-3.75 3.75" />
+						</svg>
+					</a>
+					<!-- eslint-enable svelte/no-navigation-without-resolve -->
+				</p>
+			{/if}
 		</div>
 	</div>
 

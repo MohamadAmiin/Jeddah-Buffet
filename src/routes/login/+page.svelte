@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { Alert, AuthSplit, Button, Field } from '$lib/components/ui';
 
-	let { form } = $props();
+	let { data, form } = $props();
 	let submitting = $state(false);
 
 	// Carried through so the hook's ?next= survives the POST.
@@ -122,6 +123,9 @@
 	</p>
 {/snippet}
 
+<!-- The other door is offered whenever public sign-up is open (the SIGNUP switch).
+     With sign-up closed, /register can only say so, and a link to a page that
+     cannot help is worse than no link. -->
 <AuthSplit
 	title="Sign in"
 	caption="Management dashboard"
@@ -129,4 +133,7 @@
 	statement="Every sale, every shift, every number that has to tie out."
 	form={formPanel}
 	brand={brandPanel}
+	alt={data.signupOpen
+		? { prompt: 'New here?', label: 'Set up your restaurant', href: resolve('/register') }
+		: undefined}
 />
