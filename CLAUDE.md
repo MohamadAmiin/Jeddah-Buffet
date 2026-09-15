@@ -8,7 +8,7 @@ Full spec: `docs/spec.md` (v1.1, sections 1–33; the signed-off PDF sits beside
 
 If a change breaks one, stop and say so.
 
-1. **Money is integer minor units.** Integer cents in `bigint` columns; `$8.50` is `850`. NEVER a float or a `numeric` money column, NEVER arithmetic on money outside `src/lib/server/money`, which owns rounding and tax — a float literal, `parseFloat` or a second rounding helper in money code is a bug. Ingredient quantities are the one exception: `numeric(12,3)`. One currency in the MVP. (spec 17, 3)
+1. **Money is integer minor units.** Integer cents in `bigint` columns; `$8.50` is `850`. NEVER a float or a `numeric` money column, NEVER arithmetic on money outside `src/lib/money` — the ISOMORPHIC module that owns rounding and tax and is imported by the server, the POS and reports alike; `src/lib/server/money/` holds ONLY helpers that touch the database — a float literal, `parseFloat` or a second rounding helper in money code is a bug. Ingredient quantities are the one exception: `numeric(12,3)`. One currency in the MVP. (spec 17, 3)
 2. **Posted records are permanent.** NEVER `UPDATE` or `DELETE` a paid order, invoice, payment, stock movement, journal entry or journal line — not in app code, not in a repair script, not in a migration. Correct with a reversing record plus a new correct one. Normal path `OPEN → BILLED → PAID`; adding items to a BILLED order re-opens it; re-opening a PAID order needs owner-PIN approval and writes NEW records — it never rewinds posted ones. (spec 3, 13, 22)
 3. **Journal entries balance in the database.** Debits = credits, enforced by a DB constraint checked at COMMIT, not only in TypeScript; a migration creating journal tables without it is incomplete. Entries are generated from business events by the spec 24 posting-rule table — nobody types a debit. (spec 3, 22, 24)
 4. **One all-or-nothing transaction, and it runs AT PAYMENT.** One DB transaction, in order: record payment(s) → finalize totals → take the invoice number → deduct inventory (recipe × qty, incl. modifiers) → create invoice → post journal entries (sale **and** COGS) → mark order PAID. Adding items and sending to the kitchen are ordinary saves; printing NEVER happens inside the transaction. Splitting it across requests or committing part of it alone is a bug; an offline sale runs the SAME transaction server-side on sync. (spec 13)
@@ -39,7 +39,7 @@ src/
   lib/
     server/
       db/           Drizzle schema (one file per aggregate), generated migrations, client — the ONLY place tables are defined
-      money/        integer cents, allocation, THE rounding rule, tax in both modes
+      money/        ONLY money helpers that touch the DB — the arithmetic is src/lib/money/
       accounting/   chart of accounts, posting rules (one per business event), journal writer
       inventory/    stock movements, recipes + unit conversion, weighted-average costing
       orders/       order/item lifecycle, split & merge bills, THE payment transaction
@@ -47,6 +47,7 @@ src/
       permissions/  RBAC checks + owner-PIN approval gates
       audit/        audit log writer
       restaurants/  restaurant record, settings, and the onRestaurantCreated initializer list
+    money/          ISOMORPHIC: integer minor units, allocation, THE rounding rule, tax in both modes — imported by lib/server/** AND by (pos)
     pos/            IndexedDB, sync queue, service worker, device invoice sequence, print-agent client
     components/ui/  shared dashboard primitives — Button, Field, Card, PageHeader, Alert, StatusMark, ThemeToggle; they implement `docs/design-system.md` §7b
     styles/         tokens.css — THE design tokens; no colour, size or type literal lives anywhere else
@@ -61,7 +62,7 @@ src/
 
 Migrations live in `src/lib/server/db/migrations` (point `drizzle.config.ts` there), are COMMITTED, and are NEVER hand-edited once they have run — add a new one instead.
 
-House convention, not spec (spec 30/32 say only "modular monolith"): `lib/server/**` MUST NOT be imported by client-side code or by `lib/pos/`; `money/` is imported by everything and imports no sibling; `orders/` calls `accounting/`, `inventory/`, `permissions/`, `audit/`, and none of them call back. `restaurants/` is called by routes and by `orders/`-style modules, and calls only `audit/`. `lib/components/**` takes its data as props and imports nothing from `lib/server`; `src/lib/components/components.test.ts` enforces it.
+House convention, not spec (spec 30/32 say only "modular monolith"): `lib/server/**` MUST NOT be imported by client-side code or by `lib/pos/`; `src/lib/money/` is ISOMORPHIC — imported by `lib/server/**`, by `lib/pos/` and by `routes/(pos)/**`, and it imports nothing at all: no sibling, no `lib/server/**`, no Node builtin; `orders/` calls `accounting/`, `inventory/`, `permissions/`, `audit/`, and none of them call back. `restaurants/` is called by routes and by `orders/`-style modules, and calls only `audit/`. `lib/components/**` takes its data as props and imports nothing from `lib/server`; `src/lib/components/components.test.ts` enforces it.
 
 ## Design & UI
 
@@ -143,6 +144,7 @@ Settled by `tasks/restaurant-identity-and-dashboard`. Separate from the open-dec
 - **Password login lockout is a HOUSE RULE adapted from spec 7's PIN rule**, and is paired with a per-IP throttle in front of the hashing. Spec 7's five-attempts/five-minutes is written for PINs on a registered device; applied naively to a public endpoint it is a denial-of-service lever against the only owner account.
 - **Registration is first-run plus `SETUP_TOKEN`.** `/register` answers only while zero restaurants exist AND the submitted token matches. There is NO environment variable that re-opens it; additional restaurants are created with `pnpm restaurant:create`.
 - **The database has TWO roles.** `matcami` owns the tables (migrations, `pg_dump`, `db:studio`); `matcami_app` is the runtime role and owns nothing — no DDL, no `TRUNCATE`. That split is what makes row-level security a later one-line migration instead of a database re-bootstrap, and it is why `.env` carries `DATABASE_URL` alongside `MIGRATE_DATABASE_URL`. Do not point the application at the owner role. See `docs/deployment.md`.
+- **The money arithmetic is ISOMORPHIC, in `src/lib/money/`.** Spec 17 requires one rounding rule in one function used by POS, server and reports; SvelteKit build-blocks `$lib/server/**` from the browser and `eslint.config.js` errors on it from `(pos)`; the spec outranks this file, so invariant 1's wording was corrected rather than the spec bent. `src/lib/server/money/` remains, for DB-touching helpers only. Copying a rounding function into `src/lib/pos/` stays forbidden — two copies of a rounding rule is the bug spec 17 exists to prevent.
 
 ## Do NOT build (spec 31, 28, 27, 5, 15)
 
@@ -156,7 +158,7 @@ Delivery · multiple branches, terminals, warehouses or tenants · Kitchen Displ
 |---|---|---|---|
 | "What does the spec say about X?" | — | `docs/spec.md` | `spec-lookup` |
 | New table, column, index, migration | `lib/server/db` | 3, 17 | `drizzle-schema` |
-| Prices, totals, tax, rounding, currency | `lib/server/money` | 17, 18 | `money-tax` |
+| Prices, totals, tax, rounding, currency | `lib/money` | 17, 18 | `money-tax` |
 | Debits, credits, accounts, journal entries | `lib/server/accounting` | 22–25 | `accounting-posting` |
 | Wrong data already posted / "fix yesterday's X" | `lib/server/accounting` | 3, 14, 22 | `accounting-posting` — reversing entry, NEVER an edit |
 | Recipes, stock, waste, purchases, COGS | `lib/server/inventory` | 15, 16, 19 | `inventory-cogs` |
