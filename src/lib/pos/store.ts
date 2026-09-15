@@ -305,12 +305,17 @@ export async function verifyCachedPin(employeeId: string, pin: string): Promise<
 	return verifyPin(pin, employee.pinPhc);
 }
 
+// One signal: "the unsynced count may have changed". Module scope, so every screen
+// of the page hears it; the connection bar re-counts on it.
+const unsyncedChanges = new EventTarget();
+
 /**
  * Record an offline sign-in. add(), NEVER put(): a second add of the same
  * clientOpId rejects with ConstraintError, which is swallowed — and only that
  * error — so a retry of the same operation is a NO-OP that keeps the FIRST
  * attempt's occurredAt. put() would look identical in a row-count test and
- * quietly rewrite history. Every other error propagates.
+ * quietly rewrite history. Every other error propagates. A write that added a row
+ * signals onUnsyncedChange; a no-op retry does not.
  */
 export async function recordOfflineLogin(record: OfflineLogin): Promise<void> {
 	try {
@@ -320,9 +325,36 @@ export async function recordOfflineLogin(record: OfflineLogin): Promise<void> {
 			})
 		);
 	} catch (error) {
+		// The retry added nothing, so the count did not change: no signal.
 		if ((error as { name?: string } | null)?.name === 'ConstraintError') return;
 		throw error;
 	}
+	unsyncedChanges.dispatchEvent(new Event('change'));
+}
+
+/**
+ * The unsynced work on this till: the offline_logins rows still marked
+ * synced: false. Spec 6 and invariant 5 want this number on screen at all times,
+ * and the connection bar in the /pos layout shows it. It is ONE count: when the
+ * sales plan adds its queue, those rows are counted here too, never shown as a
+ * second number.
+ */
+export function countUnsynced(): Promise<number> {
+	return withDb(async (db) => {
+		const rows = (await valueOf(
+			db.transaction('offline_logins', 'readonly').objectStore('offline_logins').getAll()
+		)) as Array<{ synced?: unknown }>;
+		return rows.filter((row) => row.synced === false).length;
+	});
+}
+
+/**
+ * Call `listener` whenever the unsynced count may have changed, so a screen
+ * re-counts instead of keeping a tally of its own. Returns the unsubscribe.
+ */
+export function onUnsyncedChange(listener: () => void): () => void {
+	unsyncedChanges.addEventListener('change', listener);
+	return () => unsyncedChanges.removeEventListener('change', listener);
 }
 
 /**
@@ -511,6 +543,8 @@ export async function readMenu(): Promise<LocalMenu | null> {
 }
 
 // NO SYNC QUEUE IS BUILT HERE. offline_logins rows are written and left with
-// synced: false; the flush, the retry policy and the unsynced count on screen are
-// the sales plan's work. The store's silence on that is deliberate, not an
-// omission to fix.
+// synced: false, and counted on screen (countUnsynced); the flush and its retry
+// policy are the sales plan's work. The flush belongs in this module and must
+// signal the change the way recordOfflineLogin does, and the sales plan's own queue
+// must add its rows to countUnsynced, so the till shows ONE count of everything
+// still unsynced.

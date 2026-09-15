@@ -8,7 +8,9 @@ import {
 	bindDevice,
 	cacheEmployees,
 	cacheSettings,
+	countUnsynced,
 	forgetDevice,
+	onUnsyncedChange,
 	openPosDb,
 	readBoundDeviceId,
 	readCachedEmployees,
@@ -179,5 +181,30 @@ describe('the POS store', () => {
 		expect(await readCachedIdleSeconds()).toBeNull();
 		expect(await readMenu()).toBeNull();
 		expect((await offlineLogins()).map((r) => r.clientOpId)).toEqual(['op-A']);
+	});
+
+	// Invariant 5: the unsynced count is always on screen, so it must be exact. A
+	// retry that wrote nothing neither counts nor signals.
+	it('counts the unsynced records, and signals only when one was added', async () => {
+		let signals = 0;
+		const stop = onUnsyncedChange(() => signals++);
+		expect(await countUnsynced()).toBe(0);
+
+		await recordOfflineLogin(login('op-1', '2026-09-15T10:00:00.000Z'));
+		expect([await countUnsynced(), signals]).toEqual([1, 1]);
+
+		await recordOfflineLogin(login('op-1', '2026-09-15T10:00:05.000Z'));
+		expect([await countUnsynced(), signals]).toEqual([1, 1]);
+
+		await recordOfflineLogin(login('op-2', '2026-09-15T10:01:00.000Z'));
+		expect([await countUnsynced(), signals]).toEqual([2, 2]);
+
+		// Revocation forgets the bundle, never the unsynced work.
+		await forgetDevice();
+		expect(await countUnsynced()).toBe(2);
+
+		stop();
+		await recordOfflineLogin(login('op-3', '2026-09-15T10:02:00.000Z'));
+		expect([await countUnsynced(), signals]).toEqual([3, 2]);
 	});
 });

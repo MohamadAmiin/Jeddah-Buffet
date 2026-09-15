@@ -28,6 +28,7 @@
 	// is decorative only and never a control edge.
 	import { onMount } from 'svelte';
 	import { dev } from '$app/environment';
+	import { countUnsynced, onUnsyncedChange } from '$lib/pos/store';
 
 	let { children } = $props();
 
@@ -38,11 +39,6 @@
 	// Initialised to `true` so server-rendered HTML does not claim "Offline" before
 	// any listener exists; navigator does not exist during SSR, so it is read only
 	// in onMount.
-	//
-	// THERE IS NO UNSYNCED COUNT YET. Spec 6 requires the number of unsynced
-	// operations to be on screen at all times, and that number arrives with the
-	// sales plan that creates the queue. A hardcoded 0 would be a lie the moment a
-	// queue exists.
 	let online = $state(true);
 
 	onMount(() => {
@@ -54,6 +50,42 @@
 		return () => {
 			removeEventListener('online', up);
 			removeEventListener('offline', down);
+		};
+	});
+
+	// THE UNSYNCED COUNT sits beside it, for the same reason: spec 6 and invariant 5
+	// want the number of unsynced operations on screen at all times, and an offline
+	// sign-in is unsynced work from the moment it is recorded (offline_logins,
+	// synced: false). It is read from IndexedDB after mount and again on every
+	// change the store signals, and only the NEWEST read may land, so a slow read
+	// cannot put an older number back. Nothing is shown before the first read, and a
+	// store that cannot be read is named as such: never a 0 that may be false.
+	let unsynced = $state<number | null>(null);
+	let unsyncedUnreadable = $state(false);
+
+	onMount(() => {
+		let latest = 0;
+		const recount = () => {
+			const mine = ++latest;
+			countUnsynced().then(
+				(count) => {
+					if (mine !== latest) return;
+					unsynced = count;
+					unsyncedUnreadable = false;
+				},
+				() => {
+					if (mine !== latest) return;
+					unsynced = null;
+					unsyncedUnreadable = true;
+				}
+			);
+		};
+		recount();
+		const stop = onUnsyncedChange(recount);
+		return () => {
+			// Bumping `latest` discards any read still in flight.
+			latest++;
+			stop();
 		};
 	});
 
@@ -107,6 +139,13 @@
 	>
 		<span aria-hidden="true" class="font-mono">{online ? '●' : '◆'}</span>
 		<span>{online ? 'Online' : 'Offline'}</span>
+		{#if unsynced !== null}
+			<span aria-hidden="true">·</span>
+			<span>{unsynced} unsynced</span>
+		{:else if unsyncedUnreadable}
+			<span aria-hidden="true">·</span>
+			<span>unsynced count unavailable</span>
+		{/if}
 	</div>
 	{@render children()}
 </div>

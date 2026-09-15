@@ -157,6 +157,8 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	await pickEmployee(tillPage, 'The Cashier');
 	await enterPin(tillPage, '4321');
 	await expect(tillPage.getByRole('heading', { name: /Signed in as The Cashier/ })).toBeVisible();
+	// Online attempts are the server's to record: nothing is waiting on the till.
+	await expect(tillPage.getByRole('status')).toContainText('0 unsynced');
 
 	// ── 6. OFFLINE: the fallback fires, and the failed request is the proof ────
 	const failedPinRequests: string[] = [];
@@ -172,6 +174,8 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	// Only the cached hash can produce this verdict with no network.
 	await enterPin(tillPage, '0000');
 	await expect(tillPage.getByRole('alert')).toContainText('That PIN is not right');
+	// Invariant 5: the unsynced count is on screen, and it moved with no reload.
+	await expect(tillPage.getByRole('status')).toContainText('1 unsynced');
 	await enterPin(tillPage, '5678');
 	await expect(tillPage.getByRole('heading', { name: /Signed in as The Waiter/ })).toBeVisible();
 	// The till ATTEMPTED the network and caught the throw — never assert the
@@ -191,6 +195,7 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	// Spec 6's actual guarantee: a till that dies on refresh is not an offline till.
 	await tillPage.reload();
 	await expect(tillPage.getByRole('status')).toContainText('Offline');
+	await expect(tillPage.getByRole('status')).toContainText('4 unsynced');
 
 	// ── 8. every offline attempt was recorded locally, with its own key ────────
 	const records = await storeRows<OfflineRecord>(tillPage, 'offline_logins');
@@ -269,6 +274,7 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	await expect(tillPage.getByRole('alert')).toContainText('cannot check a PIN offline');
 	await expect(tillPage.getByRole('heading', { name: /Signed in/ })).toHaveCount(0);
 	expect(await storeRows<OfflineRecord>(tillPage, 'offline_logins')).toHaveLength(records.length);
+	await expect(tillPage.getByRole('status')).toContainText(`${records.length} unsynced`);
 
 	await till.close();
 });
