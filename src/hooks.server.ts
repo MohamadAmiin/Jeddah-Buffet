@@ -1,7 +1,7 @@
 import { error, redirect, type Handle } from '@sveltejs/kit';
 import { sequence } from '@sveltejs/kit/hooks';
 import { db } from '$lib/server/db/client';
-import { PUBLIC_ROUTE_IDS } from '$lib/public-routes';
+import { isPublicRouteId } from '$lib/public-routes';
 import { THEME_COOKIE, parseTheme, themeAttribute } from '$lib/theme';
 import {
 	SESSION_COOKIE,
@@ -62,6 +62,7 @@ export const handleSession: Handle = async ({ event, resolve }) => {
 	event.locals.user = null;
 	event.locals.restaurantId = null;
 	event.locals.sessionToken = null;
+	event.locals.posDevice = null;
 
 	const token = event.cookies.get(SESSION_COOKIE);
 	if (!token) return resolve(event);
@@ -77,24 +78,29 @@ export const handleSession: Handle = async ({ event, resolve }) => {
 	event.locals.user = principal;
 	event.locals.sessionToken = token;
 
-	// restaurantId is set for DASHBOARD ROUTES ONLY, and that is deliberate. A
-	// future POS or sync route must resolve its tenant from the registered device
-	// row and its actor from the queued operation, never from whichever owner last
-	// logged in on this browser. Leaving it null elsewhere means such a route fails
-	// loudly the first time somebody wires it to locals by habit, instead of
-	// silently posting one restaurant's sales under another restaurant's id.
+	// restaurantId is set for DASHBOARD ROUTES ONLY, and that is deliberate. A POS
+	// or sync route — the /(pos)/pos till and every /api/pos endpoint — must resolve
+	// its tenant from the registered device row (requireDevice) and its actor from
+	// the queued operation, never from whichever owner last logged in on this
+	// browser. Leaving it null elsewhere means such a route fails loudly the first
+	// time somebody wires it to locals by habit, instead of silently posting one
+	// restaurant's sales under another restaurant's id.
 	if (dashboard) {
 		event.locals.restaurantId = principal.restaurantId;
 
 		// Re-set the cookie when validateSessionToken slid the expiry, so the sliding
-		// window actually reaches the browser. Sliding on DASHBOARD requests only:
-		// an owner's cookie left on a counter tablet must not renew itself forever
-		// through POS or asset traffic.
+		// window actually reaches the browser. Sliding on DASHBOARD requests only: an
+		// owner's cookie left on a counter tablet must not renew itself forever
+		// through POS or asset traffic — the /(pos)/pos till above all, which is
+		// exactly the browser that owner cookie was left on.
 		setSessionCookie(event.cookies, token, principal.expiresAt);
 	}
 
 	return resolve(event);
 };
+
+/** Methods that change state, for the /api same-origin check below. */
+const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 export const handleGuard: Handle = async ({ event, resolve }) => {
 	const routeId = event.route.id;
@@ -109,13 +115,34 @@ export const handleGuard: Handle = async ({ event, resolve }) => {
 	// creates that route is a type error rather than a logic error.
 	const id: string = routeId;
 
-	if (PUBLIC_ROUTE_IDS.has(id)) {
-		// A signed-in visitor has no business on the login or registration page.
+	// SAME-ORIGIN CHECK for state-changing /api requests, placed FIRST so that
+	// /api/pos/register being public does not skip it. SvelteKit's built-in origin
+	// check covers only application/x-www-form-urlencoded, multipart/form-data and
+	// text/plain bodies; the POS endpoints post application/json, which it does not
+	// see. Invariant 12 keeps the built-in check on — this adds the case it omits,
+	// in one place rather than in every route file. Behind Nginx, event.url.origin
+	// depends on adapter-node's ORIGIN variable, which docs/deployment.md covers.
+	if (id.startsWith('/api/') && UNSAFE_METHODS.has(event.request.method)) {
+		if (event.request.headers.get('origin') !== event.url.origin) error(403, 'Forbidden');
+	}
+
+	if (isPublicRouteId(id)) {
+		// A signed-in visitor has no business on the login or registration page. A
+		// signed-in owner opening /pos on the counter tablet is NOT bounced: that is
+		// the device-registration flow.
 		if (user && (id === '/login' || id === '/register')) {
 			redirect(303, '/dashboard');
 		}
 		return resolve(event);
 	}
+
+	// /api routes resolve their own tenant and actor: a POS endpoint from the
+	// registered device row (requireDevice), a dashboard endpoint from the session
+	// (requirePermission). They must answer 403 with a JSON body, never a 303 to an
+	// HTML login page that a fetch() caller cannot follow. T-22's walk asserts that
+	// every +server.ts under src/routes/api/ actually calls one of those guards, so
+	// a route added later cannot inherit this pass-through and stay open.
+	if (id.startsWith('/api/')) return resolve(event);
 
 	// DENY BY DEFAULT.
 	if (!user) {
@@ -132,10 +159,14 @@ export const handleGuard: Handle = async ({ event, resolve }) => {
 	return resolve(event);
 };
 
-// (pos) and /api are in NEITHER list yet, on purpose. When those surfaces arrive
-// they authenticate by registered device and employee PIN rather than by this
-// cookie, and the deny-by-default rule forces them to be added here deliberately,
-// with their own tenant and actor resolution.
+// (pos) and /api were added DELIBERATELY, by tasks/pos-access-and-menu T-17, with
+// their own tenant and actor resolution — which is exactly what the deny-by-default
+// rule existed to force. /(pos)/pos and the screens under it are public in the
+// sense of "no dashboard session required": their credential is the registered
+// device cookie plus an employee PIN, never this cookie. /api/pos/register
+// authenticates from its body with the owner's email and password. Every other
+// /api route passes through to its own guard. Everything else stays denied by
+// default.
 //
 // The origin/CSRF check is NOT configured anywhere: SvelteKit's default is on and
 // invariant 12 requires it stay on. If a production deployment returns 403 on form

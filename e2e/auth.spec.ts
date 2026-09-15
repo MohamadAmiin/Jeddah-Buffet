@@ -71,11 +71,17 @@ test('the owner registers, works, signs out and signs back in', async ({
 	// ── 3. the overview shows the restaurant and the checklist ─────────────────
 	await expect(page.getByRole('heading', { name: RESTAURANT })).toBeVisible();
 	await expect(page.getByRole('heading', { name: 'Getting set up' })).toBeVisible();
-	// The settings step is done; the other five are not started. `exact` matters:
-	// each step renders the phrase twice — a visible badge and a screen-reader-only
-	// " — not started" — so a loose match counts ten.
+	// None of the six steps is done yet — not even the settings step: registration
+	// sets the name and time zone but leaves the POS idle lock unset, and
+	// settingsComplete() requires it (T-08), so that step reads "Still needed: POS
+	// idle lock." `exact` matters: each step renders the phrase twice — a visible
+	// badge and a screen-reader-only " — not started" — so a loose match counts
+	// twelve.
 	await expect(page.getByText('Restaurant settings')).toBeVisible();
-	await expect(page.getByText('not started', { exact: true })).toHaveCount(5);
+	await expect(page.getByText('not started', { exact: true })).toHaveCount(6);
+	// The Menu rail row is a real link now (T-39, confirmed by T-43), not a disabled
+	// "Soon" row. `exact`: the checklist's "Open menu" link would match a loose name.
+	await expect(page.getByRole('link', { name: 'Menu', exact: true })).toBeVisible();
 
 	// ── 3a. the bare host, WITH a session ──────────────────────────────────────
 	// Labelled 3a deliberately: it leaves every existing `// ── N. … ──` label
@@ -180,9 +186,20 @@ test('the owner registers, works, signs out and signs back in', async ({
 	await page.goto('/settings');
 	await expect(page.getByRole('heading', { name: 'Restaurant settings' })).toBeVisible();
 	await page.getByLabel('Restaurant name').fill(RENAMED);
+	// The tax and currency settings (T-36), saved by the same form.
+	await page.getByLabel('Tax mode').fill('exclusive');
+	await page.getByLabel('Tax rate (basis points)').fill('825');
+	await page.getByLabel('Currency code').fill('USD');
 	await page.getByRole('button', { name: 'Save settings' }).click();
 	await expect(page.getByRole('alert')).toContainText('Settings saved.');
 	await expect(page.getByRole('heading', { name: RENAMED })).toBeVisible();
+
+	// The checklist now names ONLY the idle lock: tax and currency have left the
+	// list. The idle lock is saved on /device, which this journey never visits, so
+	// the settings step legitimately stays "not started" — do not assert that it
+	// flips to done, and do not assert that the count drops.
+	await page.goto('/dashboard');
+	await expect(page.getByText('Still needed: POS idle lock.')).toBeVisible();
 
 	// ── 7. sign out, landing on /login ─────────────────────────────────────────
 	await page.getByRole('button', { name: 'Sign out' }).click();

@@ -24,10 +24,14 @@
 		| 'expenses'
 		| 'reports'
 		| 'employees'
-		| 'devices'
+		| 'pos'
 		| 'settings';
 
-	type NavItem = { label: string; href: '/dashboard' | '/settings' | null; icon: IconName };
+	type NavItem = {
+		label: string;
+		href: '/dashboard' | '/settings' | '/device' | '/employees' | '/menu' | null;
+		icon: IconName;
+	};
 	type NavGroup = { id: string; label: string | null; items: NavItem[] };
 
 	let {
@@ -70,10 +74,13 @@
 	}
 
 	// One entry per dashboard permission key, in the order an owner sets the
-	// restaurant up. Only Overview and Settings have routes; the other seven render
-	// as visibly disabled WITH A REASON rather than as dead links that 404, or as
-	// hidden items that leave the owner wondering whether the product has those
-	// features at all.
+	// restaurant up. Rows with an href have routes; the rest render as visibly
+	// disabled WITH A REASON rather than as dead links that 404, or as hidden items
+	// that leave the owner wondering whether the product has those features at all.
+	//
+	// The POS row's LABEL is "POS" and its URL is /device, on purpose: /pos belongs
+	// to the till, whose service worker is scoped to /pos by STRING prefix, so no
+	// dashboard URL may begin with the characters "pos".
 	const groups: NavGroup[] = [
 		{
 			id: 'nav-workspace',
@@ -84,7 +91,7 @@
 			id: 'nav-catalogue',
 			label: 'Catalogue',
 			items: [
-				{ label: 'Menu', href: null, icon: 'menu' },
+				{ label: 'Menu', href: '/menu', icon: 'menu' },
 				{ label: 'Inventory', href: null, icon: 'inventory' }
 			]
 		},
@@ -101,8 +108,8 @@
 			id: 'nav-setup',
 			label: 'Setup',
 			items: [
-				{ label: 'Employees', href: null, icon: 'employees' },
-				{ label: 'Devices', href: null, icon: 'devices' },
+				{ label: 'Employees', href: '/employees', icon: 'employees' },
+				{ label: 'POS', href: '/device', icon: 'pos' },
 				{ label: 'Settings', href: '/settings', icon: 'settings' }
 			]
 		}
@@ -187,9 +194,12 @@
 			<path d="M2.75 20a6.25 6.25 0 0 1 12.5 0" />
 			<path d="M16.5 4.8a3.5 3.5 0 0 1 0 6.4" />
 			<path d="M17.8 14.2A6.25 6.25 0 0 1 21.25 20" />
-		{:else if name === 'devices'}
-			<rect x="6" y="2.5" width="12" height="19" rx="2.5" />
-			<path d="M10.5 18.5h3" />
+		{:else if name === 'pos'}
+			<rect x="3.5" y="9.5" width="17" height="11" rx="2" />
+			<path d="M7.5 9.5V5A1.5 1.5 0 0 1 9 3.5h6A1.5 1.5 0 0 1 16.5 5v4.5" />
+			<path d="M7.5 13.5h5" />
+			<path d="M7.5 17h5" />
+			<path d="M16 15.5h.5" />
 		{:else if name === 'settings'}
 			<path d="M4 7h10" />
 			<path d="M18 7h2" />

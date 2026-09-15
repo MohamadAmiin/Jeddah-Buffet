@@ -1,0 +1,11 @@
+{
+	"name": "matcami POS",
+	"short_name": "matcami POS",
+	"scope": "/pos",
+	"start_url": "/pos",
+	"display": "fullscreen",
+	"orientation": "landscape",
+	"background_color": "#e4e9ee",
+	"theme_color": "#e4e9ee",
+	"icons": [{ "src": "/pos-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

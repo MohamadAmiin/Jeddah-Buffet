@@ -20,7 +20,14 @@ afterAll(async () => {
 });
 
 /** Every non-public route id this branch defines. */
-const DASHBOARD_ROUTE_IDS = ['/(dashboard)', '/(dashboard)/dashboard', '/(dashboard)/settings'];
+const DASHBOARD_ROUTE_IDS = [
+	'/(dashboard)',
+	'/(dashboard)/dashboard',
+	'/(dashboard)/settings',
+	'/(dashboard)/device',
+	'/(dashboard)/employees',
+	'/(dashboard)/menu'
+];
 const NON_PUBLIC_ROUTE_IDS = [...DASHBOARD_ROUTE_IDS, '/logout'];
 
 async function makeUser(role: 'owner' | 'cashier' | 'waiter') {
@@ -222,5 +229,85 @@ describe('GET /logout is not a thing', () => {
 			status = (thrown as { status?: number }).status;
 		}
 		expect(status).toBe(405);
+	});
+});
+
+// T-17: /pos and /api/pos, opened DELIBERATELY. "Public" means "no dashboard
+// session required" — the till's credential is the device cookie plus a PIN.
+describe('MANDATORY (spec 29): the POS surfaces in the hook', () => {
+	it('/(pos)/pos answers without a session — not a 303 to /login', async () => {
+		expect(await runHook('/(pos)/pos')).toEqual({ status: 200 });
+	});
+
+	it('the screens under /(pos)/pos answer without a session too', async () => {
+		expect(await runHook('/(pos)/pos/register')).toEqual({ status: 200 });
+	});
+
+	it('the dashboard is NOT widened: anonymous still redirects to /login', async () => {
+		const result = await runHook('/(dashboard)/dashboard');
+		expect(result.status).toBe(303);
+		expect(result.location).toMatch(/^\/login\?next=/);
+	});
+
+	// The 403 for a missing device is the ROUTE's job (requireDevice), not the
+	// hook's. A 303 here would hand a fetch() caller an HTML login page.
+	it('/api/pos/pin passes through the hook with no session', async () => {
+		const result = await runHook('/api/pos/pin');
+		expect(result.status).not.toBe(303);
+		expect(result.status).toBe(200);
+	});
+
+	it('refuses a cross-origin POST to /api with 403, and passes a same-origin one', async () => {
+		const withOrigin = (origin: string) => {
+			const event = makeEvent('/api/pos/pin', undefined, 'POST');
+			(event as { request: Request }).request = new Request(event.url, {
+				method: 'POST',
+				headers: { origin }
+			});
+			return event;
+		};
+
+		let status: number | undefined;
+		try {
+			await runBothHandlers(withOrigin('https://evil.test'));
+		} catch (thrown) {
+			status = (thrown as { status?: number }).status;
+		}
+		expect(status).toBe(403);
+
+		const response = await runBothHandlers(withOrigin('http://localhost'));
+		expect(response.status).toBe(200);
+	});
+
+	// A signed-in owner reaching the till is the registration flow, not a mistake.
+	it('/(pos)/pos lets a signed-in owner through instead of bouncing to /dashboard', async () => {
+		const { token } = await makeUser('owner');
+		expect(await runHook('/(pos)/pos', token)).toEqual({ status: 200 });
+	});
+
+	it('gives a POS request no dashboard tenant and never renews the owner cookie', async () => {
+		const { token } = await makeUser('owner');
+
+		const cookiesSetOn = async (routeId: string) => {
+			const event = makeEvent(routeId, token);
+			const names: string[] = [];
+			const set = event.cookies.set.bind(event.cookies);
+			event.cookies.set = ((name: string, value: string, options: never) => {
+				names.push(name);
+				return set(name, value, options);
+			}) as typeof event.cookies.set;
+			await runBothHandlers(event);
+			return { event, names };
+		};
+
+		const pos = await cookiesSetOn('/(pos)/pos');
+		expect(pos.event.locals.user).not.toBeNull();
+		expect(pos.event.locals.restaurantId).toBeNull();
+		expect(pos.names).not.toContain(SESSION_COOKIE);
+
+		// The comparison that makes the assertion above mean something: on a
+		// dashboard route the same session IS renewed.
+		const dashboard = await cookiesSetOn('/(dashboard)/dashboard');
+		expect(dashboard.names).toContain(SESSION_COOKIE);
 	});
 });
