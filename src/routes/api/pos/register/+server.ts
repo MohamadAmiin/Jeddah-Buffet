@@ -7,7 +7,12 @@ import { users } from '$lib/server/db/schema/users';
 import { requestContext, writeAudit } from '$lib/server/audit';
 import { loginWithPassword } from '$lib/server/auth/login';
 import { MAX_PASSWORD_BYTES } from '$lib/server/auth/password';
-import { registerDevice, setDeviceCookie } from '$lib/server/auth/pos-device';
+import {
+	DEVICE_COOKIE,
+	registerDevice,
+	setDeviceCookie,
+	validateDeviceToken
+} from '$lib/server/auth/pos-device';
 import {
 	SESSION_COOKIE,
 	deleteSessionCookie,
@@ -57,6 +62,21 @@ export const POST: RequestHandler = async (event) => {
 	// Echo nothing back — never the password, never the email.
 	if (!parsed.success) return json({ error: 'invalid_request' }, { status: 400 });
 	const { email, password, label } = parsed.data;
+
+	// A LIVE TILL IS NEVER REGISTERED OVER. If this browser already carries a device
+	// cookie that resolves to a non-revoked device — of ANY restaurant — the request
+	// is refused before a credential is checked. Registering would overwrite that
+	// cookie and leave the other restaurant's row live but orphaned: its /device page
+	// still showing a till it no longer has, its audit log silent, and its owner
+	// answered 409 on re-registering. The one-device check below is scoped to the
+	// CALLER's restaurant and cannot see this. The tablet's owner revokes it from
+	// their dashboard first; a revoked cookie resolves to null and passes.
+	// (Requested by the public-sign-up planning session: once anyone can create an
+	// owner account, this is a cross-company device takeover.)
+	const presented = event.cookies.get(DEVICE_COOKIE);
+	if (presented && (await validateDeviceToken(db, presented))) {
+		return json({ error: 'device_already_registered' }, { status: 409 });
+	}
 
 	const { ip, userAgent } = requestContext(event);
 
@@ -145,7 +165,7 @@ export const POST: RequestHandler = async (event) => {
 		const existing = event.cookies.get(SESSION_COOKIE);
 		if (existing) await invalidateSession(tx, sessionIdFromToken(existing));
 
-		return { ok: true as const, deviceCode, token, expiresAt };
+		return { ok: true as const, deviceId, deviceCode, token, expiresAt };
 	});
 
 	// Responses are built AFTER the transaction, from what it returned.
@@ -157,5 +177,10 @@ export const POST: RequestHandler = async (event) => {
 	// does — never in the response body.
 	setDeviceCookie(event.cookies, outcome.token, outcome.expiresAt);
 	deleteSessionCookie(event.cookies);
-	return json({ deviceCode: outcome.deviceCode, label }, { status: 201 });
+	// deviceId — the pos_devices uuid — because a code like POS1 repeats in every
+	// restaurant and so cannot identify this device to anything.
+	return json(
+		{ deviceId: outcome.deviceId, deviceCode: outcome.deviceCode, label },
+		{ status: 201 }
+	);
 };

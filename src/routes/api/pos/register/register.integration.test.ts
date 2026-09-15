@@ -161,14 +161,16 @@ describe('POST /api/pos/register', () => {
 		);
 
 		expect(ok.status).toBe(201);
-		expect(Object.keys(ok.body)).toEqual(['deviceCode', 'label']);
-		expect(ok.body).toEqual({ deviceCode: 'POS1', label: 'Front counter' });
+		expect(Object.keys(ok.body)).toEqual(['deviceId', 'deviceCode', 'label']);
+		expect(ok.body).toMatchObject({ deviceCode: 'POS1', label: 'Front counter' });
 
 		const devices = await db
 			.select()
 			.from(posDevices)
 			.where(eq(posDevices.restaurantId, restaurantId));
 		expect(devices).toHaveLength(1);
+		// The uuid, because POS1 repeats in every restaurant.
+		expect(ok.body.deviceId).toBe(devices[0].id);
 		expect(devices[0].deviceCode).toBe('POS1');
 		expect(devices[0].revokedAt).toBeNull();
 
@@ -266,5 +268,57 @@ describe('POST /api/pos/register', () => {
 
 		expect(result.status).toBe(201);
 		expect(result.body.deviceCode).toBe('POS1');
+	});
+
+	// A cross-company DEVICE TAKEOVER: restaurant B's owner, standing at restaurant
+	// A's registered tablet, must not be able to turn it into B's till.
+	it("refuses to register over another restaurant's LIVE till, and touches nothing", async () => {
+		const a = await makeOwner('a@cafe.com', 'Cafe A');
+		const b = await makeOwner('b@cafe.com', 'Cafe B');
+		const first = await register({ email: 'a@cafe.com', password: PASSWORD, label: 'A till' });
+		const tokenOfA = first.set.find((c) => c.name === DEVICE_COOKIE)!.value;
+
+		const takeover = await register(
+			{ email: 'b@cafe.com', password: PASSWORD, label: 'B till' },
+			{ cookies: { [DEVICE_COOKIE]: tokenOfA } }
+		);
+
+		expect(takeover.status).toBe(409);
+		expect(takeover.body).toEqual({ error: 'device_already_registered' });
+		// No cookie set, A's device still live and still A's, nothing for B.
+		expect(takeover.set.find((c) => c.name === DEVICE_COOKIE)).toBeUndefined();
+		expect(await validateDeviceToken(db, tokenOfA)).toMatchObject({
+			restaurantId: a.restaurantId,
+			deviceCode: 'POS1'
+		});
+		expect(await countWhere(posDevices, eq(posDevices.restaurantId, b.restaurantId))).toBe(0);
+		expect(await countWhere(sessions, eq(sessions.userId, b.ownerId))).toBe(0);
+	});
+
+	it('registers a tablet whose old cookie was REVOKED: its owner released it first', async () => {
+		const a = await makeOwner('a@cafe.com', 'Cafe A');
+		const b = await makeOwner('b@cafe.com', 'Cafe B');
+		const first = await register({ email: 'a@cafe.com', password: PASSWORD, label: 'A till' });
+		const tokenOfA = first.set.find((c) => c.name === DEVICE_COOKIE)!.value;
+		const [deviceOfA] = await db
+			.select({ id: posDevices.id })
+			.from(posDevices)
+			.where(eq(posDevices.restaurantId, a.restaurantId));
+		await db.transaction((tx) =>
+			revokeDevice(tx, {
+				deviceId: deviceOfA.id,
+				restaurantId: a.restaurantId,
+				actorUserId: a.ownerId
+			})
+		);
+
+		const moved = await register(
+			{ email: 'b@cafe.com', password: PASSWORD, label: 'B till' },
+			{ cookies: { [DEVICE_COOKIE]: tokenOfA } }
+		);
+
+		expect(moved.status).toBe(201);
+		expect(moved.body.deviceCode).toBe('POS1');
+		expect(await countWhere(posDevices, eq(posDevices.restaurantId, b.restaurantId))).toBe(1);
 	});
 });
