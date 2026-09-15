@@ -19,6 +19,7 @@ import { DEVICE_COOKIE, registerDevice, revokeDevice } from '$lib/server/auth/po
 import { POST as pinPost } from './pin/+server';
 import { GET as employeesGet } from './employees/+server';
 import { POST as registerPost } from './register/+server';
+import { GET as menuVersionGet } from '../menu/version/+server';
 import { actions as deviceActions } from '../../(dashboard)/device/+page.server';
 
 const db = testDb();
@@ -150,6 +151,12 @@ const DEVICE_GUARDED = [
 		method: 'GET',
 		body: () => undefined,
 		handler: employeesGet
+	},
+	{
+		routeId: '/api/menu/version',
+		method: 'GET',
+		body: () => undefined,
+		handler: menuVersionGet
 	}
 ] as const;
 

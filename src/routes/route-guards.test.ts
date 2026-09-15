@@ -168,6 +168,7 @@ describe('every /api route is guarded', () => {
 	// dashboard form action at /device, deliberately (T-21).
 	it('finds exactly the /api routes the plan has shipped', () => {
 		expect(apiServerFiles.map(routeIdOf).sort()).toEqual([
+			'/api/menu/version',
 			'/api/pos/employees',
 			'/api/pos/pin',
 			'/api/pos/register'
