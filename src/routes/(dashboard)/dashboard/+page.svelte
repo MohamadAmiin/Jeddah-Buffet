@@ -16,7 +16,7 @@
 			href: '/settings',
 			cta: 'Open settings',
 			detail: data.settings.complete
-				? 'Name and time zone are set.'
+				? 'Name, time zone, tax and currency are set.'
 				: `Still needed: ${data.settings.missing.join(', ')}.`
 		},
 		{

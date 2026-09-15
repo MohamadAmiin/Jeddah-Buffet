@@ -168,9 +168,20 @@ test('the owner registers, works, signs out and signs back in', async ({ page, c
 	await page.goto('/settings');
 	await expect(page.getByRole('heading', { name: 'Restaurant settings' })).toBeVisible();
 	await page.getByLabel('Restaurant name').fill(RENAMED);
+	// The tax and currency settings (T-36), saved by the same form.
+	await page.getByLabel('Tax mode').fill('exclusive');
+	await page.getByLabel('Tax rate (basis points)').fill('825');
+	await page.getByLabel('Currency code').fill('USD');
 	await page.getByRole('button', { name: 'Save settings' }).click();
 	await expect(page.getByRole('alert')).toContainText('Settings saved.');
 	await expect(page.getByRole('heading', { name: RENAMED })).toBeVisible();
+
+	// The checklist now names ONLY the idle lock: tax and currency have left the
+	// list. The idle lock is saved on /device, which this journey never visits, so
+	// the settings step legitimately stays "not started" — do not assert that it
+	// flips to done, and do not assert that the count drops.
+	await page.goto('/dashboard');
+	await expect(page.getByText('Still needed: POS idle lock.')).toBeVisible();
 
 	// ── 7. sign out, landing on /login ─────────────────────────────────────────
 	await page.getByRole('button', { name: 'Sign out' }).click();

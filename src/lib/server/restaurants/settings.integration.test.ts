@@ -11,6 +11,8 @@ import {
 	onRestaurantCreated,
 	canonicalTimeZone
 } from './index';
+import { exact, minor } from '../../money';
+import { taxOnLine } from '../../money/tax';
 
 const db = testDb();
 const ctx = { actorUserId: null, ip: null, userAgent: null };
@@ -151,11 +153,37 @@ describe('updateSettings', () => {
 });
 
 describe('settingsComplete', () => {
-	// Registration sets the name and time zone but leaves the POS idle lock null —
-	// there is no default for it anywhere — so a fresh restaurant is incomplete for
-	// exactly that one reason.
-	it('is incomplete straight after registration, missing only the POS idle lock', async () => {
+	// Registration sets the name and time zone and nothing else — there is no default
+	// for the idle lock, the tax mode, the tax rate or the currency anywhere — so a
+	// fresh restaurant is incomplete for exactly those four reasons, in this order.
+	// T-08 added the first; T-36 APPENDED the other three.
+	it('is incomplete straight after registration, missing the idle lock, tax and currency', async () => {
 		const id = await makeRestaurant();
+		expect(await settingsComplete(db, id)).toEqual({
+			complete: false,
+			missing: ['POS idle lock', 'tax mode', 'tax rate', 'currency']
+		});
+	});
+
+	it('is complete once all four are chosen', async () => {
+		const id = await makeRestaurant();
+		const result = await db.transaction((tx) =>
+			updateSettings(
+				tx,
+				id,
+				{ taxMode: 'inclusive', taxRateBp: 825, currencyCode: 'USD', posIdleLockSeconds: 120 },
+				ctx
+			)
+		);
+		expect(result.ok).toBe(true);
+		expect(await settingsComplete(db, id)).toEqual({ complete: true, missing: [] });
+	});
+
+	it('stays incomplete with only the three new settings chosen: the idle lock is still missing', async () => {
+		const id = await makeRestaurant();
+		await db.transaction((tx) =>
+			updateSettings(tx, id, { taxMode: 'exclusive', taxRateBp: 825, currencyCode: 'USD' }, ctx)
+		);
 		expect(await settingsComplete(db, id)).toEqual({
 			complete: false,
 			missing: ['POS idle lock']
@@ -171,7 +199,7 @@ describe('settingsComplete', () => {
 });
 
 describe('the POS idle lock setting (T-08)', () => {
-	it('is written by updateSettings with ONE audit row, and completes the settings', async () => {
+	it('is written by updateSettings with ONE audit row, and leaves the missing list', async () => {
 		const id = await makeRestaurant();
 
 		const result = await db.transaction((tx) =>
@@ -182,7 +210,11 @@ describe('the POS idle lock setting (T-08)', () => {
 			changed: true,
 			changes: { posIdleLockSeconds: { old: null, new: 120 } }
 		});
-		expect(await settingsComplete(db, id)).toEqual({ complete: true, missing: [] });
+		// The idle lock has left the list; the three T-36 settings are still unchosen.
+		expect(await settingsComplete(db, id)).toEqual({
+			complete: false,
+			missing: ['tax mode', 'tax rate', 'currency']
+		});
 
 		const rows = await db.select().from(auditLog);
 		expect(rows).toHaveLength(1);
@@ -233,6 +265,108 @@ describe('the POS idle lock setting (T-08)', () => {
 		);
 		expect(again).toEqual({ ok: true, changed: false });
 		expect(await db.select().from(auditLog)).toHaveLength(1);
+	});
+});
+
+describe('the tax and currency settings (T-36)', () => {
+	// MANDATORY (spec 29 — tax in BOTH modes): the mode genuinely travels from the
+	// database into the calculation, and nothing in the path defaults it.
+	it('carries each tax mode from the database into taxOnLine', async () => {
+		const exclusiveId = await makeRestaurant('Exclusive Cafe');
+		const inclusiveId = await makeRestaurant('Inclusive Cafe');
+		await db.transaction((tx) =>
+			updateSettings(tx, exclusiveId, { taxMode: 'exclusive', taxRateBp: 825 }, ctx)
+		);
+		await db.transaction((tx) =>
+			updateSettings(tx, inclusiveId, { taxMode: 'inclusive', taxRateBp: 825 }, ctx)
+		);
+
+		const exclusive = (await getRestaurantWithSettings(db, exclusiveId))!;
+		const inclusive = (await getRestaurantWithSettings(db, inclusiveId))!;
+		expect(exclusive.taxMode).toBe('exclusive');
+		expect(inclusive.taxMode).toBe('inclusive');
+
+		// Exclusive: 1000 is the net and 82.5 goes on top.
+		expect(taxOnLine(minor(1000n), exclusive.taxRateBp!, exclusive.taxMode!)).toEqual({
+			net: exact(1000n),
+			tax: exact(825000n, 10000n),
+			gross: exact(10825000n, 10000n)
+		});
+		// Inclusive: 1000 already contains the tax.
+		expect(taxOnLine(minor(1000n), inclusive.taxRateBp!, inclusive.taxMode!)).toEqual({
+			net: exact(10000000n, 10825n),
+			tax: exact(825000n, 10825n),
+			gross: exact(1000n)
+		});
+	});
+
+	it('writes ONE audit row carrying the old and new tax mode', async () => {
+		const id = await makeRestaurant();
+
+		await db.transaction((tx) => updateSettings(tx, id, { taxMode: 'exclusive' }, ctx));
+
+		const rows = await db.select().from(auditLog);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].details).toEqual({
+			changes: { taxMode: { old: null, new: 'exclusive' } }
+		});
+	});
+
+	it('refuses a fractional tax rate and writes nothing — neither the column nor an audit row', async () => {
+		const id = await makeRestaurant();
+
+		const result = await db.transaction((tx) => updateSettings(tx, id, { taxRateBp: 8.25 }, ctx));
+
+		expect(result).toEqual({ ok: false, reason: 'invalid_tax_rate' });
+		expect(await db.select().from(auditLog)).toHaveLength(0);
+		expect((await getRestaurantWithSettings(db, id))!.taxRateBp).toBeNull();
+	});
+
+	it.each([
+		[{ taxMode: 'included' }, 'invalid_tax_mode'],
+		[{ taxRateBp: -1 }, 'invalid_tax_rate'],
+		[{ taxRateBp: 10_001 }, 'invalid_tax_rate'],
+		[{ currencyCode: 'SOS' }, 'invalid_currency'],
+		[{ currencyCode: 'usd' }, 'invalid_currency']
+	] as const)('refuses %j with %s and writes nothing', async (changes, reason) => {
+		const id = await makeRestaurant();
+
+		const result = await db.transaction((tx) => updateSettings(tx, id, changes, ctx));
+
+		expect(result).toEqual({ ok: false, reason });
+		expect(await db.select().from(auditLog)).toHaveLength(0);
+	});
+
+	it('writes all three and a rename in ONE row of the settings table and ONE audit row', async () => {
+		const id = await makeRestaurant('Old Name');
+
+		await db.transaction((tx) =>
+			updateSettings(
+				tx,
+				id,
+				{ name: 'New Name', taxMode: 'exclusive', taxRateBp: 825, currencyCode: 'USD' },
+				ctx
+			)
+		);
+
+		const after = (await getRestaurantWithSettings(db, id))!;
+		expect([after.name, after.taxMode, after.taxRateBp, after.currencyCode]).toEqual([
+			'New Name',
+			'exclusive',
+			825,
+			'USD'
+		]);
+		expect(after.timeZone).toBe('Africa/Mogadishu');
+		const rows = await db.select().from(auditLog);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].details).toEqual({
+			changes: {
+				name: { old: 'Old Name', new: 'New Name' },
+				taxMode: { old: null, new: 'exclusive' },
+				taxRateBp: { old: null, new: 825 },
+				currencyCode: { old: null, new: 'USD' }
+			}
+		});
 	});
 });
 

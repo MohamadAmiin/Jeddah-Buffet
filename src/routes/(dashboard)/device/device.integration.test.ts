@@ -110,7 +110,12 @@ function setIdleLock(event: RequestEvent) {
 	return actions.setIdleLock!(event as Parameters<NonNullable<typeof actions.setIdleLock>>[0]);
 }
 
-const NOTHING_SET = { complete: false, missing: ['POS idle lock'] };
+// What settingsComplete() reports before the owner has chosen anything: T-08's
+// idle lock, then T-36's tax mode, tax rate and currency, in that order.
+const NOTHING_SET = {
+	complete: false,
+	missing: ['POS idle lock', 'tax mode', 'tax rate', 'currency']
+};
 
 describe('the /device page', () => {
 	// MANDATORY (spec 29 — permission checks; this repository applies the rule to
@@ -177,14 +182,19 @@ describe('the /device page', () => {
 		expect(result.device?.revokedAt).toBeInstanceOf(Date);
 	});
 
-	it('saves an idle lock of 120 through updateSettings, with its audit row, completing the settings', async () => {
+	it('saves an idle lock of 120 through updateSettings, with its audit row, taking it off the missing list', async () => {
 		const a = await makeRestaurant();
 		const asOwner = principal(a.ownerId, a.restaurantId, 'owner');
 
 		const result = await setIdleLock(makeEvent(asOwner, { posIdleLockSeconds: '120' }));
 
 		expect(result).toEqual({ message: 'Auto-lock saved.' });
-		expect(await settingsComplete(db, a.restaurantId)).toEqual({ complete: true, missing: [] });
+		// The idle lock has left the list; the three T-36 settings are chosen on
+		// /settings, not on this page, so they remain.
+		expect(await settingsComplete(db, a.restaurantId)).toEqual({
+			complete: false,
+			missing: ['tax mode', 'tax rate', 'currency']
+		});
 		expect((await loadAs(asOwner)).idleLockSeconds).toBe(120);
 		const updated = () => db.select().from(auditLog).where(eq(auditLog.event, 'settings.updated'));
 		expect(await updated()).toHaveLength(1);
