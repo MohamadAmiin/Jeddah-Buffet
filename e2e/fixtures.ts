@@ -9,7 +9,6 @@
 // `exact: true` because the onboarding checklist carries links whose names contain
 // the same words ("Open the POS page", "Add employees", "Open menu").
 import { expect, type Page } from '@playwright/test';
-import { E2E_SETUP_TOKEN } from '../playwright.config';
 
 /**
  * The till's landing screen (T-25). `/pos`, with NO trailing slash: it is the
@@ -21,11 +20,14 @@ export const TILL_URL = '/pos';
 
 export type Owner = { name: string; email: string; password: string };
 
-/** First-run registration; leaves the owner signed in on /dashboard. */
+/**
+ * Sign a company up at /register — public since main's PR #9, with no setup
+ * token — and leave its owner signed in on /dashboard.
+ */
 export async function registerRestaurant(
 	page: Page,
 	owner: Owner,
-	options: { timeZone?: string; token?: string } = {}
+	options: { timeZone?: string } = {}
 ): Promise<void> {
 	await page.goto('/register');
 	await page.getByLabel('Restaurant name').fill(owner.name);
@@ -34,7 +36,6 @@ export async function registerRestaurant(
 	await page.getByLabel('Email').fill(owner.email);
 	await page.getByLabel('Password', { exact: true }).fill(owner.password);
 	await page.getByLabel('Confirm password').fill(owner.password);
-	await page.getByLabel('Setup token').fill(options.token ?? E2E_SETUP_TOKEN);
 	await page.getByRole('button', { name: 'Create restaurant' }).click();
 	await expect(page).toHaveURL(/\/dashboard$/);
 }

@@ -19,6 +19,13 @@ const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL ?? '';
 // product that most needs an end-to-end test.
 export default defineConfig({
 	testDir: 'e2e',
+	// ONE WORKER. Every spec that touches matcami_test takes one cross-process run
+	// lock (acquireRunLock) in its beforeAll, so spec files never really ran in
+	// parallel — they only waited for that lock inside a beforeAll whose timeout
+	// is 30 s, and the offline PIN spec holds it for about that long. Parallel
+	// Chromium instances plus 600,000-iteration PBKDF2 also starved unrelated page
+	// loads. One worker makes the order the lock already enforces explicit.
+	workers: 1,
 	webServer: {
 		command: 'pnpm build && pnpm preview --port 4173',
 		port: 4173,

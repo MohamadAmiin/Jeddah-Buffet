@@ -16,11 +16,12 @@ import {
 // signs in with a PIN.
 //
 // A NEW FILE, deliberately, not an extension of auth.spec.ts: that journey ends
-// signed out with /register answering 404, so grafting this one onto its end
-// means signing back in first and pushes one test past 400 lines — where a
-// failure anywhere in the auth half hides the POS half. Two files stay
-// independently diagnosable, and both take the same cross-process run lock
-// (acquireRunLock) before truncating matcami_test, so they can run together.
+// signed out, after a second company has signed up in another context, so
+// grafting this one onto its end means signing back in first and pushes one test
+// past 400 lines — where a failure anywhere in the auth half hides the POS half.
+// Two files stay independently diagnosable, and both take the same cross-process
+// run lock (acquireRunLock) before truncating matcami_test, so they can run
+// together.
 //
 // Runs against the PRODUCTION BUILD (pnpm build && pnpm preview), in the
 // configuration that ships: the till's context does NOT block service workers.
