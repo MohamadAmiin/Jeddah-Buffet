@@ -12,7 +12,13 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { bindDevice, cacheEmployees, cacheSettings, readCachedEmployees } from '$lib/pos/store';
+	import {
+		bindDevice,
+		cacheEmployees,
+		cacheSettings,
+		readCachedEmployees,
+		syncMenu
+	} from '$lib/pos/store';
 
 	type Role = 'owner' | 'cashier' | 'waiter';
 	type DirectoryEntry = {
@@ -106,7 +112,17 @@
 	}
 
 	onMount(() => {
-		void loadDirectory();
+		// The menu refresh (spec 5) runs AFTER the directory: a directory fetch that
+		// finds a different device drops the old device's menu first (bindDevice), so
+		// a fresh menu is never cleared behind it. It runs again on reconnect. A failed
+		// refresh is swallowed on purpose: an offline till keeps the menu it has, and
+		// the Offline bar is the permanent chrome that says so — never a toast.
+		void loadDirectory()
+			.then(() => syncMenu())
+			.catch(() => {});
+		const refreshMenu = () => void syncMenu().catch(() => {});
+		addEventListener('online', refreshMenu);
+		return () => removeEventListener('online', refreshMenu);
 	});
 
 	function choose(id: string) {

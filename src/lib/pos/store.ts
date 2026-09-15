@@ -11,9 +11,18 @@
 // second implementation here would be a second opinion about whether a PIN is
 // correct, and the two would drift the first time the cost factor changes.
 import { verifyPin } from '../pin';
+import {
+	compareVersions,
+	parseSnapshot,
+	type MenuSnapshot,
+	type SnapshotCategory,
+	type SnapshotItem,
+	type SnapshotModifierGroup
+} from './menu-snapshot';
 
 const DB_NAME = 'matcami-pos';
-const DB_VERSION = 1;
+// 2 since T-42 added the menu store (case 1 below).
+const DB_VERSION = 2;
 
 // Copied, not imported: these are T-14's event names in
 // src/lib/server/audit/events.ts, and src/lib/pos may not import lib/server. The
@@ -75,6 +84,11 @@ function upgrade(db: IDBDatabase, oldVersion: number): void {
 			db.createObjectStore('employees', { keyPath: 'id' });
 			db.createObjectStore('settings', { keyPath: 'key' });
 			db.createObjectStore('offline_logins', { keyPath: 'clientOpId' });
+		// falls through
+		case 1:
+			// T-42: the menu snapshot. A till already at version 1 runs ONLY this case
+			// and keeps its cached employees; a fresh till runs case 0, then this one.
+			db.createObjectStore('menu', { keyPath: 'id' });
 		// falls through
 	}
 }
@@ -227,7 +241,7 @@ const BOUND_DEVICE_KEY = 'deviceId';
 export function bindDevice(deviceId: string): Promise<'unchanged' | 'bound'> {
 	return withDb(async (db) => {
 		let outcome: 'unchanged' | 'bound' = 'unchanged';
-		await inTransaction(db, ['employees', 'settings'], 'readwrite', (tx) => {
+		await inTransaction(db, ['employees', 'settings', 'menu'], 'readwrite', (tx) => {
 			const settings = tx.objectStore('settings');
 			const current = settings.get(BOUND_DEVICE_KEY);
 			current.onsuccess = () => {
@@ -235,6 +249,9 @@ export function bindDevice(deviceId: string): Promise<'unchanged' | 'bound'> {
 				if (stored === deviceId) return;
 				outcome = 'bound';
 				tx.objectStore('employees').clear();
+				// The old device's menu goes too: its prices and tax rates belong to the
+				// restaurant the tablet no longer serves.
+				tx.objectStore('menu').clear();
 				settings.clear();
 				settings.put({ key: BOUND_DEVICE_KEY, value: deviceId });
 			};
@@ -298,6 +315,170 @@ export async function requestPersistentStorage(): Promise<boolean> {
 	if (typeof navigator === 'undefined' || !navigator.storage?.persist) return false;
 	if (await navigator.storage.persisted()) return true;
 	return await navigator.storage.persist();
+}
+
+// ── THE MENU SNAPSHOT (T-42; spec 5) ─────────────────────────────────────────────
+//
+// The version and the restaurant it belongs to live in the settings store, as
+// { key: 'menuVersion' } and { key: 'menuRestaurantId' } — there is no separate
+// store for them. The rows live in the menu store, keyed `<kind>:<id>`, each
+// *Minor field kept as the EXACT decimal string the payload carried: the replace
+// is a dumb copy, and a bad conversion can never be persisted. (IndexedDB could
+// store a bigint; keeping the string is a choice, not a limitation.)
+//
+// NO MONEY ARITHMETIC. The till stores and displays in this plan. Totalling a bill
+// belongs to the sales plan, which must import src/lib/money — the ONE rounding
+// rule spec 17 requires, used by POS, server and reports alike — and never copy
+// any of it into src/lib/pos.
+
+const MENU_VERSION_KEY = 'menuVersion';
+const MENU_RESTAURANT_KEY = 'menuRestaurantId';
+
+/**
+ * Refresh the local menu: compare versions, and on a mismatch download the FULL
+ * snapshot and replace the local copy (spec 5; no change-only sync). Every network
+ * await happens BEFORE the IndexedDB transaction opens — a transaction commits on
+ * its own as soon as the event loop turns with nothing outstanding against it, so
+ * an await fetch inside it would end it early and commit half a menu. Any failure
+ * leaves the old copy and the old version exactly as they were: an offline till
+ * keeps the menu it has.
+ */
+export async function syncMenu(fetchFn: typeof fetch = fetch): Promise<'up-to-date' | 'replaced'> {
+	// credentials: the device cookie is HttpOnly — it travels on the request and is
+	// never readable by this code.
+	const versionResponse = await fetchFn('/api/menu/version', { credentials: 'same-origin' });
+	if (!versionResponse.ok) {
+		throw new Error(`GET /api/menu/version answered ${versionResponse.status}`);
+	}
+	const server = (await versionResponse.json()) as { version?: unknown; restaurantId?: unknown };
+	if (typeof server.version !== 'number' || typeof server.restaurantId !== 'string') {
+		throw new Error('GET /api/menu/version sent an unexpected body');
+	}
+
+	// A copy that belongs to ANOTHER restaurant — a tablet that changed hands — is no
+	// copy at all, even when the two version numbers happen to agree.
+	const localRestaurant = await readCachedSetting(MENU_RESTAURANT_KEY);
+	const localVersion = await readCachedSetting(MENU_VERSION_KEY);
+	const local =
+		localRestaurant === server.restaurantId && typeof localVersion === 'number'
+			? localVersion
+			: null;
+	if (compareVersions(local, server.version) === 'up-to-date') return 'up-to-date';
+
+	const snapshotResponse = await fetchFn('/api/menu', { credentials: 'same-origin' });
+	if (!snapshotResponse.ok) throw new Error(`GET /api/menu answered ${snapshotResponse.status}`);
+	// Parsed BEFORE the transaction opens: a malformed payload writes nothing.
+	const snapshot = parseSnapshot(await snapshotResponse.json());
+	await replaceMenu(snapshot);
+	return 'replaced';
+}
+
+/**
+ * Replace the local menu with `snapshot`: the rows AND the version, in ONE
+ * transaction over the menu and settings stores, so the till can never hold one
+ * without the other. If the version were written separately and that write failed,
+ * the till would believe it was current while holding the previous menu — and spec
+ * 5 has no repair path for that.
+ *
+ * `abortForTest` is a test seam only: it aborts after every write, to prove a
+ * failure leaves the OLD version and the OLD rows.
+ */
+export function replaceMenu(snapshot: MenuSnapshot, abortForTest = false): Promise<void> {
+	return withDb(
+		(db) =>
+			new Promise<void>((resolve, reject) => {
+				const tx = db.transaction(['menu', 'settings'], 'readwrite');
+				tx.oncomplete = () => resolve();
+				tx.onerror = (event) => reject((event.target as IDBRequest | null)?.error ?? tx.error);
+				tx.onabort = () => reject(tx.error ?? new Error('The menu replace was aborted'));
+				try {
+					const menu = tx.objectStore('menu');
+					menu.clear();
+					menu.put({
+						id: 'snapshot',
+						kind: 'snapshot',
+						data: {
+							currency: snapshot.currency,
+							currencyExponent: snapshot.currencyExponent,
+							taxMode: snapshot.taxMode,
+							taxRateBp: snapshot.taxRateBp
+						}
+					});
+					for (const category of snapshot.categories) {
+						menu.put({ id: `category:${category.id}`, kind: 'category', data: category });
+					}
+					for (const item of snapshot.items) {
+						menu.put({ id: `item:${item.id}`, kind: 'item', data: item });
+					}
+					for (const group of snapshot.modifierGroups) {
+						menu.put({ id: `group:${group.id}`, kind: 'group', data: group });
+					}
+					const settings = tx.objectStore('settings');
+					settings.put({ key: MENU_VERSION_KEY, value: snapshot.version });
+					settings.put({ key: MENU_RESTAURANT_KEY, value: snapshot.restaurantId });
+					if (abortForTest) tx.abort();
+				} catch (error) {
+					tx.abort();
+					reject(error);
+				}
+			})
+	);
+}
+
+export type LocalMenu = {
+	version: number;
+	restaurantId: string;
+	currency: string | null;
+	currencyExponent: number | null;
+	taxMode: string | null;
+	taxRateBp: number | null;
+	categories: SnapshotCategory[];
+	items: Array<Omit<SnapshotItem, 'priceMinor'> & { priceMinor: bigint }>;
+	modifierGroups: Array<
+		Omit<SnapshotModifierGroup, 'modifiers'> & {
+			modifiers: Array<{ id: string; name: string; priceDeltaMinor: bigint }>;
+		}
+	>;
+};
+
+type MenuRow = { id: string; kind: string; data: unknown };
+
+/**
+ * The local menu, or null before the first replace. THE ONE PLACE a menu amount
+ * is converted: the stored decimal strings become bigint here, through BigInt(),
+ * never through a number.
+ */
+export async function readMenu(): Promise<LocalMenu | null> {
+	const version = await readCachedSetting(MENU_VERSION_KEY);
+	const restaurantId = await readCachedSetting(MENU_RESTAURANT_KEY);
+	if (typeof version !== 'number' || typeof restaurantId !== 'string') return null;
+
+	const rows = (await withDb((db) =>
+		valueOf(db.transaction('menu', 'readonly').objectStore('menu').getAll())
+	)) as MenuRow[];
+	const of = <T>(kind: string) =>
+		rows.filter((row) => row.kind === kind).map((row) => row.data as T);
+	const header =
+		of<Pick<LocalMenu, 'currency' | 'currencyExponent' | 'taxMode' | 'taxRateBp'>>('snapshot')[0];
+	if (!header) return null;
+
+	const bySortOrder = <T extends { sortOrder: number }>(a: T, b: T) => a.sortOrder - b.sortOrder;
+	return {
+		version,
+		restaurantId,
+		...header,
+		categories: of<SnapshotCategory>('category').sort(bySortOrder),
+		items: of<SnapshotItem>('item')
+			.sort(bySortOrder)
+			.map((item) => ({ ...item, priceMinor: BigInt(item.priceMinor) })),
+		modifierGroups: of<SnapshotModifierGroup>('group').map((group) => ({
+			...group,
+			modifiers: group.modifiers.map((modifier) => ({
+				...modifier,
+				priceDeltaMinor: BigInt(modifier.priceDeltaMinor)
+			}))
+		}))
+	};
 }
 
 // NO SYNC QUEUE IS BUILT HERE. offline_logins rows are written and left with
