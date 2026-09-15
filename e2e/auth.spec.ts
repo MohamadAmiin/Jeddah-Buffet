@@ -56,11 +56,14 @@ test('the owner registers, works, signs out and signs back in', async ({ page, c
 	// ── 3. the overview shows the restaurant and the checklist ─────────────────
 	await expect(page.getByRole('heading', { name: RESTAURANT })).toBeVisible();
 	await expect(page.getByRole('heading', { name: 'Getting set up' })).toBeVisible();
-	// The settings step is done; the other five are not started. `exact` matters:
-	// each step renders the phrase twice — a visible badge and a screen-reader-only
-	// " — not started" — so a loose match counts ten.
+	// None of the six steps is done yet — not even the settings step: registration
+	// sets the name and time zone but leaves the POS idle lock unset, and
+	// settingsComplete() requires it (T-08), so that step reads "Still needed: POS
+	// idle lock." `exact` matters: each step renders the phrase twice — a visible
+	// badge and a screen-reader-only " — not started" — so a loose match counts
+	// twelve.
 	await expect(page.getByText('Restaurant settings')).toBeVisible();
-	await expect(page.getByText('not started', { exact: true })).toHaveCount(5);
+	await expect(page.getByText('not started', { exact: true })).toHaveCount(6);
 
 	// ── 3a. the bare host, WITH a session ──────────────────────────────────────
 	// Labelled 3a deliberately: it leaves every existing `// ── N. … ──` label

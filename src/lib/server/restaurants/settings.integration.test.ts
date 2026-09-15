@@ -151,9 +151,15 @@ describe('updateSettings', () => {
 });
 
 describe('settingsComplete', () => {
-	it('is complete straight after registration', async () => {
+	// Registration sets the name and time zone but leaves the POS idle lock null —
+	// there is no default for it anywhere — so a fresh restaurant is incomplete for
+	// exactly that one reason.
+	it('is incomplete straight after registration, missing only the POS idle lock', async () => {
 		const id = await makeRestaurant();
-		expect(await settingsComplete(db, id)).toEqual({ complete: true, missing: [] });
+		expect(await settingsComplete(db, id)).toEqual({
+			complete: false,
+			missing: ['POS idle lock']
+		});
 	});
 
 	it('reports a restaurant with no settings row as incomplete', async () => {
@@ -161,6 +167,72 @@ describe('settingsComplete', () => {
 		const result = await settingsComplete(db, row.id);
 		expect(result.complete).toBe(false);
 		expect(result.missing.length).toBeGreaterThan(0);
+	});
+});
+
+describe('the POS idle lock setting (T-08)', () => {
+	it('is written by updateSettings with ONE audit row, and completes the settings', async () => {
+		const id = await makeRestaurant();
+
+		const result = await db.transaction((tx) =>
+			updateSettings(tx, id, { posIdleLockSeconds: 120 }, ctx)
+		);
+		expect(result).toEqual({
+			ok: true,
+			changed: true,
+			changes: { posIdleLockSeconds: { old: null, new: 120 } }
+		});
+		expect(await settingsComplete(db, id)).toEqual({ complete: true, missing: [] });
+
+		const rows = await db.select().from(auditLog);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].event).toBe('settings.updated');
+		expect(rows[0].details).toEqual({ changes: { posIdleLockSeconds: { old: null, new: 120 } } });
+		expect((await getRestaurantWithSettings(db, id))!.posIdleLockSeconds).toBe(120);
+	});
+
+	// The mirror failure of the widened update: an idle-lock-only save must not
+	// blank the time zone, which decides every sale's business date.
+	it('leaves the time zone alone when only the idle lock changes', async () => {
+		const id = await makeRestaurant('Cafe One', 'Asia/Riyadh');
+		await db.transaction((tx) => updateSettings(tx, id, { posIdleLockSeconds: 300 }, ctx));
+
+		const after = await getRestaurantWithSettings(db, id);
+		expect(after!.timeZone).toBe('Asia/Riyadh');
+		expect(after!.posIdleLockSeconds).toBe(300);
+	});
+
+	it.each([29, 1801, 90.5])('rejects %s seconds and writes nothing', async (seconds) => {
+		const id = await makeRestaurant();
+
+		const result = await db.transaction((tx) =>
+			updateSettings(tx, id, { posIdleLockSeconds: seconds }, ctx)
+		);
+		expect(result).toEqual({ ok: false, reason: 'invalid_idle_lock' });
+		expect(await db.select().from(auditLog)).toHaveLength(0);
+		expect((await getRestaurantWithSettings(db, id))!.posIdleLockSeconds).toBeNull();
+	});
+
+	it('accepts both ends of the bound, 30 and 1800 seconds', async () => {
+		const id = await makeRestaurant();
+		expect(
+			(await db.transaction((tx) => updateSettings(tx, id, { posIdleLockSeconds: 30 }, ctx))).ok
+		).toBe(true);
+		expect(
+			(await db.transaction((tx) => updateSettings(tx, id, { posIdleLockSeconds: 1800 }, ctx))).ok
+		).toBe(true);
+		expect((await getRestaurantWithSettings(db, id))!.posIdleLockSeconds).toBe(1800);
+	});
+
+	it('treats re-submitting the stored value as a no-op with no audit row', async () => {
+		const id = await makeRestaurant();
+		await db.transaction((tx) => updateSettings(tx, id, { posIdleLockSeconds: 120 }, ctx));
+
+		const again = await db.transaction((tx) =>
+			updateSettings(tx, id, { posIdleLockSeconds: 120 }, ctx)
+		);
+		expect(again).toEqual({ ok: true, changed: false });
+		expect(await db.select().from(auditLog)).toHaveLength(1);
 	});
 });
 
