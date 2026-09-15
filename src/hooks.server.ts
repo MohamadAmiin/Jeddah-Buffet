@@ -62,6 +62,7 @@ export const handleSession: Handle = async ({ event, resolve }) => {
 	event.locals.user = null;
 	event.locals.restaurantId = null;
 	event.locals.sessionToken = null;
+	event.locals.posDevice = null;
 
 	const token = event.cookies.get(SESSION_COOKIE);
 	if (!token) return resolve(event);
