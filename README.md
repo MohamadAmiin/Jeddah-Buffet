@@ -46,28 +46,18 @@ its own `drizzle` schema.
 `.env` is gitignored and must never be committed. `.env.example` is the committed template and must
 never contain a working credential.
 
-### First run: creating the owner account
+### Creating a company: public sign-up
 
-`/register` creates the restaurant and its owner, and it answers only while **zero restaurants exist**
-**and** `SETUP_TOKEN` is set. While that variable is unset it refuses every submission regardless of
-the restaurant count.
+Anyone can create a company — a restaurant and its owner account — at `/register` (decided
+2026-09-15). There is no setup token and no first-run step. The limits: a per-address throttle, and at
+most **3 new companies per internet address per 24 hours** (IPv6 counted per /64), counted in the
+database so a restart does not reset it. One email address belongs to one company.
 
-```bash
-# 1. put a long random value in .env
-SETUP_TOKEN=$(openssl rand -hex 32)
+`SIGNUP=closed` in the environment stops new sign-ups (restart the app to apply): `/register` then
+says sign-up is closed and `/login` hides its link. Unset, or `SIGNUP=open`, is the default.
 
-# 2. start the app and visit /register immediately
-pnpm dev          # or the production build behind HTTPS
-
-# 3. unset SETUP_TOKEN afterwards and restart
-```
-
-Do this promptly on a public host: a new host's TLS certificate appears in Certificate Transparency
-logs within minutes of issuance, and scanners follow. Once a restaurant exists, `/register` answers
-404 to anyone signed out.
-
-**Additional restaurants** are created with `pnpm restaurant:create` — never by re-opening the
-endpoint. There is deliberately no environment variable that re-opens it.
+**Companies created from the server** — for example while sign-up is closed — use
+`pnpm restaurant:create`. It runs the same code without the public page's limits.
 
 **A forgotten owner password** is reset with `pnpm auth:reset-owner <email>`. It hashes through the
 same module the application uses, clears the lockout, ends every session for that owner and writes an

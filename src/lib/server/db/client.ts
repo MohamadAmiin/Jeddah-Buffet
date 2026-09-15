@@ -7,7 +7,13 @@ import { DATABASE_URL } from '../env';
 // never a property of the database session.
 const pool = new pg.Pool({
 	connectionString: DATABASE_URL,
-	options: '-c timezone=UTC'
+	options: '-c timezone=UTC',
+	// Stated, not left to pg-pool's defaults. Ten connections IS the default; the
+	// timeout is the change. With none, a request waits FOREVER for a free
+	// connection, so with public sign-up one burst could hang every company's
+	// login, dashboard and till. Ten seconds, then a clear error instead.
+	max: 10,
+	connectionTimeoutMillis: 10_000
 });
 
 // NO TYPE PARSERS, deliberately. Do not call pg.types.setTypeParser, and never

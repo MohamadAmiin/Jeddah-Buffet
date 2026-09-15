@@ -52,7 +52,7 @@ src/
     styles/         tokens.css — THE design tokens; no colour, size or type literal lives anywhere else
   routes/
     login/          email + password sign-in — OUTSIDE the route groups: reachable without a session
-    register/       first-run owner registration, gated by SETUP_TOKEN — likewise outside the groups
+    register/       PUBLIC sign-up: anyone creates a company (throttle, 3/address/day, SIGNUP switch) — likewise outside the groups
     logout/         form action only; its load returns 405 so a GET cannot sign anyone out — likewise outside the groups
     (dashboard)/    owner/admin: menu, purchases, expenses, reports — online only
     (pos)/          POS shell: PIN login, orders, payment, session open/close — MUST work offline
@@ -127,12 +127,14 @@ Three pins look wrong and are not: **Node 24.21.0** (`vitest@5` excludes Node 25
 When work touches one, SURFACE the question and its default, ASK, and record the assumption in the commit/PR. NEVER assume one silently; when a decision is made, record it here and delete its row. This applies beyond the seven: if a task raises a question the spec does not answer — a service charge, a tip line, a new account, a new payment method — treat it the same way, and NEVER bake an answer into the schema or the chart of accounts silently.
 
 1. Waiter order entry with one device → shared POS at the counter; a tablet becomes terminal 2 later.
-2. Hosting: cloud or in-restaurant server → cloud (Docker + Nginx) with the offline POS.
+2. Hosting — answered 2026-09-15: cloud (Docker + Nginx) with the offline POS. Public sign-up presupposes an internet-reachable server; see "Decisions already made".
 3. Local tax rules (inclusive/exclusive, rounding, legal receipt requirements, tax on staff meals) → tax mode as a setting, round on the invoice total, confirm with a local accountant.
 4. Payment methods and currencies at launch → cash + one card or mobile-money method; one currency.
 5. Who approves refunds/voids when the owner is away → owner PIN only; Manager role later.
 6. Approval limits and lock timing → discounts above 10% and pay-outs above a set amount need approval; auto-lock after 2 minutes idle.
 7. Inventory costing method → weighted average.
+
+Beyond spec 33 — terms of service / privacy consent for public sign-ups: unanswered; decide before launch.
 
 ## Decisions already made (NOT open — do not re-litigate)
 
@@ -141,12 +143,13 @@ Settled by `tasks/restaurant-identity-and-dashboard`. Separate from the open-dec
 - **Validation library — `zod`, pinned exactly.** Server-side only; no schema is imported into a `.svelte` component, so the client cannot disagree with the server about what is valid.
 - **The `admin.*` permission keys are a PLAN-LEVEL EXTENSION, not spec 8 text.** Spec 8 introduces its list with "For example" and names no dashboard key. Spec 8's ten POS keys are reproduced verbatim and tested against the spec; the eight `admin.*` keys are granted to the owner only. Needing a key that is in neither list is still a reason to stop and ask.
 - **Password login lockout is a HOUSE RULE adapted from spec 7's PIN rule**, and is paired with a per-IP throttle in front of the hashing. Spec 7's five-attempts/five-minutes is written for PINs on a registered device; applied naively to a public endpoint it is a denial-of-service lever against the only owner account.
-- **Registration is first-run plus `SETUP_TOKEN`.** `/register` answers only while zero restaurants exist AND the submitted token matches. There is NO environment variable that re-opens it; additional restaurants are created with `pnpm restaurant:create`.
+- **Registration is PUBLIC — decided 2026-09-15, reversing the earlier "first-run plus `SETUP_TOKEN`".** Anyone may create a company (a restaurant plus its owner) at `/register`, at any time; there is no setup token. Guards: a per-address throttle and at most 3 new companies per address per 24 hours (`SIGNUP_DAILY_CAP` in `src/lib/server/auth/register.ts`, counted from `restaurant.registered` audit rows, IPv6 per /64); `ADDRESS_HEADER` is required in production; `SIGNUP=closed` is the operator's kill switch. One email = one company (`users_email_lower_unique` stays global); no email verification and no self-service reset (`pnpm auth:reset-owner`). `registerRestaurant` takes an explicit `mode`: the route passes `'public'`; only `pnpm restaurant:create` passes `'operator'`, which skips the throttle and the cap. Accepted risks: `/register` reveals whether an email is registered; an unverified address can be claimed by someone who does not own it; companies cannot be suspended or deleted; isolation between companies is code-only (explicit `restaurant_id` scoping — row-level security is a later plan). The cap's partial index on `audit_log` waits for `feat/pos-access-and-menu` to merge, because Drizzle skips a migration older than the newest one applied.
+- **Public sign-up deliberately departs from the signed-off spec.** Spec 1 scopes the MVP to "One Restaurant" and spec 31 lists "Multi-tenant SaaS" under Later; the user chose public sign-up on 2026-09-15 knowing both. "The spec outranks this file" does NOT apply to this point — do not "correct" registration back to one restaurant.
 - **The database has TWO roles.** `matcami` owns the tables (migrations, `pg_dump`, `db:studio`); `matcami_app` is the runtime role and owns nothing — no DDL, no `TRUNCATE`. That split is what makes row-level security a later one-line migration instead of a database re-bootstrap, and it is why `.env` carries `DATABASE_URL` alongside `MIGRATE_DATABASE_URL`. Do not point the application at the owner role. See `docs/deployment.md`.
 
 ## Do NOT build (spec 31, 28, 27, 5, 15)
 
-Delivery · multiple branches, terminals, warehouses or tenants · Kitchen Display System · waiter handhelds · Manager role and remote approvals, advanced RBAC, advanced employee management · sub-recipes and batch prep · supplier management, Accounts Receivable, payroll, bank reconciliation, any accounting beyond spec 23's chart — the Accounts Payable *account* (2000) IS in the MVP, supplier management is not · change-only menu sync · Redis and server WebSocket push · biometrics · advanced analytics · summary tables, materialized views and background report jobs (plain indexed SQL until a report is measurably slow, spec 27). Leave seams, not implementations: keep `device_id` on POS-created rows so a second terminal is a data change, not a rewrite.
+Delivery · multiple branches, terminals or warehouses · tenant administration beyond public sign-up (suspending or deleting companies, billing, plans, a platform-operator console) · Kitchen Display System · waiter handhelds · Manager role and remote approvals, advanced RBAC, advanced employee management · sub-recipes and batch prep · supplier management, Accounts Receivable, payroll, bank reconciliation, any accounting beyond spec 23's chart — the Accounts Payable *account* (2000) IS in the MVP, supplier management is not · change-only menu sync · Redis and server WebSocket push · biometrics · advanced analytics · summary tables, materialized views and background report jobs (plain indexed SQL until a report is measurably slow, spec 27). Leave seams, not implementations: keep `device_id` on POS-created rows so a second terminal is a data change, not a rewrite.
 
 ## Task routing & skill map
 

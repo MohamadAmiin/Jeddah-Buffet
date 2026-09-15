@@ -2,6 +2,7 @@ import { fail, redirect, type Actions, type ServerLoad } from '@sveltejs/kit';
 import { z } from 'zod';
 import { db } from '$lib/server/db/client';
 import { loginWithPassword } from '$lib/server/auth/login';
+import { SIGNUP_OPEN } from '$lib/server/env';
 import { setSessionCookie } from '$lib/server/auth/session';
 import { requestContext } from '$lib/server/audit';
 import { MAX_PASSWORD_BYTES } from '$lib/server/auth/password';
@@ -12,9 +13,10 @@ import { safeNext, loginFailPayload } from './helpers';
 // visitor to /dashboard before this load runs.
 export const load: ServerLoad = async ({ locals }) => {
 	if (locals.user) redirect(303, '/dashboard');
-	// Return NOTHING else. No user list, no restaurant name — nothing that tells an
-	// anonymous visitor whether this installation has been set up.
-	return {};
+	// ONE bit, and nothing else: whether public sign-up is open (the SIGNUP switch),
+	// which decides whether the page links to /register. It reveals nothing about
+	// who has signed up — NO user list and NO restaurant name.
+	return { signupOpen: SIGNUP_OPEN };
 };
 
 const loginSchema = z.object({

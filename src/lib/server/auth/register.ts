@@ -1,7 +1,6 @@
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import type { Db, DbTx } from '../db/client';
-import type { Executor } from './session';
 import { restaurants } from '../db/schema/restaurants';
 import { users } from '../db/schema/users';
 import { writeAudit } from '../audit';
@@ -9,38 +8,35 @@ import { onRestaurantCreated, isValidTimeZone, canonicalTimeZone } from '../rest
 import { hashPassword } from './password';
 import { createSession } from './session';
 import { consume } from './throttle';
+import { signupAddressKey } from './signup-key';
+
+// PUBLIC SIGN-UP (decided 2026-09-15). Anyone may create a company — a restaurant
+// plus its owner — at /register, at any time. There is no setup token and no
+// first-run gate: this deliberately reverses the earlier "first run plus
+// SETUP_TOKEN" rule, and CLAUDE.md records the decision.
+//
+// Two callers, two modes. The mode is REQUIRED, so nobody gets one by default:
+//   'public'   — the /register form action. Always throttled per address, always
+//                subject to the daily cap.
+//   'operator' — scripts/create-restaurant.ts, run by someone who already holds the
+//                database credentials. No throttle, no cap.
+// These used to be two booleans, and the one named for the token (bypassSetupToken)
+// silently switched the throttle off too: a public route that reused the CLI's
+// flags would have shipped with no rate limit at all. One explicit mode is what
+// stops that happening again.
+
+/** New companies one address may create in any rolling 24 hours, in public mode. */
+export const SIGNUP_DAILY_CAP = 3;
+const SIGNUP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
- * A constant this module owns, so two simultaneous registrations serialise.
- *
- * pg_advisory_XACT_lock releases at the end of the transaction, which is what we
- * want. Do NOT use pg_advisory_lock: it is session-scoped and, on a pooled
- * connection, leaks a held lock onto whoever checks that connection out next —
- * the pool in use never resets session state between checkouts.
+ * First half of the per-address advisory lock. The two-key (int, int) form lives
+ * in a different key space from the one-key bigint form, so it cannot collide
+ * with any other advisory lock in the system.
  */
-const REGISTRATION_LOCK_KEY = 4_814_233_001;
+const SIGNUP_LOCK_NAMESPACE = 48_142_330;
 
-/**
- * True only when ZERO restaurants exist.
- *
- * There is NO environment variable that re-opens this. Additional restaurants are
- * created by scripts/create-restaurant.ts (T-25), which calls registerRestaurant
- * below with no HTTP surface at all. A flag that re-exposes an unauthenticated
- * account-creating endpoint is one forgotten variable away from public signup
- * with none of public signup's guards.
- */
-export async function isRegistrationOpen(tx: Executor): Promise<boolean> {
-	const result = await tx.execute<{ n: number }>(sql`select count(*)::int as n from restaurants`);
-	return result.rows[0].n === 0;
-}
-
-/** Constant-time compare that does not leak length through an early return. */
-function tokensMatch(submitted: string, expected: string): boolean {
-	const a = Buffer.from(submitted, 'utf8');
-	const b = Buffer.from(expected, 'utf8');
-	if (a.byteLength !== b.byteLength) return false;
-	return timingSafeEqual(a, b);
-}
+export type RegisterMode = 'public' | 'operator';
 
 export type RegisterInput = {
 	restaurantName: string;
@@ -48,34 +44,20 @@ export type RegisterInput = {
 	ownerDisplayName: string;
 	email: string;
 	password: string;
-	setupToken: string;
 };
 
 export type RegisterContext = {
+	mode: RegisterMode;
 	ip: string | null;
 	userAgent: string | null;
 	now?: Date;
-	/**
-	 * The expected token. Defaults to process.env.SETUP_TOKEN; the route passes the
-	 * value env.ts validated. Injected so this module stays importable — and
-	 * testable — without $env/dynamic/private.
-	 */
-	expectedSetupToken?: string | null;
-	/**
-	 * Operator scripts (T-25) set this to bypass the TOKEN gate only — never the
-	 * advisory lock, never the uniqueness checks. The caller already holds the
-	 * database credentials, so a token would prove nothing.
-	 */
-	bypassSetupToken?: boolean;
-	/** Operator scripts also bypass the first-run gate to add a SECOND restaurant. */
-	allowAdditionalRestaurant?: boolean;
 };
 
 export type RegisterResult =
 	| { ok: true; token: string; expiresAt: Date; restaurantId: string; userId: string }
 	| {
 			ok: false;
-			reason: 'closed' | 'bad_token' | 'email_taken' | 'invalid_time_zone' | 'throttled';
+			reason: 'email_taken' | 'invalid_time_zone' | 'throttled' | 'signup_limit';
 			retryAfterMs?: number;
 	  };
 
@@ -85,45 +67,57 @@ export async function registerRestaurant(
 	ctx: RegisterContext
 ): Promise<RegisterResult> {
 	const now = ctx.now ?? new Date();
-	const expected =
-		ctx.expectedSetupToken !== undefined
-			? ctx.expectedSetupToken
-			: (process.env.SETUP_TOKEN ?? null);
+	const signupKey = ctx.mode === 'public' ? signupAddressKey(ctx.ip) : null;
 
-	// Same throttle as login, keyed by IP.
-	if (!ctx.bypassSetupToken) {
-		const throttled = consume(`register:${ctx.ip ?? 'unknown'}`, now.getTime());
+	// The throttle runs BEFORE any hashing — that is the whole point of it.
+	if (signupKey !== null) {
+		const throttled = consume(`register:${signupKey}`, now.getTime());
 		if (!throttled.ok) {
 			return { ok: false, reason: 'throttled', retryAfterMs: throttled.retryAfterMs };
 		}
 	}
 
-	// Commit on every branch, exactly as T-13 does. Never signal a rejection by
-	// throwing inside the callback.
+	if (!isValidTimeZone(input.timeZone)) {
+		return { ok: false, reason: 'invalid_time_zone' };
+	}
+
+	// HASH BEFORE THE TRANSACTION OPENS. argon2id costs ~19 MiB and tens of
+	// milliseconds. Inside the transaction it would hold one of the pool's ten
+	// connections — and, in public mode, the address lock — for that long, and a
+	// burst of sign-ups would make every company's login, dashboard and till queue
+	// for a connection. An attempt that later fails on a taken email wastes one
+	// hash and nothing else.
+	const passwordHash = await hashPassword(input.password);
+
+	// Commit on every branch. Never signal a rejection by throwing inside the
+	// callback — except EmailTakenError, which must roll the inserts back.
 	return db
 		.transaction(async (tx: DbTx) => {
-			// Serialise simultaneous submissions BEFORE looking at anything.
-			await tx.execute(sql`select pg_advisory_xact_lock(${REGISTRATION_LOCK_KEY})`);
+			if (signupKey !== null) {
+				// Serialise sign-ups from ONE address, so two simultaneous submissions
+				// cannot both read "2 so far" and both commit. Different addresses never
+				// wait on each other. pg_advisory_XACT_lock releases at commit or rollback;
+				// the session-scoped form would leak onto a pooled connection.
+				await tx.execute(
+					sql`select pg_advisory_xact_lock(${SIGNUP_LOCK_NAMESPACE}::int, hashtext(${signupKey}::text))`
+				);
 
-			// RE-CHECK INSIDE THE LOCK. Checking before it is a time-of-check-to-
-			// time-of-use bug that lets two restaurants be created.
-			if (!ctx.allowAdditionalRestaurant && !(await isRegistrationOpen(tx))) {
-				return { ok: false, reason: 'closed' } as const;
-			}
-
-			if (!ctx.bypassSetupToken) {
-				// If SETUP_TOKEN is unset, registration is NOT open regardless of the
-				// restaurant count. A freshly deployed instance must not be claimable by
-				// the first stranger who finds its hostname: a new host's TLS certificate
-				// appears in Certificate Transparency logs within minutes of issuance, and
-				// scanners follow.
-				if (!expected || !tokensMatch(input.setupToken, expected)) {
-					return { ok: false, reason: 'bad_token' } as const;
+				// Counted from the audit log, which is append-only and survives restarts —
+				// an in-memory counter would hand every address a fresh allowance on each
+				// deploy. The partial index that keeps this cheap as audit_log grows lands
+				// in its own migration AFTER feat/pos-access-and-menu merges: Drizzle skips
+				// any migration older than the newest one already applied.
+				const since = new Date(now.getTime() - SIGNUP_WINDOW_MS);
+				const counted = await tx.execute<{ n: number }>(sql`
+					select count(*)::int as n
+					from audit_log
+					where event = 'restaurant.registered'
+					  and details ->> 'signupKey' = ${signupKey}
+					  and occurred_at > ${since}
+				`);
+				if (counted.rows[0].n >= SIGNUP_DAILY_CAP) {
+					return { ok: false, reason: 'signup_limit' } as const;
 				}
-			}
-
-			if (!isValidTimeZone(input.timeZone)) {
-				return { ok: false, reason: 'invalid_time_zone' } as const;
 			}
 
 			// Generate the id in APPLICATION CODE rather than letting the database
@@ -146,7 +140,6 @@ export async function registerRestaurant(
 					timeZone: input.timeZone
 				});
 
-				const passwordHash = await hashPassword(input.password);
 				const [owner] = await tx
 					.insert(users)
 					.values({
@@ -167,7 +160,8 @@ export async function registerRestaurant(
 					event: 'restaurant.registered',
 					details: {
 						restaurantName: input.restaurantName,
-						timeZone: canonicalTimeZone(input.timeZone)
+						timeZone: canonicalTimeZone(input.timeZone),
+						signupKey
 					},
 					ip: ctx.ip,
 					userAgent: ctx.userAgent,
