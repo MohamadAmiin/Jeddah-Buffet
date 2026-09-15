@@ -17,6 +17,7 @@ import * as usersSchema from '../schema/users';
 import * as sessionsSchema from '../schema/sessions';
 import * as auditSchema from '../schema/audit';
 import * as posDevicesSchema from '../schema/pos-devices';
+import * as menuSchema from '../schema/menu';
 import { TABLES } from '../test/reset';
 
 // Tables are DISCOVERED from the schema modules' exports, never from a
@@ -35,7 +36,8 @@ const modules = {
 	...usersSchema,
 	...sessionsSchema,
 	...auditSchema,
-	...posDevicesSchema
+	...posDevicesSchema,
+	...menuSchema
 };
 
 // Every file in src/lib/server/db/schema/ that is imported above. A schema file
@@ -43,6 +45,7 @@ const modules = {
 // green, so the 'imports every file' case below holds this list to the directory.
 const IMPORTED_SCHEMA_FILES = [
 	'audit.ts',
+	'menu.ts',
 	'pos-devices.ts',
 	'restaurant-settings.ts',
 	'restaurants.ts',
@@ -171,6 +174,11 @@ describe('schema guards every future aggregate inherits', () => {
 	it('discovers the tables it is meant to guard', () => {
 		expect(tables.map((t) => t.name).sort()).toEqual([
 			'audit_log',
+			'menu_categories',
+			'menu_item_modifier_groups',
+			'menu_items',
+			'modifier_groups',
+			'modifiers',
 			'pos_devices',
 			'restaurant_settings',
 			'restaurants',
@@ -280,5 +288,26 @@ describe('schema guards every future aggregate inherits', () => {
 		expect(about('tax_rate_bp')).toEqual([]);
 		expect(about('flour_qty')).toEqual([]);
 		expect(about('tax_mode')).toEqual([]);
+	});
+
+	// MANDATORY (spec 29 — money arithmetic): the menu's two money columns, as a
+	// committed assertion rather than a manual "change it and watch it go red".
+	it('every money column on the menu tables is bigint minor units (invariant 1)', () => {
+		// The negative half: the menu's column names typed as fixed-point decimals.
+		// Declared HERE, never under src/lib/server/db/schema/ and never in `modules`.
+		const fixture = pgTable('fixture_menu', {
+			priceMinor: numeric('price_minor', { precision: 12, scale: 2 }),
+			priceDeltaMinor: numeric('price_delta_minor', { precision: 12, scale: 2 })
+		});
+		const offenders = numericColumnOffenders([{ name: 'fixture_menu', table: fixture }]);
+		for (const column of ['price_minor', 'price_delta_minor']) {
+			const messages = offenders.filter((m) => m.startsWith(`fixture_menu.${column} is `));
+			expect(messages.some((m) => m.includes('money is integer minor units in bigint'))).toBe(true);
+		}
+
+		// The positive half, over the REAL schema.
+		expect(menuSchema.menuItems.priceMinor.getSQLType()).toBe('bigint');
+		expect(menuSchema.modifiers.priceDeltaMinor.getSQLType()).toBe('bigint');
+		expect(numericColumnOffenders(tables)).toEqual([]);
 	});
 });

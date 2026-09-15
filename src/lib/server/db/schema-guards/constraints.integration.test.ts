@@ -1,6 +1,9 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import pg from 'pg';
+import { eq } from 'drizzle-orm';
 import { TAX_MODES } from '$lib/money/tax';
+import { testDb, closeTestDb } from '../test/db';
+import { menuItems } from '../schema/menu';
 
 // A constraint that exists only in a schema file proves nothing. These assertions
 // run real inserts against the real database and check the ERROR, not merely that
@@ -17,6 +20,7 @@ const pool = new pg.Pool({
 
 afterAll(async () => {
 	await pool.end();
+	await closeTestDb();
 });
 
 /** Run SQL and return the PostgreSQL error, failing if it unexpectedly succeeded. */
@@ -231,6 +235,137 @@ describe('restaurant_settings constraints', () => {
 				mode
 			]);
 		}
+	});
+});
+
+describe('menu constraints (T-37)', () => {
+	async function makeCategory(restaurantId: string, name = 'Drinks'): Promise<string> {
+		const { rows } = await pool.query<{ id: string }>(
+			'insert into menu_categories (restaurant_id, name) values ($1, $2) returning id',
+			[restaurantId, name]
+		);
+		return rows[0].id;
+	}
+
+	async function makeItem(restaurantId: string, categoryId: string): Promise<string> {
+		const { rows } = await pool.query<{ id: string }>(
+			`insert into menu_items (restaurant_id, category_id, name, price_minor)
+			 values ($1, $2, 'Tea', 850) returning id`,
+			[restaurantId, categoryId]
+		);
+		return rows[0].id;
+	}
+
+	async function makeGroup(restaurantId: string): Promise<string> {
+		const { rows } = await pool.query<{ id: string }>(
+			`insert into modifier_groups (restaurant_id, name) values ($1, 'Milk') returning id`,
+			[restaurantId]
+		);
+		return rows[0].id;
+	}
+
+	it('rejects a negative menu price', async () => {
+		const r = await makeRestaurant();
+		const c = await makeCategory(r);
+		const error = await expectError(
+			`insert into menu_items (restaurant_id, category_id, name, price_minor)
+			 values ($1, $2, 'Tea', -1)`,
+			[r, c]
+		);
+		expect(error.constraint).toBe('menu_items_price_minor_non_negative');
+	});
+
+	it('rejects an item tax rate above 10000 basis points', async () => {
+		const r = await makeRestaurant();
+		const c = await makeCategory(r);
+		const error = await expectError(
+			`insert into menu_items (restaurant_id, category_id, name, price_minor, tax_rate_bp)
+			 values ($1, $2, 'Tea', 850, 10001)`,
+			[r, c]
+		);
+		expect(error.constraint).toBe('menu_items_tax_rate_bp_range');
+	});
+
+	it("rejects an item in another restaurant's category", async () => {
+		const a = await makeRestaurant('Restaurant A');
+		const b = await makeRestaurant('Restaurant B');
+		const categoryOfA = await makeCategory(a);
+		const error = await expectError(
+			`insert into menu_items (restaurant_id, category_id, name, price_minor)
+			 values ($1, $2, 'Tea', 850)`,
+			[b, categoryOfA]
+		);
+		expect(error.constraint).toBe('menu_items_category_fk');
+	});
+
+	it("rejects a modifier in another restaurant's group", async () => {
+		const a = await makeRestaurant('Restaurant A');
+		const b = await makeRestaurant('Restaurant B');
+		const groupOfA = await makeGroup(a);
+		const error = await expectError(
+			`insert into modifiers (restaurant_id, group_id, name, price_delta_minor)
+			 values ($1, $2, 'Oat milk', 50)`,
+			[b, groupOfA]
+		);
+		expect(error.constraint).toBe('modifiers_group_fk');
+	});
+
+	it('rejects a second LIVE category of the same name in any case, and frees it once archived', async () => {
+		const r = await makeRestaurant();
+		const first = await makeCategory(r, 'Drinks');
+		const error = await expectError(
+			`insert into menu_categories (restaurant_id, name) values ($1, 'drinks')`,
+			[r]
+		);
+		expect(error.constraint).toBe('menu_categories_name_unique');
+
+		await pool.query('update menu_categories set archived_at = now() where id = $1', [first]);
+		await makeCategory(r, 'drinks');
+	});
+
+	it('rejects a modifier group whose maximum is below its minimum', async () => {
+		const r = await makeRestaurant();
+		const error = await expectError(
+			`insert into modifier_groups (restaurant_id, name, min_select, max_select)
+			 values ($1, 'Milk', 2, 1)`,
+			[r]
+		);
+		expect(error.constraint).toBe('modifier_groups_select_range');
+	});
+
+	it('rejects linking the same group to the same item twice', async () => {
+		const r = await makeRestaurant();
+		const item = await makeItem(r, await makeCategory(r));
+		const group = await makeGroup(r);
+		const link = `insert into menu_item_modifier_groups (restaurant_id, menu_item_id, modifier_group_id)
+			values ($1, $2, $3)`;
+		await pool.query(link, [r, item, group]);
+
+		const error = await expectError(link, [r, item, group]);
+		expect(error.constraint).toBe('menu_item_modifier_groups_pk');
+	});
+
+	it('accepts a negative modifier delta: "No cheese" is a legitimate discount on the item', async () => {
+		const r = await makeRestaurant();
+		const group = await makeGroup(r);
+		await pool.query(
+			`insert into modifiers (restaurant_id, group_id, name, price_delta_minor)
+			 values ($1, $2, 'No cheese', -50)`,
+			[r, group]
+		);
+	});
+
+	// Money comes back as a JavaScript bigint, never a number (invariant 1).
+	it('returns price_minor through Drizzle as a bigint', async () => {
+		const r = await makeRestaurant();
+		const id = await makeItem(r, await makeCategory(r));
+
+		const [row] = await testDb()
+			.select({ priceMinor: menuItems.priceMinor })
+			.from(menuItems)
+			.where(eq(menuItems.id, id));
+
+		expect(row.priceMinor).toBe(850n);
 	});
 });
 

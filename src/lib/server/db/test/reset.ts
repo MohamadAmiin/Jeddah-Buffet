@@ -6,11 +6,18 @@ import pg from 'pg';
 //
 // Current tables, child-first for readability (the single statement below makes
 // the order irrelevant):
-//   audit_log, sessions, pos_devices, users, restaurant_settings, restaurants
+//   audit_log, sessions, pos_devices, menu_item_modifier_groups, modifiers,
+//   menu_items, modifier_groups, menu_categories, users, restaurant_settings,
+//   restaurants
 export const TABLES = [
 	'audit_log',
 	'sessions',
 	'pos_devices',
+	'menu_item_modifier_groups',
+	'modifiers',
+	'menu_items',
+	'modifier_groups',
+	'menu_categories',
 	'users',
 	'restaurant_settings',
 	'restaurants'

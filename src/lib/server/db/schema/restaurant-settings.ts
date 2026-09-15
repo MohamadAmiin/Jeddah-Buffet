@@ -28,6 +28,20 @@ import { restaurants } from './restaurants';
 // assumes. settingsComplete() reports it missing until the owner sets it, and
 // updateSettings() is its one audited writer, bounded 30–1800 seconds.
 //
+// menu_version is NOT covered by the rule above, and its DEFAULT 1 is not a
+// "sensible default" in that sense (T-37). That rule forbids a default that
+// silently answers an open decision — tax, currency, approval limits, the idle
+// lock. A menu version answers no decision: it is the counter the POS compares
+// against /api/menu/version (spec 5), a NULL version would mean nothing, and every
+// restaurant starts at 1. It lives on this row rather than on restaurants because
+// restaurants holds identity — the name on receipts, the "opened on" date — and a
+// counter bumped on every price edit would make restaurants.updated_at stop
+// meaning "the restaurant record changed"; this row is already the restaurant's
+// mutable operational state, and spec 4 lists restaurant settings beside the menu
+// as what the POS caches. The menu module bumps it IN SQL, in the same transaction
+// as every menu write, and never touches updated_at, which pairs with the
+// settings.updated audit event.
+//
 // onDelete: 'restrict' throughout this plan: a restaurant with any history must
 // not be deletable, because audit rows reference it and those are append-only.
 export const restaurantSettings = pgTable(
@@ -50,6 +64,8 @@ export const restaurantSettings = pgTable(
 		taxRateBp: integer('tax_rate_bp'),
 		// Spec 33 open decision 4: an ISO 4217 code the money formatter can render.
 		currencyCode: text('currency_code'),
+		// The menu snapshot's version (spec 5) — see the note above this table.
+		menuVersion: integer('menu_version').notNull().default(1),
 		updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
 	},
 	(table) => [
