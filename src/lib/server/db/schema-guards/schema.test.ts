@@ -1,18 +1,28 @@
+import { readdirSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { getTableColumns, is } from 'drizzle-orm';
-import { PgTable, getTableConfig } from 'drizzle-orm/pg-core';
+import {
+	PgTable,
+	bigint,
+	getTableConfig,
+	integer,
+	numeric,
+	pgTable,
+	text
+} from 'drizzle-orm/pg-core';
 
 import * as restaurantsSchema from '../schema/restaurants';
 import * as restaurantSettingsSchema from '../schema/restaurant-settings';
 import * as usersSchema from '../schema/users';
 import * as sessionsSchema from '../schema/sessions';
 import * as auditSchema from '../schema/audit';
+import { TABLES } from '../test/reset';
 
 // Tables are DISCOVERED from the schema modules' exports, never from a
 // hand-maintained list of table names — a hand-maintained list is a list someone
 // forgets to update, which is exactly the failure these tests exist to prevent.
 // Adding a table to an existing file is picked up automatically; adding a new
-// FILE needs one import line here.
+// FILE needs one import line here, and its file name in IMPORTED_SCHEMA_FILES.
 //
 // These guards live OUTSIDE src/lib/server/db/schema/ deliberately: drizzle-kit
 // readdirSync()s that folder with no extension filter and require()s everything
@@ -25,6 +35,19 @@ const modules = {
 	...sessionsSchema,
 	...auditSchema
 };
+
+// Every file in src/lib/server/db/schema/ that is imported above. A schema file
+// nobody imports is invisible to every guard in this file while every test stays
+// green, so the 'imports every file' case below holds this list to the directory.
+const IMPORTED_SCHEMA_FILES = [
+	'audit.ts',
+	'restaurant-settings.ts',
+	'restaurants.ts',
+	'sessions.ts',
+	'users.ts'
+];
+
+type GuardedTable = { name: string; table: PgTable };
 
 const tables = Object.entries(modules)
 	.filter(([, value]) => is(value, PgTable))
@@ -46,6 +69,101 @@ const TENANT_COLUMN_EXEMPT: Record<string, string> = {
 	sessions: 'belongs to a user, who belongs to a restaurant'
 };
 
+// ── The column naming convention invariant 1 is enforced through ─────────────
+//
+// A column's type alone cannot say whether it is money — audit_log.id is a
+// bigint and is not — so every money rule below keys off the column NAME. That
+// makes the name a contract, and every schema task is held to it:
+//
+//   - a MONEY column's name ends in `_minor` and its type is `bigint`:
+//     price_minor, total_minor, opening_cash_minor. $8.50 is 850.
+//   - a RATE or percentage is an integer in BASIS POINTS and its name ends in
+//     `_bp`: tax_rate_bp, where 825 means 8.25%. Never a float, never numeric.
+//   - an INGREDIENT QUANTITY is numeric(12, 3) and its name contains `qty` or
+//     `quantity`. It is the one fixed-point type the schema permits.
+//
+// Without the positive `_minor` rule a price typed numeric(12,2) passes, pg hands
+// it back as a string, and the first arithmetic on it coerces to a float.
+
+// ADDING TO THIS LIST IS A PLAN'S DECISION, NEVER A CONVENIENCE. Keyed
+// `table.column`; each entry carries the reason that column may have a money-like
+// name without the `_minor` or `_bp` suffix.
+const MONEY_NAME_EXEMPT: Record<string, string> = {};
+
+const MONEY_NAME =
+	/(^|_)(price|amount|total|subtotal|cost|fee|tax|discount|charge|tip|balance|cash)(_|$)/;
+const QUANTITY_NAME = /(^|_)(qty|quantity)(_|$)/;
+const NUMERIC_TYPES = new Set([
+	'bigint',
+	'integer',
+	'smallint',
+	'real',
+	'double precision',
+	'money'
+]);
+
+/**
+ * Every numeric-type offence in `list`, one message per broken rule.
+ *
+ * The rules do NOT short-circuit — independent `if`s, no `continue`. A
+ * price_minor typed numeric(12, 2), the exact defect this guard exists to
+ * catch, breaks the fixed-point rule AND the `_minor` rule, and only the second
+ * message names bigint.
+ */
+function numericColumnOffenders(list: GuardedTable[]): string[] {
+	const offenders: string[] = [];
+	for (const { table, name } of list) {
+		for (const column of Object.values(getTableColumns(table))) {
+			const sql = column.getSQLType().toLowerCase();
+			// drizzle renders `numeric(12, 3)` WITH a space after the comma, so every
+			// fixed-point comparison is made against the whitespace-stripped form.
+			const compact = sql.replace(/\s+/g, '');
+			const columnName = column.name;
+			const where = `${name}.${columnName} is "${sql}"`;
+			const fixedPoint = compact.startsWith('numeric(') || compact.startsWith('decimal(');
+
+			if (sql === 'real' || sql === 'double precision') {
+				offenders.push(`${where} — money is bigint minor units, never a float`);
+			}
+			// `numeric` with no precision/scale is unconstrained: it would accept
+			// anything and is never what this project wants.
+			if (compact === 'numeric' || compact === 'decimal') {
+				offenders.push(`${where} — numeric needs explicit precision and scale, e.g. numeric(12,3)`);
+			}
+			if (fixedPoint && compact !== 'numeric(12,3)') {
+				offenders.push(
+					`${where} — the only permitted fixed-point type is numeric(12, 3), for ingredient quantities`
+				);
+			}
+			if (compact === 'numeric(12,3)' && !QUANTITY_NAME.test(columnName)) {
+				offenders.push(
+					`${where} — a numeric(12, 3) column is an ingredient quantity; name it <thing>_qty`
+				);
+			}
+			if (columnName.endsWith('_minor') && sql !== 'bigint') {
+				offenders.push(`${where} — money is integer minor units in bigint (invariant 1)`);
+			}
+			if (columnName.endsWith('_bp') && sql !== 'integer') {
+				offenders.push(`${where} — a rate is an integer in basis points`);
+			}
+			// Restricted to numeric-ish types on purpose: a text column called tax_mode
+			// is a setting, not an amount.
+			if (
+				MONEY_NAME.test(columnName) &&
+				!columnName.endsWith('_minor') &&
+				!columnName.endsWith('_bp') &&
+				!(`${name}.${columnName}` in MONEY_NAME_EXEMPT) &&
+				(NUMERIC_TYPES.has(sql) || fixedPoint)
+			) {
+				offenders.push(
+					`${where} — a money column is named <thing>_minor and typed bigint; a rate is an integer named <thing>_bp`
+				);
+			}
+		}
+	}
+	return offenders;
+}
+
 describe('schema guards every future aggregate inherits', () => {
 	it('discovers the tables it is meant to guard', () => {
 		expect(tables.map((t) => t.name).sort()).toEqual([
@@ -55,6 +173,26 @@ describe('schema guards every future aggregate inherits', () => {
 			'sessions',
 			'users'
 		]);
+	});
+
+	// Adding a schema file fails this until the file is imported at the top of this
+	// guard AND listed in IMPORTED_SCHEMA_FILES — otherwise its tables escape the
+	// tenant, timestamp and money guards below with every test still green.
+	it('imports every file in src/lib/server/db/schema', () => {
+		const onDisk = readdirSync(new URL('../schema', import.meta.url))
+			.filter((file) => file.endsWith('.ts'))
+			.sort();
+		expect(
+			onDisk,
+			'A schema file is not imported by this guard. Import it above and add its file name ' +
+				'to IMPORTED_SCHEMA_FILES, or its tables are never checked.'
+		).toEqual([...IMPORTED_SCHEMA_FILES].sort());
+	});
+
+	// A table that exists but is never truncated leaks rows between integration
+	// test files, and the symptoms point away from the cause.
+	it('truncates every table it guards', () => {
+		expect([...TABLES].sort()).toEqual(tables.map((t) => t.name).sort());
 	});
 
 	it('every tenant table has a restaurant_id column', () => {
@@ -96,29 +234,47 @@ describe('schema guards every future aggregate inherits', () => {
 	});
 
 	// Money is integer minor units in bigint (invariant 1); ingredient quantities
-	// are numeric(12,3). Anything else is a bug. This plan creates no such column,
-	// so the test passes trivially today and earns its keep the first time a later
-	// plan adds a price.
-	it('no floating-point or unconstrained decimal column exists (invariant 1)', () => {
-		const offenders: string[] = [];
-		for (const { table, name } of tables) {
-			for (const column of Object.values(getTableColumns(table))) {
-				const sqlType = column.getSQLType().toLowerCase();
-				const where = `${name}.${column.name} is "${sqlType}"`;
+	// are numeric(12,3). Every money rule keys off the column name, so audit_log.id
+	// — a bigint that is not money — is correctly left alone.
+	it('every money column is bigint minor units, and no float or unconstrained decimal exists (invariant 1)', () => {
+		const offenders = numericColumnOffenders(tables);
+		expect(offenders, `Forbidden numeric columns: ${offenders.join('; ')}`).toEqual([]);
+	});
 
-				if (sqlType === 'real' || sqlType === 'double precision') {
-					offenders.push(`${where} — money is bigint minor units, never a float`);
-					continue;
-				}
-				// `numeric` with no precision/scale is unconstrained: it would accept
-				// anything and is never what this project wants.
-				if (sqlType === 'numeric' || sqlType === 'decimal') {
-					offenders.push(
-						`${where} — numeric needs explicit precision and scale, e.g. numeric(12,3)`
-					);
-				}
-			}
-		}
-		expect(offenders, `Forbidden numeric types: ${offenders.join('; ')}`).toEqual([]);
+	// MANDATORY (spec 29 — money arithmetic and rounding): the schema-level half,
+	// the guard that stops a money value being stored as anything but integer minor
+	// units. Fixture columns are declared HERE and never spread into `modules`, so
+	// the tenant and timestamp guards never see them.
+	it('flags every column shape invariant 1 forbids and passes the ones it permits', () => {
+		const fixture = pgTable('fixture_money', {
+			priceMinorAsFixedPoint: numeric('price_minor', { precision: 12, scale: 2 }),
+			priceWithoutSuffix: bigint('price', { mode: 'bigint' }),
+			taxRateWithoutSuffix: integer('tax_rate'),
+			quantityWithoutSuffix: numeric('flour', { precision: 12, scale: 3 }),
+			totalAmountMinor: bigint('total_amount_minor', { mode: 'bigint' }),
+			taxRateBp: integer('tax_rate_bp'),
+			flourQty: numeric('flour_qty', { precision: 12, scale: 3 }),
+			taxMode: text('tax_mode')
+		});
+		const offenders = numericColumnOffenders([{ name: 'fixture_money', table: fixture }]);
+		const about = (column: string) =>
+			offenders.filter((message) => message.startsWith(`fixture_money.${column} is `));
+
+		// The case the guard did not catch before T-04. Two messages (the rules do
+		// not short-circuit), and the one asserted on is the one that names bigint —
+		// the fixed-point message alone would not have caught the defect.
+		expect(about('price_minor')).toHaveLength(2);
+		expect(
+			about('price_minor').some((m) => m.includes('money is integer minor units in bigint'))
+		).toBe(true);
+
+		expect(about('price')).toHaveLength(1); // right type, wrong name
+		expect(about('tax_rate')).toHaveLength(1); // a rate must be _bp
+		expect(about('flour')).toHaveLength(1); // a quantity must be named so
+
+		expect(about('total_amount_minor')).toEqual([]);
+		expect(about('tax_rate_bp')).toEqual([]);
+		expect(about('flour_qty')).toEqual([]);
+		expect(about('tax_mode')).toEqual([]);
 	});
 });

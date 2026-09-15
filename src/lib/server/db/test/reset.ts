@@ -7,7 +7,13 @@ import pg from 'pg';
 // Current tables, child-first for readability (the single statement below makes
 // the order irrelevant):
 //   audit_log, sessions, users, restaurant_settings, restaurants
-const TABLES = ['audit_log', 'sessions', 'users', 'restaurant_settings', 'restaurants'] as const;
+export const TABLES = [
+	'audit_log',
+	'sessions',
+	'users',
+	'restaurant_settings',
+	'restaurants'
+] as const;
 
 // Connect as the OWNER. TEST_DATABASE_URL points at `matcami` for exactly this
 // reason (T-02 step 4): TRUNCATE requires a privilege the runtime role
