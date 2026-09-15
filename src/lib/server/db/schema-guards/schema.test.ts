@@ -16,6 +16,7 @@ import * as restaurantSettingsSchema from '../schema/restaurant-settings';
 import * as usersSchema from '../schema/users';
 import * as sessionsSchema from '../schema/sessions';
 import * as auditSchema from '../schema/audit';
+import * as posDevicesSchema from '../schema/pos-devices';
 import { TABLES } from '../test/reset';
 
 // Tables are DISCOVERED from the schema modules' exports, never from a
@@ -33,7 +34,8 @@ const modules = {
 	...restaurantSettingsSchema,
 	...usersSchema,
 	...sessionsSchema,
-	...auditSchema
+	...auditSchema,
+	...posDevicesSchema
 };
 
 // Every file in src/lib/server/db/schema/ that is imported above. A schema file
@@ -41,6 +43,7 @@ const modules = {
 // green, so the 'imports every file' case below holds this list to the directory.
 const IMPORTED_SCHEMA_FILES = [
 	'audit.ts',
+	'pos-devices.ts',
 	'restaurant-settings.ts',
 	'restaurants.ts',
 	'sessions.ts',
@@ -168,6 +171,7 @@ describe('schema guards every future aggregate inherits', () => {
 	it('discovers the tables it is meant to guard', () => {
 		expect(tables.map((t) => t.name).sort()).toEqual([
 			'audit_log',
+			'pos_devices',
 			'restaurant_settings',
 			'restaurants',
 			'sessions',
