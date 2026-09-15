@@ -157,6 +157,41 @@ describe('the token contract', () => {
 		).toEqual([]);
 	});
 
+	it('pins the POS scope against EVERY token of the bare :root, not only the themed ones', () => {
+		// The stronger form of the test above: adding a themed token to :root and
+		// forgetting the POS scope now fails here, even before a dark block themes it.
+		// There is exactly ONE exemption list — the six menu-category bands — and it is
+		// PROVED rather than trusted: a token may be exempt only while it is
+		// theme-invariant, i.e. absent from both dark blocks.
+		const CATEGORY_BANDS = [
+			'--c-cat-grills',
+			'--c-cat-rice',
+			'--c-cat-somali',
+			'--c-cat-drinks',
+			'--c-cat-sides',
+			'--c-cat-sweets'
+		];
+		for (const band of CATEGORY_BANDS) {
+			expect(bare.has(band), `${band} is not in the bare :root`).toBe(true);
+			expect(
+				mediaDark.has(band),
+				`${band} is exempt from the POS scope only while it is theme-invariant, but the dark media block themes it`
+			).toBe(false);
+			expect(
+				stampDark.has(band),
+				`${band} is exempt from the POS scope only while it is theme-invariant, but the dark stamp block themes it`
+			).toBe(false);
+		}
+
+		const missing = [...bare.keys()].filter(
+			(token) => !posScope.has(token) && !CATEGORY_BANDS.includes(token)
+		);
+		expect(
+			missing,
+			`[data-surface="pos"] must declare its own value for every token of the bare :root: ${missing.join(', ')}`
+		).toEqual([]);
+	});
+
 	it('re-declares its var() aliases inside the POS scope', () => {
 		// A custom property's var() is substituted at COMPUTED-VALUE time on the element
 		// that DECLARES it, and the resolved literal is what inherits. [data-surface="pos"]

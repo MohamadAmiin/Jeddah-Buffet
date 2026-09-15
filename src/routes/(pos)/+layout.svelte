@@ -13,6 +13,12 @@
 	//      +layout.server.ts and no +page.server.ts anywhere under (pos): a
 	//      blocking server load is the seam that makes offline impossible, and
 	//      a scaffold is where that pattern gets copied from.
+	//
+	//   3. Pages live under the INNER pos/ directory, so they serve at /pos/...
+	//      A route group is not a URL segment: a page placed directly in this
+	//      group serves at a top-level URL and silently escapes the service
+	//      worker's /pos scope, the manifest's scope and the route guard's /pos
+	//      opening. The POS shell is src/routes/(pos)/pos/+layout.svelte.
 	let { children } = $props();
 </script>
 
