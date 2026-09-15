@@ -118,7 +118,14 @@ describe("store.ts's menu path, as written", () => {
 		expect(start).toBeGreaterThan(-1);
 		expect(source).toContain('.abort(');
 		const inside = source.slice(start, source.indexOf('\n}\n', start));
-		expect(inside).not.toContain('fetch(');
+		// Any network call — `fetch(`, `await fetch(` or the injected `fetchFn(` — inside
+		// the transaction lets it auto-commit during the await, leaving half a menu.
+		const networkCall = /fetch\w*\(/;
+		expect(inside, 'a network call sits inside the menu transaction').not.toMatch(networkCall);
+		// The positive control: the same pattern DOES see syncMenu's real calls, which
+		// are spelled `await fetchFn(`, so this tripwire cannot pass by misspelling.
+		const syncMenuBody = source.slice(source.indexOf('export async function syncMenu'), start);
+		expect(syncMenuBody).toMatch(networkCall);
 	});
 
 	it('adds the menu store in a NEW case and leaves case 0 alone', () => {
