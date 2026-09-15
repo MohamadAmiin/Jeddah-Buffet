@@ -43,6 +43,12 @@ export type CachedEmployee = {
  */
 export type OfflineLogin = {
 	clientOpId: string;
+	/**
+	 * The pos_devices uuid this sign-in happened on (bindDevice). The record keeps
+	 * it for ever: whatever flushes it later must send it under THIS device, never
+	 * under whichever device the tablet has been re-registered as since.
+	 */
+	deviceId: string;
 	employeeId: string;
 	event: string;
 	occurredAt: string;
@@ -198,6 +204,49 @@ export function readCachedSetting(key: string): Promise<unknown> {
 export async function readCachedIdleSeconds(): Promise<number | null> {
 	const value = await readCachedSetting('posIdleLockSeconds');
 	return typeof value === 'number' ? value : null;
+}
+
+const BOUND_DEVICE_KEY = 'deviceId';
+
+/**
+ * Bind this browser's cache to the registered device the server just named — the
+ * pos_devices uuid from GET /api/pos/employees. A device CODE (POS1) repeats in
+ * every restaurant, so it cannot bind anything.
+ *
+ * When the device CHANGES — a tablet moved to another restaurant, or registered
+ * again — everything cached for the old device is dropped in the SAME transaction
+ * that records the new binding: the employees, whose cached PIN hashes would
+ * otherwise sign the old restaurant's staff in on the new till offline, and the
+ * settings (the idle lock, and the menu version kept there). offline_logins is
+ * NEVER touched: each row carries the device it was recorded on, and an unsynced
+ * record is kept, never deleted (invariant 5).
+ *
+ * (Requested by the public-sign-up planning session on the user's behalf: once
+ * anyone can create a restaurant, a tablet can change hands between companies.)
+ */
+export function bindDevice(deviceId: string): Promise<'unchanged' | 'bound'> {
+	return withDb(async (db) => {
+		let outcome: 'unchanged' | 'bound' = 'unchanged';
+		await inTransaction(db, ['employees', 'settings'], 'readwrite', (tx) => {
+			const settings = tx.objectStore('settings');
+			const current = settings.get(BOUND_DEVICE_KEY);
+			current.onsuccess = () => {
+				const stored = (current.result as { value?: unknown } | undefined)?.value;
+				if (stored === deviceId) return;
+				outcome = 'bound';
+				tx.objectStore('employees').clear();
+				settings.clear();
+				settings.put({ key: BOUND_DEVICE_KEY, value: deviceId });
+			};
+		});
+		return outcome;
+	});
+}
+
+/** The device this cache is bound to, or null before the first successful fetch. */
+export async function readBoundDeviceId(): Promise<string | null> {
+	const value = await readCachedSetting(BOUND_DEVICE_KEY);
+	return typeof value === 'string' ? value : null;
 }
 
 /**

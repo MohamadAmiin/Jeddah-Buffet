@@ -12,7 +12,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { cacheEmployees, cacheSettings, readCachedEmployees } from '$lib/pos/store';
+	import { bindDevice, cacheEmployees, cacheSettings, readCachedEmployees } from '$lib/pos/store';
 
 	type Role = 'owner' | 'cashier' | 'waiter';
 	type DirectoryEntry = {
@@ -80,6 +80,7 @@
 			return;
 		}
 		const body = (await response.json()) as {
+			device: { id: string };
 			employees: DirectoryEntry[];
 			settings: { posIdleLockSeconds: number | null };
 		};
@@ -91,6 +92,10 @@
 		// ARRIVED — null stays null (no default exists; CLAUDE.md, 2026-09-15).
 		cacheWarning = false;
 		try {
+			// FIRST bind the cache to this device: if the tablet now answers as a
+			// different registered device, everything cached for the old one is dropped
+			// before anything new is written.
+			await bindDevice(body.device.id);
 			await cacheEmployees(body.employees);
 			await cacheSettings([{ key: 'posIdleLockSeconds', value: body.settings.posIdleLockSeconds }]);
 		} catch {

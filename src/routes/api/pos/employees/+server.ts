@@ -44,5 +44,12 @@ export const GET: RequestHandler = async (event) => {
 	// no-store: neither the browser's HTTP cache nor any intermediary keeps this
 	// body. The till caches it deliberately in IndexedDB — a different store, with
 	// a different lifetime and navigator.storage.persist() behind it.
-	return json({ employees, settings }, { status: 200, headers: { 'cache-control': 'no-store' } });
+	// device.id — the pos_devices uuid — is what the till binds its cache to (a code
+	// like POS1 repeats in every restaurant). When it changes, the till drops every
+	// bundle cached for the old device, so a tablet moved to another restaurant can
+	// never sign the old restaurant's staff in from their cached PIN hashes.
+	return json(
+		{ device: { id: device.deviceId }, employees, settings },
+		{ status: 200, headers: { 'cache-control': 'no-store' } }
+	);
 };

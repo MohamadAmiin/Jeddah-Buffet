@@ -85,6 +85,7 @@ async function get(cookies: Record<string, string>) {
 		return {
 			status: response.status,
 			body: JSON.parse(await response.text()) as {
+				device: { id: string };
 				employees: Array<Record<string, unknown>>;
 				settings: { posIdleLockSeconds: number | null };
 			},
@@ -140,12 +141,14 @@ describe('GET /api/pos/employees', () => {
 
 	// The leak this catches is a route that spreads a database row: asserted on the
 	// SERIALISED body, not on the read model's return value.
-	it('serialises exactly the five keys of the read model, and exactly two top-level keys', async () => {
+	it('serialises exactly the five keys of the read model, and exactly three top-level keys', async () => {
 		const a = await makeRestaurant('Cafe A', 'a@cafe.com');
 
 		const { body } = await get({ [DEVICE_COOKIE]: a.token });
 
-		expect(Object.keys(body!).sort()).toEqual(['employees', 'settings']);
+		expect(Object.keys(body!).sort()).toEqual(['device', 'employees', 'settings']);
+		// The device's uuid — what the till binds its cache to — and nothing else.
+		expect(body!.device).toEqual({ id: a.deviceId });
 		for (const entry of body!.employees) {
 			expect(Object.keys(entry).sort()).toEqual([
 				'displayName',

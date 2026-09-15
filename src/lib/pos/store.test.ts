@@ -5,9 +5,11 @@ import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { hashPin } from '../pin';
 import {
+	bindDevice,
 	cacheEmployees,
 	cacheSettings,
 	openPosDb,
+	readBoundDeviceId,
 	readCachedEmployees,
 	readCachedIdleSeconds,
 	readCachedSetting,
@@ -50,6 +52,7 @@ function employee(id: string, pinPhc: string | null = null): CachedEmployee {
 
 const login = (clientOpId: string, occurredAt: string): OfflineLogin => ({
 	clientOpId,
+	deviceId: 'device-A',
 	employeeId: 'e-1',
 	event: 'pos.pin.success',
 	occurredAt,
@@ -119,5 +122,30 @@ describe('the POS store', () => {
 
 		await cacheSettings([{ key: 'posIdleLockSeconds', value: 300 }]);
 		expect(await readCachedIdleSeconds()).toBe(300);
+	});
+
+	// A tablet moved from restaurant A to restaurant B must not sign A's staff in on
+	// B's till from A's cached PIN hashes — and must neither lose nor re-attribute
+	// A's unsynced offline records.
+	it('drops the cached bundle when the device changes, and never touches offline_logins', async () => {
+		expect(await bindDevice('device-A')).toBe('bound');
+		await cacheEmployees([employee('a1', await hashPin('1111'))]);
+		await cacheSettings([{ key: 'posIdleLockSeconds', value: 300 }]);
+		await recordOfflineLogin(login('op-A', '2026-09-15T10:00:00.000Z'));
+
+		// The same device again: nothing changes.
+		expect(await bindDevice('device-A')).toBe('unchanged');
+		expect(await readCachedEmployees()).toHaveLength(1);
+		expect(await readCachedIdleSeconds()).toBe(300);
+
+		// A different device: A's bundle is gone, A's offline record is not.
+		expect(await bindDevice('device-B')).toBe('bound');
+		expect(await readCachedEmployees()).toEqual([]);
+		expect(await verifyCachedPin('a1', '1111')).toBe(false);
+		expect(await readCachedIdleSeconds()).toBeNull();
+		expect(await readBoundDeviceId()).toBe('device-B');
+		const rows = await offlineLogins();
+		expect(rows).toHaveLength(1);
+		expect(rows[0].deviceId).toBe('device-A');
 	});
 });

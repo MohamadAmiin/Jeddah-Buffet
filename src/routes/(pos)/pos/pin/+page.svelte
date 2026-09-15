@@ -21,6 +21,7 @@
 		POS_PIN_FAILED,
 		POS_PIN_SUCCESS,
 		type CachedEmployee,
+		readBoundDeviceId,
 		readCachedEmployees,
 		readCachedIdleSeconds,
 		recordOfflineLogin,
@@ -100,10 +101,19 @@
 	async function signInOffline(id: string, pin: string, clientOpId: string) {
 		let cached: CachedEmployee | undefined;
 		let verified = false;
+		// The device the cache belongs to: every offline record is stamped with it.
+		let deviceId: string | null = null;
 		try {
+			deviceId = await readBoundDeviceId();
 			cached = (await readCachedEmployees()).find((e) => e.id === id);
 			if (cached && cached.pinPhc !== null) verified = await verifyCachedPin(id, pin);
 		} catch {
+			message = 'No connection, and this device cannot check a PIN offline.';
+			return;
+		}
+		if (deviceId === null) {
+			// A cache with no device bound to it was never filled by this device's own
+			// directory fetch: nothing here may be trusted or recorded.
 			message = 'No connection, and this device cannot check a PIN offline.';
 			return;
 		}
@@ -118,6 +128,7 @@
 		try {
 			await recordOfflineLogin({
 				clientOpId,
+				deviceId,
 				employeeId: id,
 				event: verified ? POS_PIN_SUCCESS : POS_PIN_FAILED,
 				occurredAt: new Date().toISOString(),
