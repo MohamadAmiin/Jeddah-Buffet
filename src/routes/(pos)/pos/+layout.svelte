@@ -27,6 +27,7 @@
 	// --c-control-line resolves to --c-ink-3, 4.73:1 on that ground. `border-line`
 	// is decorative only and never a control edge.
 	import { onMount } from 'svelte';
+	import { dev } from '$app/environment';
 
 	let { children } = $props();
 
@@ -55,7 +56,49 @@
 			removeEventListener('offline', down);
 		};
 	});
+
+	// THE SERVICE WORKER — registered BY HAND, from this layout and from nowhere
+	// else. svelte.config.js turns SvelteKit's automatic registration off: its
+	// default scope is '/', which would put the till's worker in charge of
+	// /dashboard and leave authenticated HTML in Cache Storage that /logout does not
+	// clear.
+	//
+	// THE SCOPE IS '/pos', NOT '/pos/', and that is the trap in the whole decision.
+	// Scope matching is a plain STRING prefix on the client URL (the ServiceWorker
+	// specification's "Match Service Worker Registration"; MDN's prose implies a
+	// path-segment match and is wrong on this point). '/pos/' would not match the
+	// till's own landing screen at /pos, which would then fail to load offline.
+	// The same string-prefix rule is why NO route outside the (pos) group may have
+	// a path beginning with the characters "pos" — this worker would control it.
+	// A script at /service-worker.js may NARROW its scope to /pos with no
+	// Service-Worker-Allowed header; only widening would need one.
+	//
+	// `type: 'module'` in dev, where the worker is served unbundled; the production
+	// build is classic. onMount often runs after `load` has already fired, when a
+	// bare load listener would never run — hence the readyState check.
+	onMount(() => {
+		if (!('serviceWorker' in navigator)) return;
+		const register = () => {
+			navigator.serviceWorker
+				.register('/service-worker.js', { scope: '/pos', type: dev ? 'module' : 'classic' })
+				.catch(() => {
+					// No worker (an insecure origin, a blocked registration): the till
+					// still works online; it just cannot start offline.
+				});
+		};
+		if (document.readyState === 'complete') register();
+		else addEventListener('load', register, { once: true });
+	});
 </script>
+
+<svelte:head>
+	<!-- Linked from the POS shell ONLY, so no dashboard page advertises the till as
+	     installable. KNOWN GAP, cosmetic and on one platform: Chromium accepts the
+	     SVG manifest icon, iOS Safari does not — it wants an apple-touch-icon PNG,
+	     which is not generated here, so an iPad home-screen install shows a page
+	     thumbnail instead of an icon. -->
+	<link rel="manifest" href="/pos.webmanifest" />
+</svelte:head>
 
 <div data-surface="pos" class="text-pos bg-bg text-ink min-h-screen">
 	<div
