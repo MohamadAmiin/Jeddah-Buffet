@@ -24,7 +24,8 @@ const DASHBOARD_ROUTE_IDS = [
 	'/(dashboard)',
 	'/(dashboard)/dashboard',
 	'/(dashboard)/settings',
-	'/(dashboard)/device'
+	'/(dashboard)/device',
+	'/(dashboard)/employees'
 ];
 const NON_PUBLIC_ROUTE_IDS = [...DASHBOARD_ROUTE_IDS, '/logout'];
 

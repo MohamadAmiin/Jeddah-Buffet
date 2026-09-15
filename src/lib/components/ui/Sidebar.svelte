@@ -29,7 +29,7 @@
 
 	type NavItem = {
 		label: string;
-		href: '/dashboard' | '/settings' | '/device' | null;
+		href: '/dashboard' | '/settings' | '/device' | '/employees' | null;
 		icon: IconName;
 	};
 	type NavGroup = { id: string; label: string | null; items: NavItem[] };
@@ -108,7 +108,7 @@
 			id: 'nav-setup',
 			label: 'Setup',
 			items: [
-				{ label: 'Employees', href: null, icon: 'employees' },
+				{ label: 'Employees', href: '/employees', icon: 'employees' },
 				{ label: 'POS', href: '/device', icon: 'pos' },
 				{ label: 'Settings', href: '/settings', icon: 'settings' }
 			]
