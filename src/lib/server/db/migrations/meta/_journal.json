@@ -43,6 +43,13 @@
       "when": 1789481498203,
       "tag": "0005_secret_sandman",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789489377534,
+      "tag": "0006_exotic_venus",
+      "breakpoints": true
     }
   ]
 }

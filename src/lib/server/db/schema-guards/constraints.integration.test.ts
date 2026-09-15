@@ -1,5 +1,6 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import pg from 'pg';
+import { TAX_MODES } from '$lib/money/tax';
 
 // A constraint that exists only in a schema file proves nothing. These assertions
 // run real inserts against the real database and check the ERROR, not merely that
@@ -158,6 +159,78 @@ describe('users constraints', () => {
 			[restaurantId]
 		);
 		expect(rowCount).toBe(1);
+	});
+});
+
+describe('restaurant_settings constraints', () => {
+	async function makeSettings(): Promise<string> {
+		const restaurantId = await makeRestaurant();
+		await pool.query(
+			`insert into restaurant_settings (restaurant_id, time_zone) values ($1, 'Africa/Mogadishu')`,
+			[restaurantId]
+		);
+		return restaurantId;
+	}
+
+	it("rejects a tax mode that is neither 'exclusive' nor 'inclusive'", async () => {
+		const id = await makeSettings();
+		const error = await expectError(
+			`update restaurant_settings set tax_mode = 'included' where restaurant_id = $1`,
+			[id]
+		);
+		expect(error.constraint).toBe('restaurant_settings_tax_mode_valid');
+	});
+
+	it.each([-1, 10001])('rejects a tax rate of %i basis points', async (bp) => {
+		const id = await makeSettings();
+		const error = await expectError(
+			`update restaurant_settings set tax_rate_bp = $2 where restaurant_id = $1`,
+			[id, bp]
+		);
+		expect(error.constraint).toBe('restaurant_settings_tax_rate_bp_range');
+	});
+
+	it('rejects a currency code that is not three uppercase letters', async () => {
+		const id = await makeSettings();
+		const error = await expectError(
+			`update restaurant_settings set currency_code = 'sos' where restaurant_id = $1`,
+			[id]
+		);
+		expect(error.constraint).toBe('restaurant_settings_currency_code_format');
+	});
+
+	it('lets all three be unset, and accepts valid values at both ends of the range', async () => {
+		const id = await makeSettings();
+		await pool.query(
+			`update restaurant_settings set tax_mode = null, tax_rate_bp = null, currency_code = null
+			 where restaurant_id = $1`,
+			[id]
+		);
+		for (const bp of [0, 825, 10000]) {
+			await pool.query(
+				`update restaurant_settings set tax_mode = 'inclusive', tax_rate_bp = $2, currency_code = 'USD'
+				 where restaurant_id = $1`,
+				[id, bp]
+			);
+		}
+		const { rows } = await pool.query(
+			`select tax_mode, tax_rate_bp, currency_code from restaurant_settings where restaurant_id = $1`,
+			[id]
+		);
+		expect(rows[0]).toEqual({ tax_mode: 'inclusive', tax_rate_bp: 10000, currency_code: 'USD' });
+	});
+
+	// TAX_MODES and the CHECK's two literals are connected by no type system, so
+	// they are pinned together here, against the real database.
+	it('allows exactly the tax modes the money module knows', async () => {
+		expect(TAX_MODES).toEqual(['exclusive', 'inclusive']);
+		const id = await makeSettings();
+		for (const mode of TAX_MODES) {
+			await pool.query(`update restaurant_settings set tax_mode = $2 where restaurant_id = $1`, [
+				id,
+				mode
+			]);
+		}
 	});
 });
 
