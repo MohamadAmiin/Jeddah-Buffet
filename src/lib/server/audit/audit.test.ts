@@ -33,7 +33,14 @@ describe('assertNoSecrets', () => {
 		['a settings diff', { changes: { name: { old: 'A', new: 'B' } } }],
 		['a role and display name', { role: 'owner', displayName: 'Owner' }],
 		['an empty object', {}],
-		['a failed count', { email: 'a@b.c', failedCount: 5 }]
+		['a failed count', { email: 'a@b.c', failedCount: 5 }],
+		// The POS event shapes. A key such as failedPinCount would trip the guard and
+		// roll back the very lockout the row was recording — these cases are what
+		// would have caught it.
+		['a POS pin failure', { deviceCode: 'POS1', reason: 'bad_pin', failedCount: 3 }],
+		['a POS lockout', { deviceCode: 'POS1', failedCount: 5, lockedForMs: 300000 }],
+		['a POS device registration', { deviceCode: 'POS1', label: 'Counter tablet' }],
+		['an employee record', { role: 'cashier', displayName: 'Sam' }]
 	])('passes for %s', (_label, details) => {
 		expect(() => assertNoSecrets(details)).not.toThrow();
 	});

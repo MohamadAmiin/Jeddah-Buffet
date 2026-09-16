@@ -1,29 +1,34 @@
-# `money/` — integer cents, allocation, THE rounding rule, tax in both modes
+# `money/` — ONLY money helpers that touch the DB; the arithmetic is `src/lib/money/`
 
-Integer cents, allocation, THE rounding rule, tax in both modes. Imported by
-everything; imports no sibling.
+Money helpers that touch the database — reading a rate out of
+`restaurant_settings`, mapping a `bigint` column. No money arithmetic lives
+here.
 
-## Read this before writing any code here — the placement is UNRESOLVED
+## The placement is RESOLVED (2026-09-14)
 
-This directory exists because CLAUDE.md's layout names it. Creating it decides
-nothing. Moving it would, so it was not moved.
+The conflict this section used to record:
 
-The conflict, stated plainly:
-
-- CLAUDE.md invariant 1 says money arithmetic outside `src/lib/server/money`
+- CLAUDE.md invariant 1 said money arithmetic outside `src/lib/server/money`
   is a bug.
 - Spec 17 requires "one rounding rule, implemented in one function and used
   everywhere (POS, server, reports)".
 - SvelteKit build-blocks `$lib/server/**` from client code, and the offline POS
   must total a bill in the browser.
 
-Those cannot all hold as written. The spec outranks CLAUDE.md, so the pure
-arithmetic will most likely move to an isomorphic `src/lib/money/` — but that
-is the **first money task's** decision to make and record, together with the
-correction to CLAUDE.md invariant 1, in the same commit, and **before** it
-writes a single arithmetic function.
+Those could not all hold. The spec outranks CLAUDE.md, so the pure arithmetic
+lives in the **isomorphic** `src/lib/money/` — imported by `src/lib/server/**`,
+by `src/lib/pos/**` and by `src/routes/(pos)/**` alike — and CLAUDE.md
+invariant 1 was corrected to say so. `eslint.config.js` errors if that module
+imports `$lib/server/**`.
 
-Do not resolve it by copying a function into `src/lib/pos/`. Spec 17 says one
+What is left here: **only helpers that touch the database** — reading a rate
+out of `restaurant_settings`, mapping a `bigint` column. A helper here reads or
+maps a value and hands it to `src/lib/money/`; it never adds, multiplies,
+allocates or rounds money itself. This directory is kept on purpose: deleting
+it would read as "money moved out of the server", which is not what was
+decided.
+
+Copying a function into `src/lib/pos/` stays rejected. Spec 17 says one
 function used everywhere, and two copies of a rounding rule is the bug that
 requirement exists to prevent.
 

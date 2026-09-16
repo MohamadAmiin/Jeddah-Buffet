@@ -31,7 +31,7 @@
 <PageHeader
 	eyebrow="Setup"
 	title="Restaurant settings"
-	description="The two facts every other screen depends on. Changing either is allowed and is recorded with its old and new values; neither rewrites anything already posted."
+	description="The facts every other screen depends on. Changing one is allowed and is recorded with its old and new values; none rewrites anything already posted."
 />
 
 <div class="flex flex-col gap-5 px-4 pt-8 pb-16 lg:px-7">
@@ -79,11 +79,42 @@
 			</datalist>
 
 			<!--
-				NO fields for tax mode, tax rate, currency, approval limits or idle-lock
-				timing — not even disabled ones. Spec 33 open decisions 3, 4 and 6 are
-				unresolved, and a greyed-out field showing a plausible default is how an
-				unmade decision becomes a remembered fact.
+				Tax mode, tax rate and currency (spec 33 open decisions 3 and 4, answered
+				2026-09-15). NOT required: the columns are nullable and the owner may save
+				a rename without answering them. An empty field is "unset", never a default.
+				Tax mode is free text with a datalist, mirroring the time zone, because
+				Field renders an <input> only. There is NO idle-lock control here: it lives
+				on /device, beside the till it protects. Approval limits are still open
+				decision 6 and have no field at all.
 			-->
+			<Field
+				id="taxMode"
+				name="taxMode"
+				label="Tax mode"
+				list="tax-modes"
+				value={data.taxMode ?? ''}
+				hint="exclusive adds the tax on top of the price; inclusive means the price already contains it."
+			/>
+			<datalist id="tax-modes">
+				{#each data.taxModes as mode (mode)}
+					<option value={mode}></option>
+				{/each}
+			</datalist>
+			<Field
+				id="taxRateBp"
+				name="taxRateBp"
+				label="Tax rate (basis points)"
+				inputmode="numeric"
+				value={data.taxRateBp === null ? '' : String(data.taxRateBp)}
+				hint="825 means 8.25%. Whole basis points only."
+			/>
+			<Field
+				id="currencyCode"
+				name="currencyCode"
+				label="Currency code"
+				value={data.currencyCode ?? ''}
+				hint={`The one currency this restaurant uses. Supported: ${data.supportedCurrencies.join(', ')}.`}
+			/>
 
 			<div class="flex flex-wrap items-center gap-3">
 				<!-- The label says WHY it is disabled while a save is in flight: "Saving…"

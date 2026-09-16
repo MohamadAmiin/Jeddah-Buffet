@@ -1,33 +1,39 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { Card, PageHeader, StatusMark } from '$lib/components/ui';
+	import { EVENT_TEXT } from './event-text';
 
 	let { data } = $props();
 
-	// The real sequence of work. Only the first is computable, because only its
-	// feature exists — the rest are shown as "not started" with one line saying
-	// what each will do. Progress is not faked, and nothing links to a route that
-	// does not exist.
+	// The real sequence of work. The settings, employees, menu and device steps are
+	// computed, because their features exist — the rest are shown as "not started"
+	// with one line saying what each will do. Progress is not faked, and nothing
+	// links to a route that does not exist.
 	const steps = $derived([
 		{
 			label: 'Restaurant settings',
 			done: data.settings.complete,
 			href: '/settings',
+			cta: 'Open settings',
 			detail: data.settings.complete
-				? 'Name and time zone are set.'
+				? 'Name, time zone, tax and currency are set.'
 				: `Still needed: ${data.settings.missing.join(', ')}.`
 		},
 		{
 			label: 'Employees and PINs',
-			done: false,
-			href: null,
+			done: data.employeesReady,
+			href: '/employees',
+			cta: 'Add employees',
 			detail: 'Add the cashier and waiter, each with a PIN for the POS.'
 		},
 		{
 			label: 'Menu, categories and modifiers',
-			done: false,
-			href: null,
-			detail: 'What you sell, what it costs, and the options that change a recipe.'
+			done: data.menuReady,
+			href: '/menu',
+			cta: 'Open menu',
+			detail: data.menuReady
+				? 'Your menu has items. Prices and modifiers can be changed at any time.'
+				: 'What you sell, what it costs, and the options that change a recipe.'
 		},
 		{
 			label: 'Dining tables',
@@ -37,9 +43,11 @@
 		},
 		{
 			label: 'Register the POS device',
-			done: false,
-			href: null,
-			detail: 'Only a registered device may show the PIN screen.'
+			done: data.deviceRegistered,
+			href: '/device',
+			cta: 'Open the POS page',
+			detail:
+				'The till registers itself when the owner signs in on it once; the POS page shows it and can revoke it.'
 		},
 		{
 			label: 'Open the first POS session',
@@ -81,18 +89,6 @@
 	// Audit events are a closed union (src/lib/server/audit/events.ts). Mapping them
 	// to sentences here — rather than printing the raw dotted name — keeps the
 	// vocabulary in one place, and the `details` payload never leaves the server.
-	const EVENT_TEXT: Record<string, string> = {
-		'restaurant.registered': 'Restaurant registered',
-		'user.created': 'Account created',
-		'login.success': 'Signed in',
-		'login.failed': 'Failed sign-in attempt',
-		'login.locked_out': 'Account locked after repeated failures',
-		'login.rejected_locked': 'Sign-in refused while locked',
-		logout: 'Signed out',
-		'settings.updated': 'Settings changed',
-		'user.password_reset_by_operator': 'Password reset from the command line'
-	};
-
 	const activity = $derived(
 		data.activity.map((row) => ({
 			text: EVENT_TEXT[row.event] ?? row.event,
@@ -246,7 +242,7 @@
 									already carries the state, so an announced badge would say it twice.
 									The DOM text is the lowercase literal `not started` — e2e/auth.spec.ts
 									asserts getByText('not started', { exact: true }) resolves to exactly
-									five elements. `uppercase` changes the rendering only; a capitalised
+									six elements on a freshly registered restaurant. `uppercase` changes the rendering only; a capitalised
 									string in the markup would break the count.
 								-->
 								<span
@@ -257,11 +253,15 @@
 							</div>
 							<p class="text-caption text-ink-2">{step.detail}</p>
 							{#if step.href}
+								<!-- The cast is the union of the hrefs the steps array holds, and each
+								     linked step carries its own cta. A later step extends this shape
+								     rather than inventing a second one. -->
+
 								<a
-									href={resolve(step.href as '/settings')}
+									href={resolve(step.href as '/settings' | '/employees' | '/menu' | '/device')}
 									class="text-caption text-accent mt-1 self-start font-medium underline underline-offset-2"
 								>
-									Open settings
+									{step.cta}
 								</a>
 							{/if}
 						</div>

@@ -57,6 +57,32 @@ export default ts.config(
 		}
 	},
 
+	// src/lib/money is ISOMORPHIC: the server, lib/pos and the (pos) routes all
+	// import it, so it must import nothing from lib/server. The pattern list is
+	// copied verbatim from the (pos) block above rather than invented anew. None
+	// of those patterns matches $lib/money, which is why lib/pos and the (pos)
+	// routes may import it with no allowance — do not add one, and do not add
+	// $lib/money to the (pos) restriction: that import is the whole point.
+	{
+		files: ['src/lib/money/**/*.ts'],
+		rules: {
+			'no-restricted-imports': [
+				'error',
+				{
+					patterns: [
+						{
+							group: ['$lib/server/*', '$lib/server/**', '../server/*', '**/lib/server/**'],
+							message:
+								'src/lib/money is isomorphic — the POS totals a bill in the browser, so an import ' +
+								'of $lib/server/** from here cannot work offline; DB-touching helpers belong in ' +
+								'src/lib/server/money/.'
+						}
+					]
+				}
+			]
+		}
+	},
+
 	// eslint-config-prettier MUST stay last among the rule-setting configs, or it
 	// cannot turn off the stylistic rules it exists to disable.
 	prettier,
