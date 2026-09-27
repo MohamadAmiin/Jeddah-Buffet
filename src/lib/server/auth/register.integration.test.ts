@@ -1,20 +1,37 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+
 import { testDb, closeTestDb } from '../db/test/db';
+
 import { restaurants } from '../db/schema/restaurants';
+
 import { restaurantSettings } from '../db/schema/restaurant-settings';
+
 import { users } from '../db/schema/users';
+
 import { auditLog } from '../db/schema/audit';
+
+import { roles } from '../db/schema/roles';
+
+import { CASHIER_KEYS, WAITER_KEYS } from '../permissions/keys';
+
+import { listRoles } from '../permissions/roles';
+
 import { registerRestaurant, SIGNUP_DAILY_CAP, type RegisterContext } from './register';
+
 import { resetThrottle } from './throttle';
+
 import { validateSessionToken } from './session';
+
 import { canonicalTimeZone } from '../restaurants';
 
 // A seam for the atomicity test: writeAudit is the real implementation unless
 // this flag is set, in which case it throws exactly where the plan says to force
 // a failure.
 const forced = vi.hoisted(() => ({ failAudit: false }));
+
 vi.mock('../audit', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('../audit')>();
+
 	return {
 		...actual,
 		writeAudit: async (...args: Parameters<typeof actual.writeAudit>) => {
@@ -33,13 +50,19 @@ const base = {
 	email: 'owner@cafe.com',
 	password: 'a strong enough password'
 };
+
 const ctx: RegisterContext = { mode: 'public', ip: '203.0.113.9', userAgent: 'test-agent' };
 const operator: RegisterContext = { mode: 'operator', ip: null, userAgent: 'cli:test' };
 
 // A distinct restaurant and email per call, so a test about the cap is never
 // secretly a test about the email index.
 let seq = 0;
-const fresh = () => ({ ...base, restaurantName: `Cafe ${++seq}`, email: `owner${seq}@cafe.com` });
+
+const fresh = () => ({
+	...base,
+	restaurantName: `Cafe ${++seq}`,
+	email: `owner${seq}@cafe.com`
+});
 
 beforeEach(() => {
 	resetThrottle();
@@ -51,6 +74,43 @@ afterAll(async () => {
 });
 
 describe('registerRestaurant', () => {
+	it('seeds Cashier and Waiter roles with tenant-isolated permissions', async () => {
+		const first = await registerRestaurant(db, base, ctx);
+
+		expect(first.ok).toBe(true);
+		if (!first.ok) return;
+
+		const firstRoles = await listRoles(db, first.restaurantId);
+
+		expect(firstRoles).toHaveLength(2);
+
+		const firstCashier = firstRoles.find((role) => role.name === 'Cashier');
+		const firstWaiter = firstRoles.find((role) => role.name === 'Waiter');
+
+		expect(firstCashier?.permissionKeys).toEqual([...CASHIER_KEYS]);
+		expect(firstWaiter?.permissionKeys).toEqual([...WAITER_KEYS]);
+
+		const second = await registerRestaurant(db, fresh(), {
+			...ctx,
+			ip: '198.51.100.20'
+		});
+
+		expect(second.ok).toBe(true);
+		if (!second.ok) return;
+
+		const secondRoles = await listRoles(db, second.restaurantId);
+
+		expect(secondRoles).toHaveLength(2);
+
+		const allRoles = await db.select().from(roles);
+
+		expect(allRoles).toHaveLength(4);
+
+		expect(allRoles.filter((role) => role.restaurantId === first.restaurantId)).toHaveLength(2);
+
+		expect(allRoles.filter((role) => role.restaurantId === second.restaurantId)).toHaveLength(2);
+	});
+
 	it('creates one restaurant, one settings row, one owner and two audit rows', async () => {
 		const result = await registerRestaurant(db, base, ctx);
 
@@ -62,10 +122,12 @@ describe('registerRestaurant', () => {
 		expect(await db.select().from(users)).toHaveLength(1);
 
 		const events = (await db.select().from(auditLog)).map((r) => r.event).sort();
+
 		expect(events).toEqual(['restaurant.registered', 'user.created']);
 
 		// The returned session token really works.
 		const principal = await validateSessionToken(db, result.token);
+
 		expect(principal).not.toBeNull();
 		expect(principal!.role).toBe('owner');
 		expect(principal!.restaurantId).toBe(result.restaurantId);
@@ -79,14 +141,19 @@ describe('registerRestaurant', () => {
 		);
 
 		const [settings] = await db.select().from(restaurantSettings);
+
 		expect(settings.timeZone).toBe(canonicalTimeZone('Asia/Calcutta'));
+
 		const [owner] = await db.select().from(users);
+
 		expect(owner.email).toBe('owner@cafe.com');
 	});
 
 	it('never stores the password in clear', async () => {
 		await registerRestaurant(db, base, ctx);
+
 		const [owner] = await db.select().from(users);
+
 		expect(owner.passwordHash).not.toBe(base.password);
 		expect(owner.passwordHash).toMatch(/^\$argon2id\$/);
 	});
@@ -98,6 +165,7 @@ describe('registerRestaurant', () => {
 		const keys = (await db.select().from(auditLog))
 			.filter((r) => r.event === 'restaurant.registered')
 			.map((r) => (r.details as { signupKey: string | null }).signupKey);
+
 		expect(keys).toHaveLength(2);
 		expect(keys).toContain('203.0.113.9');
 		expect(keys).toContain(null);
@@ -117,11 +185,13 @@ describe('registerRestaurant', () => {
 
 		// And the failed attempt used up no sign-up: the same address still succeeds.
 		forced.failAudit = false;
+
 		expect((await registerRestaurant(db, base, ctx)).ok).toBe(true);
 	});
 
 	it('an invalid time zone creates nothing', async () => {
 		const result = await registerRestaurant(db, { ...base, timeZone: 'Not/AZone' }, ctx);
+
 		expect(result).toEqual({ ok: false, reason: 'invalid_time_zone' });
 		expect(await db.select().from(restaurants)).toHaveLength(0);
 		expect(await db.select().from(users)).toHaveLength(0);
@@ -130,9 +200,14 @@ describe('registerRestaurant', () => {
 	// PUBLIC SIGN-UP: no first-run gate, no token.
 	it('lets more companies sign up after the first', async () => {
 		for (let i = 0; i < 3; i++) {
-			const result = await registerRestaurant(db, fresh(), { ...ctx, ip: `198.51.100.${i + 10}` });
+			const result = await registerRestaurant(db, fresh(), {
+				...ctx,
+				ip: `198.51.100.${i + 10}`
+			});
+
 			expect(result.ok).toBe(true);
 		}
+
 		expect(await db.select().from(restaurants)).toHaveLength(3);
 		expect(await db.select().from(users)).toHaveLength(3);
 	});
@@ -170,6 +245,7 @@ describe('registerRestaurant', () => {
 
 		const succeeded = [a, b].filter((r) => r.ok);
 		const failed = [a, b].filter((r) => !r.ok);
+
 		expect(succeeded).toHaveLength(1);
 		expect(failed).toHaveLength(1);
 		expect((failed[0] as { reason: string }).reason).toBe('email_taken');
@@ -197,7 +273,11 @@ describe('the daily cap: 3 new companies per address per 24 hours', () => {
 	it('counts per address: another address is unaffected', async () => {
 		for (let i = 0; i < SIGNUP_DAILY_CAP; i++) await registerRestaurant(db, fresh(), ctx);
 
-		const other = await registerRestaurant(db, fresh(), { ...ctx, ip: '198.51.100.99' });
+		const other = await registerRestaurant(db, fresh(), {
+			...ctx,
+			ip: '198.51.100.99'
+		});
+
 		expect(other.ok).toBe(true);
 	});
 
@@ -210,9 +290,14 @@ describe('the daily cap: 3 new companies per address per 24 hours', () => {
 			...ctx,
 			ip: '2001:db8:1:2:ffff::9'
 		});
+
 		expect(sameSlash64).toEqual({ ok: false, reason: 'signup_limit' });
 
-		const nextSlash64 = await registerRestaurant(db, fresh(), { ...ctx, ip: '2001:db8:1:3::1' });
+		const nextSlash64 = await registerRestaurant(db, fresh(), {
+			...ctx,
+			ip: '2001:db8:1:3::1'
+		});
+
 		expect(nextSlash64.ok).toBe(true);
 	});
 
@@ -220,23 +305,28 @@ describe('the daily cap: 3 new companies per address per 24 hours', () => {
 		for (let i = 0; i < SIGNUP_DAILY_CAP; i++) {
 			expect((await registerRestaurant(db, fresh(), { ...ctx, ip: null })).ok).toBe(true);
 		}
+
 		const over = await registerRestaurant(db, fresh(), { ...ctx, ip: null });
+
 		expect(over).toEqual({ ok: false, reason: 'signup_limit' });
 	});
 
 	it('counts a rolling 24 hours', async () => {
 		const then = new Date('2026-09-10T10:00:00Z');
+
 		for (let i = 0; i < SIGNUP_DAILY_CAP; i++) {
 			expect((await registerRestaurant(db, fresh(), { ...ctx, now: then })).ok).toBe(true);
 		}
 
 		const within = new Date(then.getTime() + 23 * 60 * 60 * 1000);
+
 		expect(await registerRestaurant(db, fresh(), { ...ctx, now: within })).toEqual({
 			ok: false,
 			reason: 'signup_limit'
 		});
 
 		const after = new Date(then.getTime() + 24 * 60 * 60 * 1000 + 60_000);
+
 		expect((await registerRestaurant(db, fresh(), { ...ctx, now: after })).ok).toBe(true);
 	});
 
@@ -246,9 +336,11 @@ describe('the daily cap: 3 new companies per address per 24 hours', () => {
 		);
 
 		expect(results.filter((r) => r.ok)).toHaveLength(SIGNUP_DAILY_CAP);
+
 		for (const r of results.filter((r) => !r.ok)) {
 			expect((r as { reason: string }).reason).toBe('signup_limit');
 		}
+
 		expect(await db.select().from(restaurants)).toHaveLength(SIGNUP_DAILY_CAP);
 	});
 });
@@ -259,6 +351,7 @@ describe('throttle and operator mode', () => {
 		// insert, so these ten spend throttle tokens without touching the cap.
 		for (let i = 0; i < 10; i++) {
 			const result = await registerRestaurant(db, { ...fresh(), timeZone: 'Not/AZone' }, ctx);
+
 			expect(result).toEqual({ ok: false, reason: 'invalid_time_zone' });
 		}
 
@@ -272,9 +365,11 @@ describe('throttle and operator mode', () => {
 
 	it('operator mode skips the throttle and the cap, and does not use up a public allowance', async () => {
 		const sameAddress: RegisterContext = { ...operator, ip: '203.0.113.9' };
+
 		for (let i = 0; i < 12; i++) {
 			expect((await registerRestaurant(db, fresh(), sameAddress)).ok).toBe(true);
 		}
+
 		expect(await db.select().from(restaurants)).toHaveLength(12);
 
 		// Operator rows carry signupKey null, so the public cap never counts them.

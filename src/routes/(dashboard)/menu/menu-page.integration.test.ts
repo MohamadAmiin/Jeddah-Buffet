@@ -2,6 +2,7 @@ import { describe, it, expect, afterAll } from 'vitest';
 import type { RequestEvent } from '@sveltejs/kit';
 import { eq } from 'drizzle-orm';
 import { testDb, closeTestDb } from '$lib/server/db/test/db';
+import { seedStaff } from '$lib/server/db/test/seed';
 import { restaurants } from '$lib/server/db/schema/restaurants';
 import { users } from '$lib/server/db/schema/users';
 import { menuItems } from '$lib/server/db/schema/menu';
@@ -99,11 +100,10 @@ describe('the /menu page', () => {
 	// reachable endpoint.
 	it('refuses a cashier with 403 on the load and on every action', async () => {
 		const r = await makeRestaurant({ currency: true });
-		const [cashier] = await db
-			.insert(users)
-			.values({ restaurantId: r.restaurantId, role: 'cashier', displayName: 'Staff' })
-			.returning();
-		const asCashier = principal(cashier.id, r.restaurantId, 'cashier');
+		const cashier = await seedStaff(db, r.restaurantId, {
+			displayName: 'Staff'
+		});
+		const asCashier = principal(cashier.id, r.restaurantId, 'staff');
 
 		expect(await statusOf(() => load(makeEvent(asCashier) as never))).toBe(403);
 		for (const name of Object.keys(actions) as ActionName[]) {

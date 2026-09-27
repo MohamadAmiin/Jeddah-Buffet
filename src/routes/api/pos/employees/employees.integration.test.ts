@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { RequestEvent } from '@sveltejs/kit';
 import { testDb, closeTestDb } from '$lib/server/db/test/db';
+import { seedStaff } from '$lib/server/db/test/seed';
 import { restaurants } from '$lib/server/db/schema/restaurants';
 import { users } from '$lib/server/db/schema/users';
 import { hashPin } from '$lib/pin';
@@ -40,12 +41,13 @@ async function makeRestaurant(name: string, email: string) {
 			passwordHash: 'not-a-real-hash'
 		})
 		.returning();
-	await db.insert(users).values({
-		restaurantId: restaurant.id,
-		role: 'cashier',
+
+	await seedStaff(db, restaurant.id, {
+		roleName: 'Cashier',
 		displayName: 'Sam',
 		pinHash: PIN_1234
 	});
+
 	const device = await db.transaction((tx) =>
 		registerDevice(tx, { restaurantId: restaurant.id, actorUserId: owner.id, label: 'Till' })
 	);
@@ -124,12 +126,10 @@ describe('GET /api/pos/employees', () => {
 	it("returns only the device's restaurant's employees", async () => {
 		const a = await makeRestaurant('Cafe A', 'a@cafe.com');
 		const b = await makeRestaurant('Cafe B', 'b@cafe.com');
-		await db.insert(users).values({
-			restaurantId: b.restaurantId,
-			role: 'waiter',
+		await seedStaff(db, b.restaurantId, {
+			roleName: 'Cashier',
 			displayName: 'Should Not Appear'
 		});
-
 		const result = await get({ [DEVICE_COOKIE]: a.token });
 
 		expect(result.status).toBe(200);
@@ -141,7 +141,7 @@ describe('GET /api/pos/employees', () => {
 
 	// The leak this catches is a route that spreads a database row: asserted on the
 	// SERIALISED body, not on the read model's return value.
-	it('serialises exactly the five keys of the read model, and exactly three top-level keys', async () => {
+	it('serialises exactly the seven keys of the read model, and exactly three top-level keys', async () => {
 		const a = await makeRestaurant('Cafe A', 'a@cafe.com');
 
 		const { body } = await get({ [DEVICE_COOKIE]: a.token });
@@ -154,18 +154,25 @@ describe('GET /api/pos/employees', () => {
 				'displayName',
 				'id',
 				'isActive',
+				'isOwner',
+				'permissions',
 				'pinPhc',
-				'role'
+				'roleName'
 			]);
 		}
 	});
 
 	it('keeps an employee with no PIN and drops a deactivated one — both decided by the read model', async () => {
 		const a = await makeRestaurant('Cafe A', 'a@cafe.com');
-		await db.insert(users).values([
-			{ restaurantId: a.restaurantId, role: 'waiter', displayName: 'New Hire' },
-			{ restaurantId: a.restaurantId, role: 'waiter', displayName: 'Gone', isActive: false }
-		]);
+		await seedStaff(db, a.restaurantId, {
+			roleName: 'Cashier',
+			displayName: 'New Hire'
+		});
+		await seedStaff(db, a.restaurantId, {
+			roleName: 'Cashier',
+			displayName: 'Gone',
+			isActive: false
+		});
 
 		const { body } = await get({ [DEVICE_COOKIE]: a.token });
 		const byName = new Map(body!.employees.map((e) => [e.displayName, e]));

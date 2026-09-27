@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import type { DbTx } from '../db/client';
-import { users, type UserRole } from '../db/schema/users';
+import { users } from '../db/schema/users';
+import { roles } from '../db/schema/roles';
 import { writeAudit } from '../audit';
 import { verifyPin } from '../../pin';
 
@@ -53,7 +54,12 @@ export type PinAttemptContext = {
 	userAgent: string | null;
 	now?: Date;
 };
-export type PosEmployeeIdentity = { id: string; displayName: string; role: UserRole };
+export type PosEmployeeIdentity = {
+	id: string;
+	displayName: string;
+	isOwner: boolean;
+	roleName: string;
+};
 export type PinAttemptResult =
 	| { ok: true; employee: PosEmployeeIdentity }
 	| { ok: false; reason: 'invalid' }
@@ -81,6 +87,7 @@ export async function verifyEmployeePin(
 			id: users.id,
 			restaurantId: users.restaurantId,
 			role: users.role,
+			roleId: users.roleId,
 			displayName: users.displayName,
 			isActive: users.isActive,
 			pinHash: users.pinHash,
@@ -180,11 +187,37 @@ export async function verifyEmployeePin(
 		.update(users)
 		.set({ failedPinCount: 0, pinLockedUntil: null, updatedAt: now })
 		.where(eq(users.id, user.id));
+
+	const [roleRow] =
+		user.role === 'owner'
+			? []
+			: await tx
+					.select({ name: roles.name })
+					.from(roles)
+					.where(and(eq(roles.id, user.roleId!), eq(roles.restaurantId, user.restaurantId)))
+					.limit(1);
+
+	const isOwner = user.role === 'owner';
+	const roleName = isOwner ? 'Owner' : roleRow?.name;
+
+	if (!roleName) {
+		throw new Error('Active staff member has no live role');
+	}
+
 	await writeAudit(tx, {
 		...common,
 		actorUserId: user.id,
 		event: 'pos.pin.success',
-		details: { deviceCode: ctx.deviceCode, role: user.role }
+		details: { deviceCode: ctx.deviceCode, roleName }
 	});
-	return { ok: true, employee: { id: user.id, displayName: user.displayName, role: user.role } };
+
+	return {
+		ok: true,
+		employee: {
+			id: user.id,
+			displayName: user.displayName,
+			isOwner,
+			roleName
+		}
+	};
 }

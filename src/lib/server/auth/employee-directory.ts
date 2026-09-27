@@ -1,7 +1,8 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { Executor } from './session';
-import { users, type UserRole } from '../db/schema/users';
-
+import { users } from '../db/schema/users';
+import { roles, rolePermissions } from '../db/schema/roles';
+import { POS_KEYS, isPosPermissionKey, type PermissionKey } from '../permissions/keys';
 // THE POS EMPLOYEE DIRECTORY — and the one read in this codebase that returns a
 // credential derivative ON PURPOSE.
 //
@@ -38,7 +39,9 @@ import { users, type UserRole } from '../db/schema/users';
 export type PosEmployee = {
 	id: string;
 	displayName: string;
-	role: UserRole;
+	isOwner: boolean;
+	roleName: string;
+	permissions: PermissionKey[];
 	isActive: boolean;
 	pinPhc: string | null;
 };
@@ -57,15 +60,101 @@ export async function listPosEmployees(
 	database: Executor,
 	restaurantId: string
 ): Promise<PosEmployee[]> {
-	return database
+	const employees = await database
 		.select({
 			id: users.id,
 			displayName: users.displayName,
-			role: users.role,
+			isOwner: sql<boolean>`${users.role} = 'owner'`,
+			roleName: roles.name,
 			isActive: users.isActive,
-			pinPhc: users.pinHash
+			pinPhc: users.pinHash,
+			roleId: users.roleId
 		})
 		.from(users)
-		.where(and(eq(users.restaurantId, restaurantId), eq(users.isActive, true)))
-		.orderBy(asc(users.role), asc(users.displayName));
+		.leftJoin(roles, eq(users.roleId, roles.id))
+		.where(and(eq(users.restaurantId, restaurantId), eq(users.isActive, true)));
+
+	const permissionRows = await database
+		.select({
+			roleId: rolePermissions.roleId,
+			permissionKey: rolePermissions.permissionKey
+		})
+		.from(rolePermissions)
+		.where(eq(rolePermissions.restaurantId, restaurantId));
+
+	const permissionsByRole = new Map<string, Set<PermissionKey>>();
+
+	for (const row of permissionRows) {
+		if (!isPosPermissionKey(row.permissionKey)) {
+			continue;
+		}
+
+		const existing = permissionsByRole.get(row.roleId);
+
+		if (existing) {
+			existing.add(row.permissionKey);
+		} else {
+			permissionsByRole.set(row.roleId, new Set([row.permissionKey]));
+		}
+	}
+
+	return employees
+		.map((employee) => {
+			const isOwner = employee.isOwner;
+			const roleName = isOwner ? 'Owner' : (employee.roleName ?? '');
+
+			const permissions = isOwner
+				? [...POS_KEYS]
+				: POS_KEYS.filter((key) => permissionsByRole.get(employee.roleId ?? '')?.has(key));
+
+			return {
+				id: employee.id,
+				displayName: employee.displayName,
+				isOwner,
+				roleName,
+				permissions,
+				isActive: employee.isActive,
+				pinPhc: employee.pinPhc
+			};
+		})
+		.sort(
+			(a, b) =>
+				Number(b.isOwner) - Number(a.isOwner) ||
+				a.roleName.localeCompare(b.roleName) ||
+				a.displayName.localeCompare(b.displayName)
+		);
+}
+
+export async function posIdentity(
+	database: Executor,
+	restaurantId: string,
+	userId: string
+): Promise<{
+	id: string;
+	displayName: string;
+	isOwner: boolean;
+	roleName: string;
+} | null> {
+	const [employee] = await database
+		.select({
+			id: users.id,
+			displayName: users.displayName,
+			isOwner: sql<boolean>`${users.role} = 'owner'`,
+			roleName: roles.name
+		})
+		.from(users)
+		.leftJoin(roles, eq(users.roleId, roles.id))
+		.where(and(eq(users.id, userId), eq(users.restaurantId, restaurantId)))
+		.limit(1);
+
+	if (!employee) {
+		return null;
+	}
+
+	return {
+		id: employee.id,
+		displayName: employee.displayName,
+		isOwner: employee.isOwner,
+		roleName: employee.isOwner ? 'Owner' : (employee.roleName ?? '')
+	};
 }

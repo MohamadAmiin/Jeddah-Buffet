@@ -1,5 +1,3 @@
-import type { UserRole } from '../db/schema/users';
-
 // ───────────────────────── SPEC 8, VERBATIM ─────────────────────────
 // Copied from docs/spec.md section 8. Do not reword, reorder or "tidy" these —
 // keys.test.ts asserts them against the spec text, so a drift is a test failure
@@ -47,27 +45,47 @@ export const ADMIN_KEYS = [
 export type PermissionKey =
 	(typeof CASHIER_KEYS)[number] | (typeof WAITER_KEYS)[number] | (typeof ADMIN_KEYS)[number];
 
-/**
- * The owner gets EVERY key, ENUMERATED — never a wildcard.
- *
- * Enumerating means adding a key is a deliberate decision about who receives it,
- * rather than something the owner silently inherits. The POS keys are included on
- * purpose: spec 7 gives the owner a POS PIN used to approve sensitive actions, so
- * an owner who could not hold pos.sell would be unable to act at the till the day
- * the POS exists.
- */
-export const ROLE_KEYS: Record<UserRole, readonly PermissionKey[]> = {
-	owner: [...CASHIER_KEYS, ...WAITER_KEYS, ...ADMIN_KEYS],
-	cashier: [...CASHIER_KEYS],
-	waiter: [...WAITER_KEYS]
+export const POS_KEYS = [...CASHIER_KEYS, ...WAITER_KEYS] as const;
+export type PosPermissionKey = (typeof POS_KEYS)[number];
+
+/** The owner's grant, ENUMERATED (never a wildcard): every key, POS and admin. */
+export const OWNER_KEYS: readonly PermissionKey[] = [
+	...CASHIER_KEYS,
+	...WAITER_KEYS,
+	...ADMIN_KEYS
+];
+
+export function isPosPermissionKey(value: unknown): value is PosPermissionKey {
+	return typeof value === 'string' && (POS_KEYS as readonly string[]).includes(value);
+}
+
+/** Seeded for every restaurant; editable afterwards. Names are reserved nowhere except 'owner'. */
+export const DEFAULT_ROLES = [
+	{ name: 'Cashier', permissionKeys: CASHIER_KEYS },
+	{ name: 'Waiter', permissionKeys: WAITER_KEYS }
+] as const;
+
+export const RESERVED_ROLE_NAMES: readonly string[] = ['owner']; // compared lower-cased, trimmed
+
+export const ROLE_NAME_MAX = 60;
+
+/** Human labels for the roles page; the KEY is the contract, the label is copy. */
+export const PERMISSION_LABELS: Record<PosPermissionKey, string> = {
+	'pos.sell': 'Sell: ring up items',
+	'pos.payment': 'Take payment',
+	'pos.print_receipt': 'Print receipts',
+	'pos.void_unsent_item': 'Remove items not yet sent to the kitchen',
+	'pos.cash_payout': 'Cash pay-out, up to the limit',
+	'pos.create_order': 'Create orders',
+	'pos.view_menu': 'View the menu',
+	'pos.modify_order': 'Modify orders',
+	'pos.send_to_kitchen': 'Send orders to the kitchen',
+	'pos.transfer_table': 'Transfer tables'
 };
 
 /**
- * NO DATABASE TABLES FOR ROLES AND PERMISSIONS. Spec 3 lists "Roles, Permissions"
- * among the things PostgreSQL will contain, and this code map plus the users.role
- * column satisfies that. Editable RBAC tables are the "advanced RBAC" CLAUDE.md's
- * do-not-build list excludes: they would need their own management screens, their
- * own audit events and their own migration story before a single permission could
- * be checked.
+ * Roles are owner-editable rows, per restaurant (CLAUDE.md "Decisions already made",
+ * 2026-09-16). Staff permissions are stored in role_permissions and resolved from
+ * the database in T-06. The owner's grant is OWNER_KEYS above, in code.
  */
 export const ALL_KEYS: readonly PermissionKey[] = [...CASHIER_KEYS, ...WAITER_KEYS, ...ADMIN_KEYS];

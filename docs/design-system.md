@@ -148,10 +148,26 @@ One formatter, in `src/lib/server/money`, integer cents in and a string out (inv
 
 The dashboard is the owner's surface: seated, mouse-driven, online only (spec 7). It shares the token set with the POS and diverges in scale — **Tailwind's default spacing and type scale throughout**. The POS touch tokens (`p-touch`, `min-h-touch-xl`, `touch-min`, `touch-lg`) and the POS chrome tokens (`--c-screen`, `--c-key`, `--c-key-line`, `--c-key-ink`) **MUST NOT appear on any dashboard screen**. These rules are implemented once, in `src/lib/components/ui/`; a screen composes those primitives rather than retyping class strings.
 
+PIN fields: PinField only — digits, 4 to 6, masked with a show/hide toggle; the server rejects anything else and that rejection is the control.
+
 **Page skeleton.** A dashboard page is a `PageHeader` — heading, optional one-line description, optional action area — and then content. Content width is capped by `--container-page` (utility `max-w-page`), so a page stops at a readable measure instead of stretching across a wide monitor.
 
 **Surface hierarchy.** `bg-bg` is the page ground. `bg-raise` is a card or panel. `bg-raise-2` is an inset region nested *inside* a card. The header bar is `bg-raise` with a `border-line` bottom edge.
 
+**Primitives.** Dashboard screens compose these shared UI primitives rather than duplicating control markup or styling:
+- `Alert` — a visible page-level message.
+- `Button` — the four permitted dashboard action variants.
+- `Card` — a raised content surface.
+- `CheckField` — a labeled checkbox with optional hint and disabled reason.
+- `Field` — a labeled text-style form control with hint and error states.
+- `PageHeader` — the page heading, description, and optional actions.
+- `SelectField` — a labeled select control with options, hint, and error states.
+- `Sidebar` — dashboard navigation and the current-page state.
+- `StatusMark` — the shared glyph vocabulary for completion and availability states.
+- `Table` — responsive data tables that stack below `md`.
+- `ThemeToggle` — the dashboard light/dark theme control.
+
+**Tables.** Tables stack below Tailwind's `md` breakpoint and **never scroll horizontally**. Below `md`, each row presents column labels beside their values. Money and counts use `font-mono tabular-nums` and are right-aligned at `md` and above.
 ### Legal ink-on-surface pairs
 
 **Check this table before pairing an ink with a surface. Adding a new pair means measuring it.** Ratios are WCAG relative luminance computed from the hex values in `src/lib/styles/tokens.css`. Every rule is the **intersection of both themes**, so no screen has to be reasoned about twice.
@@ -190,7 +206,7 @@ The dashboard is the owner's surface: seated, mouse-driven, online only (spec 7)
 
 **Card.** `bg-raise`, `border-line`, `rounded-card`, `shadow-card`, generous internal padding (`p-6` on the default scale). **Cards do not nest inside cards** — an inset region uses `bg-raise-2` with `rounded-control`.
 
-**Empty and not-started states.** A glyph plus text, never colour alone. Reuse §3's glyph vocabulary rather than coining new marks; the dashboard's only status today is onboarding-step completion (`●` done, `○` not started).
+**Empty and not-started states.** A glyph plus text, never colour alone. Reuse §3's glyph vocabulary rather than coining new marks; the dashboard vocabulary is `●` done/active, `○` not started/inactive, and `✕` blocked (locked, archived).
 
 **Navigation.** The current page carries `aria-current="page"`. An unavailable destination is `aria-disabled="true"` with **NO link target** and a **visible reason** — never a hidden item, and never a dead link that 404s.
 

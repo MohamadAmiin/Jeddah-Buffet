@@ -4,6 +4,7 @@ import { eq, sql } from 'drizzle-orm';
 import { testDb, closeTestDb } from '../db/test/db';
 import { restaurants } from '../db/schema/restaurants';
 import { users } from '../db/schema/users';
+import { seedStaff } from '$lib/server/db/test/seed';
 import { posDevices } from '../db/schema/pos-devices';
 import {
 	DEVICE_COOKIE,
@@ -139,10 +140,9 @@ describe('registerDevice', () => {
 	it('refuses a cashier, and the owner of another restaurant, inserting nothing', async () => {
 		const a = await makeRestaurantWithOwner('a@cafe.com');
 		const b = await makeRestaurantWithOwner('b@cafe.com');
-		const [cashier] = await db
-			.insert(users)
-			.values({ restaurantId: a.restaurantId, role: 'cashier', displayName: 'Cashier' })
-			.returning();
+		const cashier = await seedStaff(db, a.restaurantId, {
+			displayName: 'Cashier'
+		});
 
 		await expect(register(a.restaurantId, cashier.id)).rejects.toThrow(
 			'registerDevice requires the owner of this restaurant'

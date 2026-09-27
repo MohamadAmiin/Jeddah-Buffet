@@ -9,13 +9,15 @@ import {
 	timestamp,
 	uniqueIndex,
 	index,
-	check
+	check,
+	foreignKey
 } from 'drizzle-orm/pg-core';
 import { restaurants } from './restaurants';
+import { roles } from './roles';
 
-// Spec 31's three roles. No Manager: open decision 5 defaults to owner PIN only,
-// and CLAUDE.md's do-not-build list excludes the Manager role.
-export const userRole = pgEnum('user_role', ['owner', 'cashier', 'waiter']);
+// Staff is every non-owner employee. The person's job title is stored in roles.name
+// through role_id. The old cashier/waiter user_role values are rewritten to staff by 0010.
+export const userRole = pgEnum('user_role', ['owner', 'staff']);
 
 // A union type derived from the enum, so later code never compares against a bare
 // string literal that a typo can break.
@@ -62,6 +64,7 @@ export const users = pgTable(
 			.notNull()
 			.references(() => restaurants.id, { onDelete: 'restrict' }),
 		role: userRole('role').notNull(),
+		roleId: uuid('role_id'),
 		displayName: text('display_name').notNull(),
 		email: text('email'),
 		passwordHash: text('password_hash'),
@@ -101,6 +104,22 @@ export const users = pgTable(
 			sql`${table.role} = 'owner' or (${table.email} is null and ${table.passwordHash} is null)`
 		),
 
-		index('users_restaurant_id_idx').on(table.restaurantId)
+		check(
+			'users_owner_has_no_role_staff_has_one',
+			sql`(${table.role} = 'owner') = (${table.roleId} is null)`
+		),
+
+		index('users_restaurant_id_idx').on(table.restaurantId),
+
+		index('users_role_id_idx').on(table.roleId),
+
+		// Composite FK so a user cannot hold another restaurant's role (tenant
+		// isolation). role_id stays nullable here — the owner/staff CHECK that
+		// requires staff to have one arrives in migration 0010 (T-05).
+		foreignKey({
+			columns: [table.restaurantId, table.roleId],
+			foreignColumns: [roles.restaurantId, roles.id],
+			name: 'users_role_fk'
+		}).onDelete('restrict')
 	]
 );

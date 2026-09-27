@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import type { RequestEvent } from '@sveltejs/kit';
 import { eq, sql } from 'drizzle-orm';
 import { testDb, closeTestDb } from '$lib/server/db/test/db';
+import { seedStaff } from '$lib/server/db/test/seed';
 import { restaurants } from '$lib/server/db/schema/restaurants';
 import { users } from '$lib/server/db/schema/users';
 import { posDevices } from '$lib/server/db/schema/pos-devices';
@@ -54,10 +55,9 @@ async function seed(): Promise<Seed> {
 			passwordHash: 'not-a-real-hash'
 		})
 		.returning();
-	const [cashier] = await db
-		.insert(users)
-		.values({ restaurantId: restaurant.id, role: 'cashier', displayName: 'Sam' })
-		.returning();
+	const cashier = await seedStaff(db, restaurant.id, {
+		displayName: 'Sam'
+	});
 
 	const revoked = await db.transaction((tx) =>
 		registerDevice(tx, { restaurantId: restaurant.id, actorUserId: owner.id, label: 'Old till' })
@@ -236,7 +236,7 @@ describe('MANDATORY (spec 29): insufficient role with a valid session', () => {
 		const cashier: Principal = {
 			userId: s.cashierId,
 			restaurantId: s.restaurantId,
-			role: 'cashier',
+			role: 'staff',
 			displayName: 'Sam',
 			email: null,
 			sessionId: 's-1',

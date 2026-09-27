@@ -8,6 +8,7 @@ RBAC checks and owner-PIN approval gates.
   check is unfinished (invariant 8).
 - Permission keys come from spec 8. That list is introduced with "For example:",
   so it is extensible — but extending it is a plan's call, never coined mid-task.
+- Roles are owner-editable rows (roles, role_permissions) over the ten spec 8 POS keys; the owner's grant is OWNER_KEYS in code and admin.* never enters a role. See CLAUDE.md "Decisions already made", 2026-09-16.
 - **Owner PIN approval is required** for: refund; void of an item already SENT
   to the kitchen; discount above the configured limit; comp/staff meal;
   re-opening a paid order; opening the cash drawer without a sale; cash pay-out

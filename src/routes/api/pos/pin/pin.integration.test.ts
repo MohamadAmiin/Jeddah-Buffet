@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { RequestEvent } from '@sveltejs/kit';
 import { and, eq, like, sql } from 'drizzle-orm';
 import { testDb, closeTestDb } from '$lib/server/db/test/db';
+import { seedStaff } from '$lib/server/db/test/seed';
 import { restaurants } from '$lib/server/db/schema/restaurants';
 import { users } from '$lib/server/db/schema/users';
 import { auditLog } from '$lib/server/db/schema/audit';
@@ -42,16 +43,12 @@ async function makeFixture(email = 'owner@cafe.com'): Promise<Fixture> {
 			passwordHash: 'not-a-real-hash'
 		})
 		.returning();
-	const [cashier] = await db
-		.insert(users)
-		.values({
-			restaurantId: restaurant.id,
-			role: 'cashier',
-			displayName: 'Sam',
-			pinHash: PIN_1234,
-			failedPasswordCount: 2
-		})
-		.returning();
+	const cashier = await seedStaff(db, restaurant.id, {
+		displayName: 'Sam',
+		pinHash: PIN_1234
+	});
+
+	await db.update(users).set({ failedPasswordCount: 2 }).where(eq(users.id, cashier.id));
 	const { deviceId, token } = await db.transaction((tx) =>
 		registerDevice(tx, { restaurantId: restaurant.id, actorUserId: owner.id, label: 'Till' })
 	);
@@ -165,7 +162,12 @@ describe('POST /api/pos/pin', () => {
 		);
 		expect(ok1).toEqual({
 			status: 200,
-			body: { employeeId: f.cashierId, displayName: 'Sam', role: 'cashier' }
+			body: {
+				employeeId: f.cashierId,
+				displayName: 'Sam',
+				isOwner: false,
+				roleName: 'Cashier'
+			}
 		});
 		expect(ok2).toEqual(ok1);
 		expect(await pinRows(okKey)).toHaveLength(1);
@@ -255,7 +257,12 @@ describe('POST /api/pos/pin', () => {
 
 		expect(result).toEqual({
 			status: 200,
-			body: { employeeId: f.cashierId, displayName: 'Sam', role: 'cashier' }
+			body: {
+				employeeId: f.cashierId,
+				displayName: 'Sam',
+				isOwner: false,
+				roleName: 'Cashier'
+			}
 		});
 		expect((await pinRows()).map((r) => r.event)).toEqual(['pos.pin.success']);
 	});

@@ -4,6 +4,7 @@ import { eq, sql } from 'drizzle-orm';
 import { testDb, closeTestDb } from '$lib/server/db/test/db';
 import { restaurants } from '$lib/server/db/schema/restaurants';
 import { users } from '$lib/server/db/schema/users';
+import { seedStaff } from '$lib/server/db/test/seed';
 import { posDevices } from '$lib/server/db/schema/pos-devices';
 import { auditLog } from '$lib/server/db/schema/audit';
 import type { Principal } from '$lib/server/auth/session';
@@ -87,16 +88,13 @@ async function revokedRows() {
 describe('the /device revoke action', () => {
 	// MANDATORY (spec 29 — a permission check on every POS surface). A 403 — never a
 	// 404, never a 303 — and the row untouched.
-	it('refuses a cashier with exactly 403, in the action and in the load', async () => {
+	it('refuses a staff member with exactly 403, in the action and in the load', async () => {
 		const a = await makeRestaurant('owner@cafe.com');
-		const [cashier] = await db
-			.insert(users)
-			.values({ restaurantId: a.restaurantId, role: 'cashier', displayName: 'Staff' })
-			.returning();
-		const asCashier = principal(cashier.id, a.restaurantId, 'cashier');
+		const staff = await seedStaff(db, a.restaurantId, { displayName: 'Staff' });
+		const asStaff = principal(staff.id, a.restaurantId, 'staff');
 
-		expect(await statusOf(() => revoke(makeEvent(asCashier, { deviceId: a.deviceId })))).toBe(403);
-		expect(await statusOf(() => load(makeEvent(asCashier) as never))).toBe(403);
+		expect(await statusOf(() => revoke(makeEvent(asStaff, { deviceId: a.deviceId })))).toBe(403);
+		expect(await statusOf(() => load(makeEvent(asStaff) as never))).toBe(403);
 
 		const [row] = await db.select().from(posDevices).where(eq(posDevices.id, a.deviceId));
 		expect(row.revokedAt).toBeNull();

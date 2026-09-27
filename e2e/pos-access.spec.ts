@@ -118,10 +118,10 @@ test('the owner registers the till from the till, and a cashier signs in with a 
 
 	// ── 7. the checklist moved by EXACTLY one step: six minus one ──────────────
 	// Only "Register the POS device" was completed here. Settings still lack the
-	// idle lock, tax and currency; Employees needs a cashier AND a waiter; there is
+	// idle lock, tax and currency; Employees is ready after one cashier with a PIN; there is
 	// no menu item; tables and POS sessions are not built in this plan.
 	await page.goto('/dashboard');
-	await expect(page.getByText('not started', { exact: true })).toHaveCount(5);
+	await expect(page.getByText('not started', { exact: true })).toHaveCount(4);
 
 	await till.close();
 });

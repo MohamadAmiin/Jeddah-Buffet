@@ -50,8 +50,7 @@ export const load: ServerLoad = async (event) => {
 
 	return {
 		settings,
-		employeesReady: staff.cashierWithPin && staff.waiterWithPin,
-		// The SAME predicate /device uses for "registered", deliberately: one
+		employeesReady: staff.staffWithPin, // The SAME predicate /device uses for "registered", deliberately: one
 		// definition of "the till is registered" for both screens.
 		deviceRegistered: device !== null && device.revokedAt === null,
 		menuReady,

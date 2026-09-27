@@ -1,11 +1,13 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { Executor } from '../auth/session';
 import type { DbTx } from '../db/client';
 import { restaurants } from '../db/schema/restaurants';
 import { restaurantSettings } from '../db/schema/restaurant-settings';
+import { roles, rolePermissions } from '../db/schema/roles';
 import { writeAudit } from '../audit';
 import { TAX_MODES, type TaxMode } from '../../money/tax';
 import { SUPPORTED_CURRENCIES } from '../../money/format';
+import { DEFAULT_ROLES } from '../permissions/keys';
 import { isValidTimeZone, canonicalTimeZone } from './time-zone';
 
 export { isValidTimeZone, canonicalTimeZone, timeZoneSuggestions } from './time-zone';
@@ -292,14 +294,51 @@ export type RestaurantInitializerInput = {
 	timeZone: string;
 };
 
+async function insertDefaultRoles(tx: DbTx, restaurantId: string): Promise<void> {
+	for (const defaultRole of DEFAULT_ROLES) {
+		const [role] = await tx
+			.insert(roles)
+			.values({
+				restaurantId,
+				name: defaultRole.name
+			})
+			.onConflictDoNothing()
+			.returning({ id: roles.id });
+
+		const roleId =
+			role?.id ??
+			(
+				await tx
+					.select({ id: roles.id })
+					.from(roles)
+					.where(and(eq(roles.restaurantId, restaurantId), eq(roles.name, defaultRole.name)))
+					.limit(1)
+			)[0]?.id;
+
+		if (!roleId) {
+			throw new Error(`Failed to initialize role "${defaultRole.name}".`);
+		}
+
+		await tx
+			.insert(rolePermissions)
+			.values(
+				defaultRole.permissionKeys.map((permissionKey) => ({
+					restaurantId,
+					roleId,
+					permissionKey
+				}))
+			)
+			.onConflictDoNothing();
+	}
+}
+
 /**
  * Ordered initializers run INSIDE the registration transaction.
  *
- * Ships with exactly one entry: the settings row. The list exists so a later plan
- * — the accounting plan needing a per-restaurant chart of accounts, for instance —
- * adds an idempotent entry HERE, rather than writing a migration that cross-joins
- * every existing restaurant and then silently does nothing for the next one
- * created.
+ * Ships with the settings row and default role rows. The list exists so later
+ * plans can add idempotent per-restaurant initialization here, rather than
+ * writing a migration that cross-joins every existing restaurant and then
+ * silently does nothing for the next one created.
  */
 export const restaurantInitializers: Array<
 	(tx: DbTx, restaurantId: string, input: RestaurantInitializerInput) => Promise<void>
@@ -309,6 +348,9 @@ export const restaurantInitializers: Array<
 			restaurantId,
 			timeZone: canonicalTimeZone(input.timeZone)
 		});
+	},
+	async function initializeDefaultRoles(tx, restaurantId) {
+		await insertDefaultRoles(tx, restaurantId);
 	}
 ];
 
@@ -326,3 +368,5 @@ export async function onRestaurantCreated(
 // (they arrive with their own task, nullable, and are reported missing above) and
 // approval limits (spec 33 open decision 6). The POS idle lock HAS landed (T-08):
 // nullable, no column default, and no fallback number anywhere in code.
+// Roles ARE here: insertDefaultRoles runs as part of the registration initializer
+// transaction above.

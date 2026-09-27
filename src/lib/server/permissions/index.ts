@@ -1,19 +1,42 @@
 import { error, redirect, type RequestEvent } from '@sveltejs/kit';
 import type { Principal } from '../auth/session';
-import { ROLE_KEYS, type PermissionKey } from './keys';
+import { OWNER_KEYS, type PermissionKey } from './keys';
 
-export { CASHIER_KEYS, WAITER_KEYS, ADMIN_KEYS, ALL_KEYS, ROLE_KEYS } from './keys';
-export type { PermissionKey } from './keys';
+export {
+	CASHIER_KEYS,
+	WAITER_KEYS,
+	ADMIN_KEYS,
+	ALL_KEYS,
+	POS_KEYS,
+	OWNER_KEYS,
+	DEFAULT_ROLES,
+	RESERVED_ROLE_NAMES,
+	ROLE_NAME_MAX,
+	PERMISSION_LABELS,
+	isPosPermissionKey
+} from './keys';
+export type { PermissionKey, PosPermissionKey } from './keys';
+export {
+	listRoles,
+	getRole,
+	createRole,
+	updateRole,
+	archiveRole,
+	assertLiveRole,
+	permissionsForUser
+} from './roles';
+export type { RoleRow, RoleInput, RoleWriteContext } from './roles';
 
 /**
- * A pure function over the role→keys map. Synchronous and cheap on purpose: these
- * guards read event.locals, which T-17's hook populates, and never query the
- * database — so calling one in EVERY load and EVERY action costs nothing and
- * nobody is tempted to skip it.
+ * Synchronous permission check.
+ *
+ * The owner holds OWNER_KEYS in code. Non-owner principals hold NO permissions
+ * synchronously: staff permissions are resolved from the database by
+ * permissionsForUser (T-06), and staff have no dashboard credentials.
  */
 export function hasPermission(principal: Principal | null, key: PermissionKey): boolean {
 	if (!principal) return false;
-	return ROLE_KEYS[principal.role].includes(key);
+	return principal.role === 'owner' && OWNER_KEYS.includes(key);
 }
 
 /** Build the ?next= value for a login redirect, encoded so an ampersand cannot truncate it. */

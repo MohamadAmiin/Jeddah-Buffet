@@ -14,6 +14,7 @@ import {
 import * as restaurantsSchema from '../schema/restaurants';
 import * as restaurantSettingsSchema from '../schema/restaurant-settings';
 import * as usersSchema from '../schema/users';
+import * as rolesSchema from '../schema/roles';
 import * as sessionsSchema from '../schema/sessions';
 import * as auditSchema from '../schema/audit';
 import * as posDevicesSchema from '../schema/pos-devices';
@@ -34,6 +35,7 @@ const modules = {
 	...restaurantsSchema,
 	...restaurantSettingsSchema,
 	...usersSchema,
+	...rolesSchema,
 	...sessionsSchema,
 	...auditSchema,
 	...posDevicesSchema,
@@ -49,6 +51,7 @@ const IMPORTED_SCHEMA_FILES = [
 	'pos-devices.ts',
 	'restaurant-settings.ts',
 	'restaurants.ts',
+	'roles.ts',
 	'sessions.ts',
 	'users.ts'
 ];
@@ -182,6 +185,8 @@ describe('schema guards every future aggregate inherits', () => {
 			'pos_devices',
 			'restaurant_settings',
 			'restaurants',
+			'role_permissions',
+			'roles',
 			'sessions',
 			'users'
 		]);

@@ -159,7 +159,7 @@ describe('writeAudit runs inside the caller transaction (invariant 10)', () => {
 				actorUserId: owner.id,
 				subjectUserId: owner.id,
 				event: 'pos.pin.success',
-				details: { deviceCode: 'POS1', role: 'owner' },
+				details: { deviceCode: 'POS1', roleName: 'Owner' },
 				ip: null,
 				userAgent: null,
 				deviceId,

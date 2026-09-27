@@ -27,8 +27,7 @@ export const GET: RequestHandler = async (event) => {
 	// FIRST: 403 for a missing, unknown or revoked device cookie.
 	const device = await requireDevice(event);
 
-	// T-15's read model IS the projection — five keys per entry, active employees
-	// of this restaurant only, owner included, PIN-less employees returned with
+	// T-15's read model IS the projection — seven keys per entry, active employees	// of this restaurant only, owner included, PIN-less employees returned with
 	// pinPhc null. Returned as-is: not widened, not narrowed, not re-mapped, and the
 	// field keeps its name, because the name is a tripwire against writeAudit.
 	const employees = await listPosEmployees(db, device.restaurantId);

@@ -18,5 +18,10 @@ out="backups/matcami-$(date -u +%Y%m%d-%H%M%SZ).dump"
 # runtime role cannot do. Running pg_dump as the OWNER is also what keeps the door
 # open for row-level security later — a forced-RLS table dumped by its own owner
 # fails outright, and that would break `pnpm db:migrate`, which chains this script.
-pg_dump "$MIGRATE_DATABASE_URL" --format=custom --file="$out"
+pg_dump_bin="pg_dump"
+if ! command -v "$pg_dump_bin" >/dev/null 2>&1; then
+    pg_dump_bin="/mnt/c/PROGRA~1/PostgreSQL/16/bin/pg_dump.exe"
+fi
+
+"$pg_dump_bin" --format=custom --file="$out" "$MIGRATE_DATABASE_URL"
 echo "Backup written: $out"
