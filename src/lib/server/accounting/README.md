@@ -1,6 +1,6 @@
 # `accounting/` — chart of accounts, posting rules, journal writer
 
-Chart of accounts, posting rules (one per business event), journal writer.
+`chart.ts` — `CHART`, spec 23's 23 accounts verbatim as `{ code, name, type }` with `code` a text string; `ensureChart(tx, restaurantId)`, the idempotent per-restaurant seed (`ON CONFLICT (restaurant_id, code) DO NOTHING`) that the restaurant initializer list runs for every new restaurant and migration 0012 backfilled for existing ones; `accountIdByCode(tx, restaurantId, code)`, the only code-to-id lookup, which throws when the code is absent. `posting-rules.ts` (T-13) and `journal.ts` (T-14) follow in the same plan.
 
 - Entries are **generated from business events** by the spec 24 posting-rule
   table. Nobody types a debit.
@@ -14,7 +14,7 @@ Chart of accounts, posting rules (one per business event), journal writer.
 - Every write takes a transaction handle. The payment transaction is
   all-or-nothing and it owns the boundary (invariant 4).
 
-Called by `orders/`. Never calls `orders/` back.
+Called by `orders/` and, for the chart seed only, by `restaurants/` (amendment recorded by T-02 of tasks/pos-sales, 2026-09-28). Never calls either back.
 
 **Must never be imported by** client-side code or `src/lib/pos/`.
 

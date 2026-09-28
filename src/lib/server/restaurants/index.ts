@@ -5,6 +5,7 @@ import { restaurants } from '../db/schema/restaurants';
 import { restaurantSettings } from '../db/schema/restaurant-settings';
 import { roles, rolePermissions } from '../db/schema/roles';
 import { writeAudit } from '../audit';
+import { ensureChart } from '../accounting/chart';
 import { TAX_MODES, type TaxMode } from '../../money/tax';
 import { SUPPORTED_CURRENCIES } from '../../money/format';
 import { DEFAULT_ROLES } from '../permissions/keys';
@@ -13,10 +14,11 @@ import { isValidTimeZone, canonicalTimeZone } from './time-zone';
 export { isValidTimeZone, canonicalTimeZone, timeZoneSuggestions } from './time-zone';
 
 // This module holds restaurant identity and settings and the onRestaurantCreated
-// initializer list. It calls audit/ and NOTHING else — the two lists it reads from
-// the isomorphic src/lib/money (TAX_MODES, SUPPORTED_CURRENCIES) call nothing —
-// and is called by routes and by auth/register.ts. CLAUDE.md's "Where code lives"
-// does not list it; T-26 adds it.
+// initializer list. It calls audit/ and, for the chart seed only, accounting/chart
+// (amendment recorded by T-02 on 2026-09-28) — and reads constants from
+// permissions/keys.ts. The two lists it reads from the isomorphic src/lib/money
+// (TAX_MODES, SUPPORTED_CURRENCIES) call nothing. It is called by routes and by
+// auth/register.ts. CLAUDE.md's "Where code lives" does not list it; T-26 adds it.
 //
 // CONVENTION, applied throughout src/lib/server: functions that WRITE take DbTx,
 // so a plain `db` handle cannot be passed where a transaction is required;
@@ -335,10 +337,10 @@ async function insertDefaultRoles(tx: DbTx, restaurantId: string): Promise<void>
 /**
  * Ordered initializers run INSIDE the registration transaction.
  *
- * Ships with the settings row and default role rows. The list exists so later
- * plans can add idempotent per-restaurant initialization here, rather than
- * writing a migration that cross-joins every existing restaurant and then
- * silently does nothing for the next one created.
+ * Ships with the settings row, the default role rows and the chart of
+ * accounts. The list exists so later plans can add idempotent per-restaurant
+ * initialization here, rather than writing a migration that cross-joins every
+ * existing restaurant and then silently does nothing for the next one created.
  */
 export const restaurantInitializers: Array<
 	(tx: DbTx, restaurantId: string, input: RestaurantInitializerInput) => Promise<void>
@@ -351,6 +353,14 @@ export const restaurantInitializers: Array<
 	},
 	async function initializeDefaultRoles(tx, restaurantId) {
 		await insertDefaultRoles(tx, restaurantId);
+	},
+	// The chart of accounts, spec 23 verbatim, seeded for EVERY new restaurant.
+	// CLAUDE.md's house convention says restaurants/ calls only audit/; T-02 of
+	// tasks/pos-sales recorded the amendment (CLAUDE.md, "Decisions already made",
+	// 2026-09-28) that it may import CHART and ensureChart from accounting/chart.ts
+	// for exactly this entry — it still calls no other module.
+	async function seedChartOfAccounts(tx, restaurantId) {
+		await ensureChart(tx, restaurantId);
 	}
 ];
 
@@ -370,3 +380,6 @@ export async function onRestaurantCreated(
 // nullable, no column default, and no fallback number anywhere in code.
 // Roles ARE here: insertDefaultRoles runs as part of the registration initializer
 // transaction above.
+// The chart of accounts HAS landed here (T-12 of tasks/pos-sales, by decision of
+// 2026-09-28): seeded through the initializer list for new restaurants and
+// backfilled by migration 0012 for existing ones.
