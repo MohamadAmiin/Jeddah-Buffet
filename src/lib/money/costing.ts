@@ -20,8 +20,18 @@
 // unitCostMicro each round once, and a rule calls each at most once per field.
 //
 // Imports only ./index, ./quantity and ./tax.
-import { exact, minor, roundToMinor, toBigInt, type Minor, type RoundingRule } from './index';
+import {
+	exact,
+	minor,
+	roundToMinor,
+	sumExact,
+	toBigInt,
+	type Exact,
+	type Minor,
+	type RoundingRule
+} from './index';
 import { QTY_SCALE, qty, type Qty } from './quantity';
+import { taxOnLine, type TaxMode } from './tax';
 
 /** Micro minor units per minor unit: the average's extra precision. */
 export const MICRO = 1_000_000n;
@@ -166,4 +176,45 @@ export function applyReversal(
 		costMinor,
 		revaluationMinor: minor(nextValue - raw)
 	};
+}
+
+// RECIPE COST AND DISH MARGIN (spec 16, 17, 25). Read-only figures for the menu
+// page and the reports; nothing here moves stock.
+
+/**
+ * A quantity of PURCHASE units times a cost per purchase unit — 2.5 kg at
+ * $5.50/kg is 1375 — rounded once. Used by opening stock.
+ */
+export function extendCost(unitQty: Qty, unitCostMinor: Minor, rule: RoundingRule): Minor {
+	if (unitQty < 0n || unitCostMinor < 0n) {
+		throw new TypeError('an extended cost needs a non-negative quantity and unit cost');
+	}
+	return roundToMinor(exact(unitQty * unitCostMinor, QTY_SCALE), rule);
+}
+
+/**
+ * A recipe's cost at the current averages (spec 16), carried EXACTLY: the sum of
+ * quantity × average over the lines, with no rounding. dishMargin rounds it once.
+ */
+export function recipeCostExact(lines: readonly { qty: Qty; avgMicro: bigint }[]): Exact {
+	return sumExact(lines.map((line) => exact(line.qty * line.avgMicro, QTY_SCALE * MICRO)));
+}
+
+/**
+ * A dish's cost, its price net of tax and the margin between them (spec 25:
+ * gross profit = net sales − COGS). The cost and the net price are each rounded
+ * ONCE; the margin is their DIFFERENCE, never rounded on its own, so the three
+ * figures the menu page shows always add up. An unset tax mode throws, exactly
+ * as taxOnLine does; a caller without a mode shows the cost only.
+ */
+export function dishMargin(
+	args: { priceMinor: Minor; taxRateBp: number; taxMode: TaxMode; costExact: Exact },
+	rule: RoundingRule
+): { costMinor: Minor; netPriceMinor: Minor; marginMinor: Minor } {
+	const costMinor = roundToMinor(args.costExact, rule);
+	const netPriceMinor = roundToMinor(
+		taxOnLine(args.priceMinor, args.taxRateBp, args.taxMode).net,
+		rule
+	);
+	return { costMinor, netPriceMinor, marginMinor: minor(netPriceMinor - costMinor) };
 }

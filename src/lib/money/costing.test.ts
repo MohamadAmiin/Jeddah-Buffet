@@ -1,11 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { ROUNDING_RULE, minor, type Minor } from './index';
+import { ROUNDING_RULE, exact, exactEquals, minor, type Minor } from './index';
 import { qty } from './quantity';
 import {
 	applyAtAverage,
 	applyInbound,
 	applyReversal,
+	dishMargin,
+	extendCost,
+	recipeCostExact,
 	unitCostMicro,
 	valueAt,
 	type Applied,
@@ -222,5 +225,65 @@ describe('costing source tripwire', () => {
 		expect(bare).not.toMatch(/\btoFixed\b/);
 		expect(bare).not.toMatch(/\bMath\./);
 		expect(bare).not.toMatch(/\b\d+\.\d+\b/);
+	});
+});
+
+describe('recipe cost, dish margin and extended cost (T-11) — MANDATORY (spec 29)', () => {
+	// Spec 16's burger: 150 g meat at 0.55¢/g, 1 bun at 25¢, 1 cheese at 12¢.
+	const burger = recipeCostExact([
+		{ qty: qty(150000n), avgMicro: 550000n },
+		{ qty: qty(1000n), avgMicro: 25000000n },
+		{ qty: qty(1000n), avgMicro: 12000000n }
+	]);
+
+	it('extendCost: purchase units × unit cost, rounded once', () => {
+		expect(extendCost(qty(2500n), minor(550n), R)).toBe(1375n);
+		expect(extendCost(qty(333n), minor(100n), R)).toBe(33n);
+		expect(() => extendCost(qty(-1n), minor(100n), R)).toThrow(TypeError);
+		expect(() => extendCost(qty(1n), minor(-100n), R)).toThrow(TypeError);
+	});
+
+	it('recipeCostExact carries the cost exactly: 82.5 + 25 + 12 = 119.5', () => {
+		expect(exactEquals(burger, exact(239n, 2n))).toBe(true);
+	});
+
+	it('dishMargin, tax EXCLUSIVE: $8.00 at 10% → net 800, cost 120, margin 680', () => {
+		expect(
+			dishMargin(
+				{ priceMinor: minor(800n), taxRateBp: 1000, taxMode: 'exclusive', costExact: burger },
+				R
+			)
+		).toEqual({ costMinor: 120n, netPriceMinor: 800n, marginMinor: 680n });
+	});
+
+	it('dishMargin, tax INCLUSIVE: $8.80 at 10% → net 800, cost 120, margin 680', () => {
+		expect(
+			dishMargin(
+				{ priceMinor: minor(880n), taxRateBp: 1000, taxMode: 'inclusive', costExact: burger },
+				R
+			)
+		).toEqual({ costMinor: 120n, netPriceMinor: 800n, marginMinor: 680n });
+	});
+
+	it('dishMargin, inclusive 20% on 999: net 832.5 → 833, margin 713 (net − cost, not rounded again)', () => {
+		const m = dishMargin(
+			{ priceMinor: minor(999n), taxRateBp: 2000, taxMode: 'inclusive', costExact: burger },
+			R
+		);
+		expect(m).toEqual({ costMinor: 120n, netPriceMinor: 833n, marginMinor: 713n });
+		expect(m.netPriceMinor - m.costMinor).toBe(m.marginMinor);
+	});
+
+	it('dishMargin with no tax mode throws, as taxOnLine does', () => {
+		expect(() =>
+			dishMargin(
+				{ priceMinor: minor(800n), taxRateBp: 1000, taxMode: null as never, costExact: burger },
+				R
+			)
+		).toThrow(TypeError);
+	});
+
+	it('the average display rule: one kilogram of a gram ingredient at 0.55¢/g is $5.50', () => {
+		expect(valueAt(qty(1000000n), 550000n, R)).toBe(550n);
 	});
 });
