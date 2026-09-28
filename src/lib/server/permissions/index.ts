@@ -26,6 +26,8 @@ export {
 	permissionsForUser
 } from './roles';
 export type { RoleRow, RoleInput, RoleWriteContext } from './roles';
+export { checkEmployee } from './employee';
+export type { EmployeeCheck, EmployeeCheckFailure } from './employee';
 
 /**
  * Synchronous permission check.
