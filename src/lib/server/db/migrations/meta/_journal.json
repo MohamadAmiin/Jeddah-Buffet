@@ -99,6 +99,13 @@
       "when": 1790635380650,
       "tag": "0013_aberrant_starfox",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1790635782900,
+      "tag": "0014_inventory_append_only",
+      "breakpoints": true
     }
   ]
 }
