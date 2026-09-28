@@ -23,5 +23,6 @@ export async function lastInvoiceSeqForDevice(
 			          where restaurant_id = ${restaurantId} and device_id = ${deviceId}), 0)
 		)::int as last_seq
 	`);
-	return Number((result.rows[0] as { last_seq: number }).last_seq);
+	// ::int, so pg hands back a JavaScript number — no conversion needed.
+	return result.rows[0]?.last_seq ?? 0;
 }
