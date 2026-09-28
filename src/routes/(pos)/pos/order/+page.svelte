@@ -39,11 +39,13 @@
 	type Modifier = MenuGroup['modifiers'][number];
 
 	let deviceId = $state<string | null>(null);
-	let menu = $state<LocalMenu | null>(null);
+	// Raw, not deep: the cart and menu are replaced whole, and IndexedDB's
+	// structured clone rejects a $state proxy nested inside a stored cart.
+	let menu = $state.raw<LocalMenu | null>(null);
 	let menuState = $state<'loading' | 'missing' | 'unset' | 'ready'>('loading');
 	let format = $state<MoneyFormat | null>(null);
 	let taxMode = $state<TaxMode>('exclusive');
-	let cart = $state<Cart | null>(null);
+	let cart = $state.raw<Cart | null>(null);
 	let segment = $state<Segment>('waiting');
 	let tableInput = $state('');
 	let selectedTab = $state<string | null>(null);
@@ -51,8 +53,8 @@
 	let gridDisabled = $state(false);
 	let confirmingClear = $state(false);
 
-	let panelItem = $state<MenuItem | null>(null);
-	let panelGroups = $state<MenuGroup[]>([]);
+	let panelItem = $state.raw<MenuItem | null>(null);
+	let panelGroups = $state.raw<MenuGroup[]>([]);
 	let chosen = $state<Record<string, string[]>>({});
 
 	const tabs = $derived(menu ? itemsByCategory(menu) : []);

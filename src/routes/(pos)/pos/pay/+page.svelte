@@ -42,11 +42,12 @@
 	let ready = $state(false);
 	let deviceId = $state<string | null>(null);
 	let deviceCode = $state<string | null>(null);
-	let session = $state<LocalSession | null>(null);
-	let menu = $state<LocalMenu | null>(null);
+	let session = $state.raw<LocalSession | null>(null);
+	let menu = $state.raw<LocalMenu | null>(null);
 	let format = $state<MoneyFormat | null>(null);
 	let taxMode = $state<TaxMode>('exclusive');
-	let cart = $state<Cart | null>(null);
+	// Raw: completeSale stores the cart, and a $state proxy cannot be cloned into IndexedDB.
+	let cart = $state.raw<Cart | null>(null);
 	let acceptsCard = $state(false);
 	let acceptsMobile = $state(false);
 	let online = $state(true);

@@ -26,7 +26,7 @@
 
 	let ready = $state(false);
 	let deviceId = $state<string | null>(null);
-	let session = $state<LocalSession | null>(null);
+	let session = $state.raw<LocalSession | null>(null);
 	let format = $state<MoneyFormat | null>(null);
 	let noMenu = $state(false);
 	let timeZone = $state<string | null>(null);
