@@ -1,0 +1,1229 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Dashboard · matcami design sample</title>
+
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			rel="stylesheet"
+			href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+		/>
+
+		<link rel="stylesheet" href="tokens.css" />
+
+		<style>
+			/* ─────────────────────────────────────────────────────────────────────────────
+ * Layout only. Every colour in this file is a var(--c-*) from tokens.css — no hex,
+ * no rgb(), no hsl(), no named colour, not one. Radii, faces and the elevation
+ * ladder are tokens too; raw lengths appear only as grid tracks, gaps and padding.
+ *
+ * REBUILT 2026-09-14 around a real sidebar. What it used to be: a 14rem column of
+ * nine flat text links sitting on the page ground under a full-width app bar. Nine
+ * flat items is a list; four groups is a structure, and the rail is where a
+ * dashboard's identity lives — so it became a surface of its own.
+ *
+ * THIS PAGE THEMES. It is the owner's browser, not the till: no data-surface="pos"
+ * appears anywhere below, and pressing "Toggle theme" must move every surface here.
+ * The POS density tokens (--touch*) are deliberately absent too — 56px targets are
+ * for a standing cashier, not a seated owner with a mouse. Rows here are 40px.
+ *
+ * TOKEN GAPS FOUND WHILE DRAWING THIS SCREEN — noted, not silently invented:
+ *   · no .sr-only in tokens.css; every sample restates it.
+ *   · no --c-caption: the type roles are CLASSES (.t-caption), not custom
+ *     properties, so "Owner workspace" takes .t-caption's size (.8125rem) with
+ *     --c-ink-2 rather than a token that does not exist.
+ *   · no rail/sidebar surface token. The rail uses --c-raise, the card surface,
+ *     because it IS raised above the ground — and takes a --c-line edge, which is
+ *     the boundary rule for a region (decorative). Anything PRESSABLE still takes
+ *     --c-control-line; see .btn in tokens.css.
+ *   · no "not built yet" role. The Soon pill is --c-ink-3 on --c-bg-2, which
+ *     tokens.css measures as the TIGHTEST pair in the light palette at 4.55:1 —
+ *     AA, with nothing to spare. It is spent here on a five-character pill that
+ *     the nav-note and the aria-disabled state both restate, never on prose.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+			.sr-only {
+				position: absolute;
+				width: 1px;
+				height: 1px;
+				padding: 0;
+				margin: -1px;
+				overflow: hidden;
+				clip-path: inset(50%);
+				white-space: nowrap;
+				border: 0;
+			}
+			.lede {
+				color: var(--c-ink-2);
+			}
+
+			/* ── app shell ───────────────────────────────────────────────────────────────
+ * --bar is the .samplebar's measured height (a 42px .btn inside 10px padding =
+ * 62px), and it is SAMPLE CHROME, not product: the rail sticks below it so the
+ * mockup behaves like the real full-height rail would with nothing above it. */
+			.app {
+				--bar: 3.875rem;
+				--rail: 16.25rem; /* 260px */
+				background: var(--c-bg);
+				border-top: 1px solid var(--c-line);
+				min-height: calc(100vh - var(--bar));
+			}
+			.shell {
+				display: grid;
+				grid-template-columns: var(--rail) minmax(0, 1fr);
+				align-items: start;
+			}
+
+			/* ── THE RAIL ────────────────────────────────────────────────────────────────
+ * Full height, its own surface, one hairline against the ground. A flex column in
+ * three parts: brand, the nav (which is the only part that scrolls, so the footer
+ * can never be pushed out of reach), and the footer pinned by margin-top:auto. */
+			.side {
+				position: sticky;
+				top: var(--bar);
+				height: calc(100vh - var(--bar));
+				min-width: 0;
+				display: flex;
+				flex-direction: column;
+				background: var(--c-raise);
+				border-right: 1px solid var(--c-line);
+			}
+
+			/* brand — a mark built from TYPE, not an imported logo: one letter of the display
+   face on an accent tile. --c-accent-ink on --c-accent measures 6.13:1 light and
+   7.88:1 dark, so the mark stays legible in both themes rather than only one. */
+			.brand {
+				flex: none;
+				display: flex;
+				align-items: center;
+				gap: 0.75rem;
+				padding: 1.25rem 1.125rem 1rem;
+			}
+			.brand-mark {
+				flex: none;
+				width: 2.5rem;
+				height: 2.5rem;
+				display: grid;
+				place-items: center;
+				border-radius: var(--radius-control);
+				background: var(--c-accent);
+				color: var(--c-accent-ink);
+				box-shadow: var(--c-shadow-flat);
+				font-family: var(--font-display);
+				font-size: 1.5rem;
+				font-weight: 700;
+				line-height: 1;
+				letter-spacing: -0.02em;
+			}
+			/* flex, not two inline spans: the name and the sub are <span>s so the rail's markup
+   stays free of headings, and a column here is what blockifies them. */
+			.brand-text {
+				min-width: 0;
+				display: flex;
+				flex-direction: column;
+			}
+			/* NOT a heading. The page's <h1> is the page title in the top bar; a second h1 in
+   the rail would make the heading outline claim the restaurant name is this
+   document's subject on every screen of the dashboard. */
+			.brand-name {
+				margin: 0;
+				font-family: var(--font-display);
+				font-size: 1.0625rem;
+				font-weight: 600;
+				line-height: 1.22;
+				letter-spacing: -0.012em;
+				color: var(--c-ink);
+				overflow-wrap: break-word;
+			}
+			.brand-sub {
+				margin: 0.0625rem 0 0;
+				font-size: 0.8125rem;
+				line-height: 1.35;
+				color: var(--c-ink-2);
+			}
+
+			/* ── grouped navigation ──────────────────────────────────────────────────── */
+			.side-nav {
+				position: relative;
+				flex: 0 1 auto;
+				min-height: 0;
+				min-width: 0;
+				overflow-y: auto;
+				display: flex;
+				flex-direction: column;
+				padding: 0.25rem 0.75rem 0.25rem;
+				/* The focus ring needs 4px outside the item's border box (2px width + 2px offset),
+     and this is a scroll container, so padding alone does NOT reserve it: Chromium
+     does not count a block container's bottom padding as scrollable overflow, so
+     .focus() parks the last item flush against the scrollport edge and the ring's
+     bottom band is clipped away. scroll-padding reserves the room when something is
+     scrolled into view; the ::after spacer makes that room real scrollable content
+     for the case where the user scrolls there by hand. */
+				scroll-padding-block: 0.375rem;
+			}
+			.side-nav::after {
+				content: '';
+				display: block;
+				flex: 0 0 auto;
+				block-size: 0.375rem;
+			}
+			.nav-group {
+				list-style: none;
+				margin: 0;
+				padding: 0;
+				display: flex;
+				flex-direction: column;
+				gap: 0.125rem;
+			}
+
+			/* The group label reuses .t-eyebrow's complete treatment and overrides ONE
+   declaration. Both selectors are (0,1,0), and this sheet is loaded after
+   tokens.css, so the later rule wins — which is the whole reason the colour is
+   the only thing restated. Accent is reserved for the current item: three
+   accent-coloured labels above it would drown the one signal that means "you are
+   here". The text is written in natural case and uppercased by CSS, so a screen
+   reader says "Catalogue" instead of spelling it. */
+			.nav-group-label {
+				color: var(--c-ink-3);
+				margin: 1rem 0 0.375rem;
+				padding-left: 0.8125rem;
+			}
+			.nav-group-label:first-of-type {
+				margin-top: 0.5rem;
+			}
+
+			/* One row geometry for all nine, links and non-links alike, so the rail reads as
+   one list. 3px of border-left on EVERY row, painted in the rail's own surface,
+   so the current item's bar costs no reflow when it moves. Left inset is
+   3 + 10 = 13px = the .8125rem the group labels are indented by.
+
+   position:relative is NOT decoration — it is the fix for a measured bug, the same
+   one 04-pos-order.html hit. Each row carries an .sr-only span, which is absolutely
+   positioned; with no positioned ancestor its containing block is the INITIAL one,
+   so it is not clipped by .side-nav's overflow. At 400px the nav row is ~1500px
+   wide, the spans sat at their un-scrolled static positions outside the viewport,
+   and the DOCUMENT scrolled sideways to 1513px — the one thing the responsive rule
+   forbids. Measured in Chromium before and after: 1513px -> 400px. */
+			.nav-item {
+				position: relative;
+				display: flex;
+				align-items: center;
+				gap: 0.625rem;
+				min-height: 2.5rem;
+				padding: 0 0.625rem;
+				border-left: 3px solid var(--c-raise);
+				border-radius: var(--radius-control);
+				font-size: 0.875rem;
+				line-height: 1.3;
+			}
+			.nav-ico {
+				flex: none;
+				width: 1.125rem;
+				height: 1.125rem;
+			}
+			.nav-label {
+				min-width: 0;
+			}
+
+			a.nav-item {
+				color: var(--c-ink);
+				text-decoration: none;
+				font-weight: 500;
+			}
+			a.nav-item .nav-ico {
+				color: var(--c-ink-2);
+			}
+			a.nav-item:hover {
+				background: var(--c-bg-2);
+			}
+			a.nav-item:hover .nav-ico {
+				color: var(--c-ink);
+			}
+
+			/* THE CURRENT ITEM CARRIES THREE SIGNALS, not one: a soft accent fill, accent
+   text AND icon, and the 3px bar — plus aria-current="page" for anyone who reads
+   the page instead of seeing it. --c-accent on --c-accent-soft measures 5.13:1
+   light, 5.82:1 dark. Colour never carries meaning alone (WCAG 1.4.1). */
+			a.nav-item[aria-current='page'] {
+				background: var(--c-accent-soft);
+				color: var(--c-accent);
+				border-left-color: var(--c-accent);
+				font-weight: 600;
+			}
+			a.nav-item[aria-current='page'] .nav-ico {
+				color: var(--c-accent);
+			}
+
+			/* The seven that are genuinely inert: no href, not in the tab order, aria-disabled,
+   and each one SAYS WHY on its own row. A keyboard user must never land on a
+   control that does nothing, and a greyed-out item that still navigates is worse
+   than one that admits it. */
+			.nav-item-soon {
+				color: var(--c-ink-2);
+			}
+			.nav-item-soon .nav-ico {
+				color: var(--c-ink-3);
+			}
+			.soon {
+				margin-left: auto;
+				flex: none;
+				font-family: var(--font-mono);
+				font-size: 0.625rem;
+				font-weight: 500;
+				letter-spacing: 0.1em;
+				text-transform: uppercase;
+				color: var(--c-ink-3);
+				background: var(--c-bg-2);
+				border-radius: 999px;
+				padding: 0.125rem 0.4375rem;
+				white-space: nowrap;
+			}
+			.nav-note {
+				flex: none;
+				margin: 0.875rem 0 1rem;
+				padding: 0 1.125rem;
+				font-size: 0.75rem;
+				line-height: 1.5;
+				color: var(--c-ink-2);
+			}
+			/* The scroll cue is WRITTEN, not left to a scrollbar: overlay scrollbars are
+   invisible until you have already guessed to swipe, and "discoverable by
+   guessing" is the same failure as a control that sits dead. display:none at
+   desktop takes it out of the accessibility tree there, where it would be a lie. */
+			.narrow-only {
+				display: none;
+			}
+
+			/* ── rail footer, pinned ─────────────────────────────────────────────────── */
+			.side-foot {
+				flex: none;
+				margin-top: auto;
+				display: flex;
+				flex-direction: column;
+				gap: 0.75rem;
+				padding: 1rem 1.125rem 1.125rem;
+				border-top: 1px solid var(--c-line-soft);
+			}
+			.who {
+				display: flex;
+				align-items: center;
+				gap: 0.625rem;
+				min-width: 0;
+			}
+			.avatar {
+				flex: none;
+				width: 2.25rem;
+				height: 2.25rem;
+				border-radius: 999px;
+				display: grid;
+				place-items: center;
+				background: var(--c-accent-soft);
+				color: var(--c-accent);
+				font-family: var(--font-mono);
+				font-size: 0.8125rem;
+				font-weight: 600;
+				letter-spacing: 0.04em;
+			}
+			.who-text {
+				display: flex;
+				flex-direction: column;
+				min-width: 0;
+			}
+			.who-name {
+				font-size: 0.875rem;
+				font-weight: 500;
+				line-height: 1.3;
+				color: var(--c-ink);
+				overflow-wrap: break-word;
+			}
+			.who-role {
+				font-size: 0.75rem;
+				line-height: 1.35;
+				color: var(--c-ink-2);
+			}
+			.side-foot form {
+				margin: 0;
+			}
+			.signout {
+				width: 100%;
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+				gap: 0.5rem;
+			}
+			.signout svg {
+				width: 1rem;
+				height: 1rem;
+				flex: none;
+			}
+
+			/* ── main column ─────────────────────────────────────────────────────────── */
+			.main {
+				min-width: 0;
+			}
+			.topbar {
+				background: var(--c-raise);
+				border-bottom: 1px solid var(--c-line);
+				padding: 1.5rem 1.75rem;
+				display: flex;
+				align-items: flex-end;
+				justify-content: space-between;
+				gap: 0.75rem 1.5rem;
+				flex-wrap: wrap;
+			}
+			.topbar-text {
+				min-width: 0;
+				display: flex;
+				flex-direction: column;
+				gap: 0.5rem;
+			}
+			/* The one status line the top bar carries is the stored time-zone setting, because
+   it is the fact the rest of this screen depends on — and it is not a figure the
+   money module would have to have produced. */
+			.topbar-meta {
+				margin: 0;
+				display: flex;
+				align-items: center;
+				gap: 0.4375rem;
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				letter-spacing: 0.04em;
+				color: var(--c-ink-3);
+				white-space: nowrap;
+			}
+			.topbar-meta .v {
+				color: var(--c-ink-2);
+			}
+			.topbar-meta svg {
+				width: 0.9375rem;
+				height: 0.9375rem;
+			}
+
+			/* One working column, capped. A six-row list stretched to the full width of a
+   desktop strands its status labels a screen away from their headings. */
+			.content {
+				max-width: 52rem;
+				padding: 2.25rem 1.75rem 4.5rem;
+				display: flex;
+				flex-direction: column;
+				gap: 2.75rem;
+			}
+			.sect {
+				display: flex;
+				flex-direction: column;
+				gap: 1.125rem;
+				scroll-margin-top: 5rem;
+			}
+			.sect-head {
+				display: flex;
+				flex-direction: column;
+				gap: 0.5rem;
+			}
+
+			/* progress meter — the count in text is the accessible signal; the bar is decoration */
+			.meter {
+				display: flex;
+				align-items: center;
+				gap: 0.875rem;
+				flex-wrap: wrap;
+			}
+			.meter-track {
+				display: flex;
+				gap: 0.25rem;
+			}
+			.seg {
+				width: 2.25rem;
+				height: 0.375rem;
+				border-radius: 999px;
+				background: var(--c-line);
+			}
+			.seg-done {
+				background: var(--c-ok);
+			}
+			.meter-label {
+				font-family: var(--font-mono);
+				font-variant-numeric: tabular-nums;
+				font-size: 0.75rem;
+				color: var(--c-ink-2);
+			}
+
+			/* ── the setup checklist: one card, rows divided by a hairline ──────────── */
+			.steps-card {
+				overflow: hidden;
+			}
+			.steps {
+				list-style: none;
+				margin: 0;
+				padding: 0;
+			}
+			.steps > li + li {
+				border-top: 1px solid var(--c-line-soft);
+			}
+			.step {
+				display: grid;
+				grid-template-columns: 1.75rem minmax(0, 1fr);
+				gap: 0.875rem;
+				padding: 1.0625rem 1.25rem;
+			}
+			.step-done {
+				box-shadow: inset 3px 0 0 0 var(--c-ok);
+			}
+			.step-glyph {
+				width: 1.75rem;
+				height: 1.75rem;
+				border-radius: 999px;
+				display: grid;
+				place-items: center;
+				font-family: var(--font-mono);
+				font-size: 0.875rem;
+				line-height: 1;
+			}
+			.glyph-done {
+				color: var(--c-ok);
+				background: var(--c-ok-bg);
+			}
+			.glyph-todo {
+				color: var(--c-ink-2);
+				background: var(--c-bg-2);
+			}
+			.step-body {
+				display: flex;
+				flex-direction: column;
+				gap: 0.1875rem;
+				min-width: 0;
+			}
+			.step-top {
+				display: flex;
+				align-items: baseline;
+				justify-content: space-between;
+				gap: 0.75rem;
+				flex-wrap: wrap;
+			}
+			.step-label {
+				font-family: var(--font-sans);
+				font-size: 0.9375rem;
+				font-weight: 600;
+				line-height: 1.45;
+				color: var(--c-ink);
+				margin: 0;
+			}
+			.step-state {
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				font-weight: 500;
+				letter-spacing: 0.1em;
+				text-transform: uppercase;
+				white-space: nowrap;
+			}
+			.state-done {
+				color: var(--c-ok);
+			}
+			.state-todo {
+				color: var(--c-ink-2);
+			}
+			.step-detail {
+				font-size: 0.875rem;
+				line-height: 1.5;
+				color: var(--c-ink-2);
+				margin: 0;
+			}
+			.step-link {
+				align-self: flex-start;
+				margin-top: 0.375rem;
+				font-size: 0.875rem;
+				font-weight: 500;
+				color: var(--c-accent);
+				text-decoration: underline;
+				text-underline-offset: 0.2em;
+				text-decoration-thickness: 1px;
+			}
+
+			/* ── settings form ──────────────────────────────────────────────────────── */
+			.alert-ok {
+				display: flex;
+				align-items: flex-start;
+				gap: 0.625rem;
+				max-width: var(--container-form);
+				background: var(--c-ok-bg);
+				color: var(--c-ink);
+				border-left: 3px solid var(--c-ok);
+				border-radius: 0 var(--radius-control) var(--radius-control) 0;
+				padding: 0.625rem 0.875rem;
+				font-size: 0.875rem;
+			}
+			.alert-ok .glyph {
+				font-family: var(--font-mono);
+				color: var(--c-ok);
+				line-height: 1.5;
+			}
+			.form-card {
+				max-width: var(--container-form);
+				padding: 1.5rem;
+				display: flex;
+				flex-direction: column;
+				gap: 1.25rem;
+			}
+			.form-card .field > input,
+			.form-card .field > select {
+				width: 100%;
+				max-width: 100%;
+			}
+			.form-actions {
+				display: flex;
+				align-items: center;
+				gap: 0.875rem;
+				flex-wrap: wrap;
+			}
+			.form-actions .t-caption {
+				flex: 1 1 12rem;
+			}
+
+			/* ── PHONE: the rail moves above the content and scrolls sideways ────────────
+ * It must not vanish — a hidden nav on the one screen that explains what is built
+ * and what is not is a worse answer than a scroller. The groups keep their labels
+ * and become the separators in one horizontal row: Overview │ CATALOGUE Menu
+ * Inventory │ MONEY … The row is the only thing that scrolls; the PAGE never does,
+ * which is why the scroller carries min-width:0 as well as overflow-x. */
+			@media (max-width: 900px) {
+				.shell {
+					grid-template-columns: minmax(0, 1fr);
+				}
+				.side {
+					position: static;
+					height: auto;
+					border-right: 0;
+					border-bottom: 1px solid var(--c-line);
+				}
+				.brand {
+					padding: 1.125rem 1.125rem 0.875rem;
+				}
+				.side-nav {
+					flex: none;
+					flex-direction: row;
+					align-items: center;
+					gap: 0.375rem;
+					overflow-x: auto;
+					overflow-y: hidden;
+					padding: 0.25rem 1.125rem 0.5rem; /* .25rem top: same reason — a scroller clips the ring */
+					/* A PERMANENT, token-coloured scrollbar rather than an overlay one that only
+       appears once you already guessed to swipe. It is the only affordance saying
+       the row continues past the edge, so it is not allowed to be invisible. */
+					scrollbar-width: thin;
+					scrollbar-color: var(--c-line) var(--c-raise);
+				}
+				.nav-group {
+					flex: none;
+					flex-direction: row;
+					gap: 0.375rem;
+				}
+				.nav-group-label {
+					flex: none;
+					margin: 0 0.1875rem;
+					padding: 0.25rem 0 0.25rem 0.8125rem;
+					border-left: 1px solid var(--c-line-soft);
+				}
+				.nav-group-label:first-of-type {
+					margin-top: 0;
+				}
+				.nav-item {
+					white-space: nowrap;
+				}
+				.soon {
+					margin-left: 0;
+				}
+				.nav-note {
+					margin: 0;
+					padding: 0.375rem 1.125rem 1rem;
+				}
+				.narrow-only {
+					display: inline;
+				}
+				.side-foot {
+					flex-direction: row;
+					align-items: center;
+					flex-wrap: wrap;
+				}
+				.side-foot form {
+					margin-left: auto;
+				}
+				.signout {
+					width: auto;
+				}
+				.topbar {
+					padding: 1.25rem 1.125rem;
+				}
+				.content {
+					padding: 1.75rem 1.125rem 3.5rem;
+					gap: 2.25rem;
+				}
+			}
+
+			/* Below ~620px the label + state row wraps unevenly — some states keep their line,
+   some drop — and the list loses its rhythm. Stack them deliberately instead, state
+   first, so every row reads the same way. The state span is aria-hidden (the
+   .sr-only text on the heading carries it), so reordering it visually changes
+   nothing for a screen reader. */
+			@media (max-width: 620px) {
+				.step {
+					padding: 1rem 1rem;
+					gap: 0.75rem;
+				}
+				.step-top {
+					flex-direction: column;
+					align-items: flex-start;
+					gap: 0.0625rem;
+				}
+				.step-state {
+					order: -1;
+				}
+			}
+
+			/* sample chrome: tighten the gap between the note and the product shell */
+			.notewrap {
+				padding-block: 28px 24px;
+			}
+		</style>
+	</head>
+	<body>
+		<nav class="samplebar">
+			<a href="index.html">← all samples</a><a href="01-foundations.html">Foundations</a
+			><a href="02-dashboard.html"><strong>Dashboard</strong></a
+			><a href="03-auth.html">Auth</a><a href="04-pos-order.html">POS · Order</a
+			><a href="05-pos-payment.html">POS · Payment</a><a href="06-receipt.html">Receipt</a
+			><span class="spacer"></span
+			><button
+				class="btn"
+				onclick="
+					document.documentElement.dataset.theme =
+						document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'
+				"
+			>
+				Toggle theme
+			</button>
+		</nav>
+
+		<div class="wrap notewrap">
+			<p class="sample-note">
+				<strong>02 · Dashboard</strong> — the owner's surface: seated, mouse, online only,
+				Tailwind-default density (no touch tokens appear on this page; those belong to the POS). The
+				rail is what changed: nine destinations grouped into four, of which exactly two are real.
+				The rules it exists to prove: a control that does nothing is
+				<em>non-interactive and says why</em>, never a dead link; an icon never carries meaning
+				alone, so every item keeps its written label and every status keeps its glyph; and
+				<em>no money appears anywhere</em> — see the comment in the source. Press
+				<em>Toggle theme</em>: this surface follows the viewer, unlike the till.
+			</p>
+		</div>
+
+		<!--
+  NO MONEY FIGURES ANYWHERE ON THIS SCREEN — not revenue, not today's takings, not
+  a zero. Two reasons, and the second is the real one:
+
+  1. The money module (src/lib/server/money) does not exist yet. Invariant 1 says
+     money is integer minor units and arithmetic lives in exactly one place; a
+     mockup that invents "$0.00" is inventing a formatter in the design layer.
+  2. A zero on a dashboard is indistinguishable from a broken query. An owner who
+     sees $0.00 cannot tell "no sales today" from "the report is failing silently"
+     — and on the one surface where they check whether the business made money,
+     that ambiguity is worse than showing nothing at all.
+
+  Sales figures arrive with the reporting plan, their own formatter, and the
+  business-date grouping invariant 11 requires — not before.
+-->
+
+		<div class="app">
+			<div class="shell">
+				<aside class="side" aria-label="Workspace">
+					<!-- BRAND. The mark is one letter of the display face on an accent tile — type,
+           not an asset: nothing to commission, nothing to cache, and it re-colours with
+           the theme because it names roles rather than colours. aria-hidden, because the
+           restaurant name is written beside it. -->
+					<div class="brand">
+						<span class="brand-mark" aria-hidden="true">m</span>
+						<span class="brand-text">
+							<span class="brand-name">Matcami Suugo</span>
+							<span class="brand-sub">Owner workspace</span>
+						</span>
+					</div>
+
+					<nav class="side-nav" aria-label="Dashboard sections">
+						<ul class="nav-group">
+							<li>
+								<a class="nav-item" href="#overview" aria-current="page">
+									<svg
+										class="nav-ico"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+										fill="none"
+										stroke-width="1.6"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										aria-hidden="true"
+									>
+										<rect x="3" y="3" width="7.5" height="7.5" rx="1.5" />
+										<rect x="13.5" y="3" width="7.5" height="5" rx="1.5" />
+										<rect x="13.5" y="11" width="7.5" height="10" rx="1.5" />
+										<rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5" />
+									</svg>
+									<span class="nav-label">Overview</span>
+								</a>
+							</li>
+						</ul>
+
+						<!--
+          The seven items below are NOT links: no href, no tabindex, aria-disabled,
+          and a Soon pill on the row. They are listed rather than hidden so the owner
+          can see the shape of the product — and the line under the nav says when each
+          one arrives. Every one of them keeps its written label; the icon is
+          reinforcement, never the carrier (WCAG 1.4.1, and an icon has no accessible
+          name to begin with).
+        -->
+						<p class="t-eyebrow nav-group-label" id="grp-catalogue">Catalogue</p>
+						<ul class="nav-group" aria-labelledby="grp-catalogue">
+							<li>
+								<span class="nav-item nav-item-soon" aria-disabled="true">
+									<svg
+										class="nav-ico"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+										fill="none"
+										stroke-width="1.6"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										aria-hidden="true"
+									>
+										<path
+											d="M12 6.5C10.6 5.2 8.8 4.5 7 4.5H3.5v13H7c1.8 0 3.6.7 5 2 1.4-1.3 3.2-2 5-2h3.5v-13H17c-1.8 0-3.6.7-5 2Z"
+										/>
+										<path d="M12 6.5v13" />
+									</svg>
+									<span class="nav-label">Menu</span>
+									<span class="soon">Soon<span class="sr-only"> — not built yet</span></span>
+								</span>
+							</li>
+							<li>
+								<span class="nav-item nav-item-soon" aria-disabled="true">
+									<svg
+										class="nav-ico"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+										fill="none"
+										stroke-width="1.6"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										aria-hidden="true"
+									>
+										<path d="M20.5 7.5 12 3.5 3.5 7.5v9L12 20.5l8.5-4v-9Z" />
+										<path d="m3.5 7.5 8.5 4 8.5-4" />
+										<path d="M12 11.5v9" />
+									</svg>
+									<span class="nav-label">Inventory</span>
+									<span class="soon">Soon<span class="sr-only"> — not built yet</span></span>
+								</span>
+							</li>
+						</ul>
+
+						<p class="t-eyebrow nav-group-label" id="grp-money">Money</p>
+						<ul class="nav-group" aria-labelledby="grp-money">
+							<li>
+								<span class="nav-item nav-item-soon" aria-disabled="true">
+									<svg
+										class="nav-ico"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+										fill="none"
+										stroke-width="1.6"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										aria-hidden="true"
+									>
+										<circle cx="9.5" cy="19.5" r="1.4" />
+										<circle cx="17.5" cy="19.5" r="1.4" />
+										<path
+											d="M2.5 3.5h2.2l2.3 11.1a1.6 1.6 0 0 0 1.6 1.3h8.7a1.6 1.6 0 0 0 1.6-1.3l1.4-7.1H5.6"
+										/>
+									</svg>
+									<span class="nav-label">Purchases</span>
+									<span class="soon">Soon<span class="sr-only"> — not built yet</span></span>
+								</span>
+							</li>
+							<li>
+								<span class="nav-item nav-item-soon" aria-disabled="true">
+									<svg
+										class="nav-ico"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+										fill="none"
+										stroke-width="1.6"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										aria-hidden="true"
+									>
+										<path d="M6 3.5h12v17l-2.4-1.7-2.4 1.7-2.4-1.7L8.4 20.5 6 18.8V3.5Z" />
+										<path d="M9 8.5h6" />
+										<path d="M9 12.5h4" />
+									</svg>
+									<span class="nav-label">Expenses</span>
+									<span class="soon">Soon<span class="sr-only"> — not built yet</span></span>
+								</span>
+							</li>
+							<li>
+								<span class="nav-item nav-item-soon" aria-disabled="true">
+									<svg
+										class="nav-ico"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+										fill="none"
+										stroke-width="1.6"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										aria-hidden="true"
+									>
+										<path d="M3.5 20.5h17" />
+										<path d="M7 20.5v-5.5" />
+										<path d="M12 20.5v-11" />
+										<path d="M17 20.5v-8" />
+									</svg>
+									<span class="nav-label">Reports</span>
+									<span class="soon">Soon<span class="sr-only"> — not built yet</span></span>
+								</span>
+							</li>
+						</ul>
+
+						<p class="t-eyebrow nav-group-label" id="grp-setup">Setup</p>
+						<ul class="nav-group" aria-labelledby="grp-setup">
+							<li>
+								<span class="nav-item nav-item-soon" aria-disabled="true">
+									<svg
+										class="nav-ico"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+										fill="none"
+										stroke-width="1.6"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										aria-hidden="true"
+									>
+										<circle cx="9" cy="8" r="3.5" />
+										<path d="M2.75 20a6.25 6.25 0 0 1 12.5 0" />
+										<path d="M16.5 4.8a3.5 3.5 0 0 1 0 6.4" />
+										<path d="M17.8 14.2A6.25 6.25 0 0 1 21.25 20" />
+									</svg>
+									<span class="nav-label">Employees</span>
+									<span class="soon">Soon<span class="sr-only"> — not built yet</span></span>
+								</span>
+							</li>
+							<li>
+								<span class="nav-item nav-item-soon" aria-disabled="true">
+									<svg
+										class="nav-ico"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+										fill="none"
+										stroke-width="1.6"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										aria-hidden="true"
+									>
+										<rect x="6" y="2.5" width="12" height="19" rx="2.5" />
+										<path d="M10.5 18.5h3" />
+									</svg>
+									<span class="nav-label">Devices</span>
+									<span class="soon">Soon<span class="sr-only"> — not built yet</span></span>
+								</span>
+							</li>
+							<li>
+								<a class="nav-item" href="#settings">
+									<svg
+										class="nav-ico"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+										fill="none"
+										stroke-width="1.6"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										aria-hidden="true"
+									>
+										<path d="M4 7h10" />
+										<path d="M18 7h2" />
+										<circle cx="16" cy="7" r="2" />
+										<path d="M4 17h2" />
+										<path d="M10 17h10" />
+										<circle cx="8" cy="17" r="2" />
+									</svg>
+									<span class="nav-label">Settings</span>
+								</a>
+							</li>
+						</ul>
+					</nav>
+
+					<p class="nav-note">
+						<span class="narrow-only"
+							>The row above scrolls sideways; all nine sections are in it.</span
+						>
+						Seven sections are listed and not built. Each one arrives with its own feature — Menu
+						with the menu builder, Reports with the reporting plan — so none of them is a link
+						today: a greyed-out item that still navigates is worse than one that admits it.
+					</p>
+
+					<div class="side-foot">
+						<div class="who">
+							<span class="avatar" aria-hidden="true">CW</span>
+							<span class="who-text">
+								<span class="who-name">Cabdi Warsame</span>
+								<span class="who-role">Owner</span>
+							</span>
+						</div>
+						<!--
+          A FORM, never an anchor. /logout refuses GET (its load returns 405), so a
+          link would be triggerable by any <img> tag on any page. The design has to
+          carry that: "Sign out" is a submit button, and it looks like one.
+        -->
+						<form method="POST" action="/logout">
+							<button type="submit" class="btn signout">
+								<svg
+									viewBox="0 0 24 24"
+									stroke="currentColor"
+									fill="none"
+									stroke-width="1.6"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									aria-hidden="true"
+								>
+									<path
+										d="M15 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2v-2.5"
+									/>
+									<path d="M11 12h9" />
+									<path d="m17.5 8.5 3.5 3.5-3.5 3.5" />
+								</svg>
+								<span>Sign out</span>
+							</button>
+						</form>
+					</div>
+				</aside>
+
+				<main class="main">
+					<header class="topbar">
+						<div class="topbar-text">
+							<h1 class="t-display">Overview</h1>
+							<p class="t-body lede">
+								Set the restaurant up, then keep it running. This surface is online only — the POS
+								keeps selling when the connection drops, and this one does not pretend to.
+							</p>
+						</div>
+						<p class="topbar-meta">
+							<svg
+								viewBox="0 0 24 24"
+								stroke="currentColor"
+								fill="none"
+								stroke-width="1.6"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<circle cx="12" cy="12" r="8.5" />
+								<path d="M12 7.5V12l3 1.8" />
+							</svg>
+							<span>Time zone</span>
+							<span class="v">Africa/Mogadishu</span>
+						</p>
+					</header>
+
+					<div class="content">
+						<section class="sect" id="overview">
+							<div class="sect-head">
+								<p class="t-eyebrow">Onboarding</p>
+								<h2 class="t-title">Getting set up</h2>
+								<p class="t-body lede">
+									Work down this list in order. Finish the settings, then add your employees, then
+									build the menu. Nothing below is faked: only the first step can be checked,
+									because only its feature exists.
+								</p>
+							</div>
+
+							<div class="meter">
+								<span class="meter-track" aria-hidden="true">
+									<span class="seg seg-done"></span>
+									<span class="seg"></span>
+									<span class="seg"></span>
+									<span class="seg"></span>
+									<span class="seg"></span>
+									<span class="seg"></span>
+								</span>
+								<span class="meter-label">1 of 6 done</span>
+							</div>
+
+							<div class="card steps-card">
+								<ol class="steps">
+									<li>
+										<div class="step step-done">
+											<span class="step-glyph glyph-done" aria-hidden="true">●</span>
+											<div class="step-body">
+												<div class="step-top">
+													<h3 class="step-label">
+														Restaurant settings<span class="sr-only"> — done</span>
+													</h3>
+													<span class="step-state state-done" aria-hidden="true">Done</span>
+												</div>
+												<p class="step-detail">Name and time zone are set.</p>
+												<a class="step-link" href="#settings">Open settings</a>
+											</div>
+										</div>
+									</li>
+
+									<li>
+										<div class="step">
+											<span class="step-glyph glyph-todo" aria-hidden="true">○</span>
+											<div class="step-body">
+												<div class="step-top">
+													<h3 class="step-label">
+														Employees and PINs<span class="sr-only"> — not started</span>
+													</h3>
+													<span class="step-state state-todo" aria-hidden="true">Not started</span>
+												</div>
+												<p class="step-detail">
+													Add the cashier and waiter, each with a PIN for the POS.
+												</p>
+											</div>
+										</div>
+									</li>
+
+									<li>
+										<div class="step">
+											<span class="step-glyph glyph-todo" aria-hidden="true">○</span>
+											<div class="step-body">
+												<div class="step-top">
+													<h3 class="step-label">
+														Menu, categories and modifiers<span class="sr-only">
+															— not started</span
+														>
+													</h3>
+													<span class="step-state state-todo" aria-hidden="true">Not started</span>
+												</div>
+												<p class="step-detail">
+													What you sell, what it costs, and the options that change a recipe.
+												</p>
+											</div>
+										</div>
+									</li>
+
+									<li>
+										<div class="step">
+											<span class="step-glyph glyph-todo" aria-hidden="true">○</span>
+											<div class="step-body">
+												<div class="step-top">
+													<h3 class="step-label">
+														Dining tables<span class="sr-only"> — not started</span>
+													</h3>
+													<span class="step-state state-todo" aria-hidden="true">Not started</span>
+												</div>
+												<p class="step-detail">The floor plan the POS opens orders against.</p>
+											</div>
+										</div>
+									</li>
+
+									<li>
+										<div class="step">
+											<span class="step-glyph glyph-todo" aria-hidden="true">○</span>
+											<div class="step-body">
+												<div class="step-top">
+													<h3 class="step-label">
+														Register the POS device<span class="sr-only"> — not started</span>
+													</h3>
+													<span class="step-state state-todo" aria-hidden="true">Not started</span>
+												</div>
+												<p class="step-detail">Only a registered device may show the PIN screen.</p>
+											</div>
+										</div>
+									</li>
+
+									<li>
+										<div class="step">
+											<span class="step-glyph glyph-todo" aria-hidden="true">○</span>
+											<div class="step-body">
+												<div class="step-top">
+													<h3 class="step-label">
+														Open the first POS session<span class="sr-only"> — not started</span>
+													</h3>
+													<span class="step-state state-todo" aria-hidden="true">Not started</span>
+												</div>
+												<p class="step-detail">
+													Opening cash, sales, count, reconciliation, end-of-day report.
+												</p>
+											</div>
+										</div>
+									</li>
+								</ol>
+							</div>
+						</section>
+
+						<hr class="rule" />
+
+						<section class="sect" id="settings">
+							<div class="sect-head">
+								<p class="t-eyebrow">Step 1</p>
+								<h2 class="t-title">Restaurant settings</h2>
+								<p class="t-body lede">
+									The two facts every other screen depends on. Changing either is allowed and is
+									recorded with its old and new values; neither rewrites anything already posted.
+								</p>
+							</div>
+
+							<p class="alert-ok" role="alert">
+								<span class="glyph" aria-hidden="true">●</span>
+								<span><span class="sr-only">Success — </span>Settings saved.</span>
+							</p>
+
+							<form class="card form-card" method="POST" action="#settings">
+								<div class="field">
+									<label for="rest-name">Restaurant name</label>
+									<input id="rest-name" name="name" type="text" value="Matcami Suugo" required />
+								</div>
+
+								<div class="field">
+									<label for="time-zone">Time zone</label>
+									<!--
+                Shown as a <select> because this is a visual sample. The real screen uses a
+                text input with a <datalist>: Intl.supportedValuesOf('timeZone') omits UTC,
+                Asia/Kolkata and Europe/Kyiv among others, all of which are valid, so a
+                closed list would reject zones the validator accepts.
+              -->
+									<select id="time-zone" name="timeZone" aria-describedby="tz-hint" required>
+										<option selected>Africa/Mogadishu</option>
+										<option>Africa/Nairobi</option>
+										<option>Africa/Addis_Ababa</option>
+										<option>Africa/Djibouti</option>
+										<option>Asia/Dubai</option>
+										<option>Europe/London</option>
+									</select>
+									<p class="hint" id="tz-hint">
+										This decides which business day a sale belongs to — a sale at 01:30 counts
+										toward the previous evening. Reports, end-of-day and reconciliation all group by
+										the business date, never by the calendar date.
+									</p>
+								</div>
+
+								<!--
+              NO fields for tax mode, tax rate, currency, approval limits or idle-lock
+              timing — not even disabled ones. Spec 33 open decisions 3, 4 and 6 are
+              unresolved, and a greyed-out field showing a plausible default is exactly
+              how an unmade decision quietly becomes a remembered fact.
+            -->
+
+								<div class="form-actions">
+									<button type="submit" class="btn btn-primary">Save settings</button>
+									<span class="t-caption"
+										>Saved immediately. The change is written to the audit log.</span
+									>
+								</div>
+							</form>
+						</section>
+					</div>
+				</main>
+			</div>
+		</div>
+	</body>
+</html>

@@ -1,0 +1,597 @@
+/* matcami design samples — the token layer.
+ *
+ * These are DESIGN SAMPLES, not application code. The app's real tokens live in
+ * src/lib/styles/tokens.css and are exposed to Tailwind via @theme / @theme inline.
+ * This file restates the same values as plain CSS so each sample opens straight from
+ * the filesystem with no build step — the same choice docs/pos-layout-grammar.html makes.
+ *
+ * Every value here is the value tasks/ui-design-system/ specifies. Where a value differs
+ * from what is on feat/dashboard-ui-redesign today, it is a value that plan CHANGES, and
+ * the task that changes it is named in the comment.
+ *
+ * THREE SURFACE STATES, not two. Token NAMES are identical in all three; only their
+ * values differ. That is the whole point: a component written for one surface is correct
+ * on the others, because it never names a colour — only a role.
+ *
+ *   :root                                 the complete light palette
+ *   @media (prefers-color-scheme: dark)   guarded :root:not([data-theme="light"])
+ *   :root[data-theme="dark"]              so an explicit choice wins either way
+ *   [data-surface="pos"]                  the device surface — LIGHT in both themes
+ *
+ * Contrast: every ink x ground pair in every state was computed by WCAG relative
+ * luminance and clears 4.5:1. Tightest pairs — light 4.55 (ink-3 on bg-2), dark 4.62
+ * (ok on st-new-bg), pos 4.60 (danger on raise). Boundaries clear 3:1 per WCAG 1.4.11.
+ */
+
+/* ── 1. light — the complete palette ─────────────────────────────────────── */
+:root {
+	color-scheme: light;
+
+	--c-bg: #e9edf0;
+	--c-bg-2: #dfe5e9;
+	--c-raise: #ffffff;
+	--c-raise-2: #f4f7f9;
+	--c-line: #c5cfd6;
+	--c-line-soft: #dce3e8;
+
+	--c-ink: #161b20; /* 14.72 on bg */
+	--c-ink-2: #4a5661; /*  6.38 on bg */
+	--c-ink-3: #5c6771; /* T-06 re-tune: was #646f7a (4.35 on bg, 4.03 on bg-2 — both failed) */
+
+	--c-accent: #0f6b7e;
+	--c-accent-ink: #ffffff;
+	--c-accent-soft: #ddeef2;
+
+	--c-ok: #2c6a48;
+	--c-ok-bg: #e2efe7;
+	--c-warn: #855a12;
+	--c-warn-bg: #f7ecd8;
+	--c-danger: #a13a2e;
+	--c-danger-bg: #f9e5e2;
+
+	--c-st-new: #0f6b7e;
+	--c-st-new-bg: #ddeef2;
+	--c-st-sent: #2c6a48;
+	--c-st-sent-bg: #e2efe7;
+	--c-st-voided: #a13a2e;
+	--c-st-voided-bg: #f9e5e2;
+	--c-st-billed: #855a12;
+	--c-st-billed-bg: #f7ecd8;
+	--c-st-paid: #2c6a48;
+	--c-st-paid-bg: #e2efe7;
+	--c-st-offline: #855a12;
+	--c-st-offline-bg: #f7ecd8;
+
+	/* Aliases. A custom property's var() is substituted at COMPUTED-VALUE TIME on the
+     element that DECLARES it, and what inherits down the tree is that resolved literal.
+     The consequence is easy to get backwards, so both halves, both verified in Chromium:
+
+       - The DARK BLOCKS need no copy of these. They target :root — the same element
+         this declaration sits on — so --c-ring computes against :root's own --c-accent,
+         which the dark block has already replaced. Measured on a dark page:
+         --c-accent #5cb4c9, --c-ring #5cb4c9. Correct, with nothing added.
+
+       - A SCOPE ON A DIFFERENT ELEMENT does need a copy. [data-surface="pos"] is a
+         <div>, not :root, so it never re-computes an alias declared above it: without
+         its own line, --c-ring inside the shell stays the page accent. Measured:
+         --c-accent #5cb4c9 but --c-ring #0f6b7e. Hence the two lines in that block. */
+	--c-ring: var(--c-accent);
+	--c-control-line: var(--c-ink-3); /* 5.78 on raise — WCAG 1.4.11 wants 3:1 */
+
+	/* Text ON the danger button. Needed per state: white is 6.65 on the light danger
+     but only 2.66 on the dark one and 2.85 on the POS one, because both are lightened
+     for legibility on a dark ground. .btn-danger must name a role, never a literal. */
+	--c-danger-ink: #ffffff;
+
+	/* Disabled controls get their OWN pair, never `opacity`. opacity composites the
+     whole element — fill AND ink — onto whatever is behind it, so it silently
+     defeats every audited pair in this file: the disabled primary button measured
+     2.47:1. A token pair stays auditable because no colour is reached by a
+     multiplier. The fill's own edge is weak (1.27 on raise), so a disabled control
+     keeps its --c-control-line border to satisfy WCAG 1.4.11. */
+	--c-disabled-bg: #dfe5e9;
+	--c-disabled-ink: #4a5661; /* 5.91 on the fill */
+
+	/* Decorative only. --c-line is 1.58 on raise: legal for a divider, NEVER for the
+     boundary of an interactive control. That distinction is the single biggest reason
+     the current screens read as washed out. */
+
+	/* POS chrome. Bare :root ONLY — never redeclared in a dark block. */
+	--c-screen: #0f1215;
+	--c-key: #2a313a;
+	--c-key-line: #3a434e;
+	--c-key-ink: #e3e9ee;
+
+	/* Elevation ladder (T-10). Declared per theme: the light rungs carry a white top
+     highlight that is wrong on a dark ground. */
+	--c-shadow-flat: 0 1px 0 rgb(255 255 255 / 0.8), 0 1px 2px -1px rgb(22 27 32 / 0.18);
+	--c-shadow-raised: 0 1px 0 rgb(255 255 255 / 0.8), 0 6px 20px -14px rgb(22 27 32 / 0.45);
+	--c-shadow-floating: 0 1px 0 rgb(255 255 255 / 0.9), 0 18px 44px -22px rgb(22 27 32 / 0.55);
+}
+
+/* ── 2. dark ─────────────────────────────────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme='light']) {
+		color-scheme: dark;
+		--c-bg: #15181b;
+		--c-bg-2: #1b1f24;
+		--c-raise: #22272e;
+		--c-raise-2: #2b3139;
+		--c-line: #333b44;
+		--c-line-soft: #272d34;
+		--c-ink: #e6eaec;
+		--c-ink-2: #a8b3bc;
+		--c-ink-3: #97a0a8; /* T-06 re-tune: was #8a949d */
+		--c-accent: #5cb4c9;
+		--c-accent-ink: #0d1416;
+		--c-accent-soft: #16323a;
+		--c-ok: #6eac81; /* T-06 re-tune: was #5aa06f */
+		--c-ok-bg: #1b2a21;
+		--c-warn: #d99a3c;
+		--c-warn-bg: #2c2417;
+		--c-danger: #df877c; /* T-06 re-tune: was #d97165 */
+		--c-danger-bg: #2c1d1b;
+		--c-st-new: #8fd2e3;
+		--c-st-new-bg: #243745;
+		--c-st-sent: #8fd0a0;
+		--c-st-sent-bg: #1f3326;
+		--c-st-voided: #e0938a;
+		--c-st-voided-bg: #3a2523;
+		--c-st-billed: #e8bd6b;
+		--c-st-billed-bg: #332a14;
+		--c-st-paid: #8fd0a0;
+		--c-st-paid-bg: #1f3326;
+		--c-st-offline: #e8bd6b;
+		--c-st-offline-bg: #332a14;
+		--c-danger-ink: #1a0f0d; /* 7.06 on the dark --c-danger; white would be 2.66 */
+		--c-disabled-bg: #2b3139;
+		--c-disabled-ink: #a8b3bc; /* 6.15 */
+		--c-shadow-flat: 0 1px 0 rgb(255 255 255 / 0.04), 0 1px 2px -1px rgb(0 0 0 / 0.6);
+		--c-shadow-raised: 0 1px 0 rgb(255 255 255 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.8);
+		--c-shadow-floating: 0 1px 0 rgb(255 255 255 / 0.06), 0 22px 50px -20px rgb(0 0 0 / 0.9);
+	}
+}
+:root[data-theme='dark'] {
+	color-scheme: dark;
+	--c-bg: #15181b;
+	--c-bg-2: #1b1f24;
+	--c-raise: #22272e;
+	--c-raise-2: #2b3139;
+	--c-line: #333b44;
+	--c-line-soft: #272d34;
+	--c-ink: #e6eaec;
+	--c-ink-2: #a8b3bc;
+	--c-ink-3: #97a0a8;
+	--c-accent: #5cb4c9;
+	--c-accent-ink: #0d1416;
+	--c-accent-soft: #16323a;
+	--c-ok: #6eac81;
+	--c-ok-bg: #1b2a21;
+	--c-warn: #d99a3c;
+	--c-warn-bg: #2c2417;
+	--c-danger: #df877c;
+	--c-danger-bg: #2c1d1b;
+	--c-st-new: #8fd2e3;
+	--c-st-new-bg: #243745;
+	--c-st-sent: #8fd0a0;
+	--c-st-sent-bg: #1f3326;
+	--c-st-voided: #e0938a;
+	--c-st-voided-bg: #3a2523;
+	--c-st-billed: #e8bd6b;
+	--c-st-billed-bg: #332a14;
+	--c-st-paid: #8fd0a0;
+	--c-st-paid-bg: #1f3326;
+	--c-st-offline: #e8bd6b;
+	--c-st-offline-bg: #332a14;
+	--c-danger-ink: #1a0f0d; /* 7.06 on the dark --c-danger; white would be 2.66 */
+	--c-disabled-bg: #2b3139;
+	--c-disabled-ink: #a8b3bc; /* 6.15 */
+	--c-shadow-flat: 0 1px 0 rgb(255 255 255 / 0.04), 0 1px 2px -1px rgb(0 0 0 / 0.6);
+	--c-shadow-raised: 0 1px 0 rgb(255 255 255 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.8);
+	--c-shadow-floating: 0 1px 0 rgb(255 255 255 / 0.06), 0 22px 50px -20px rgb(0 0 0 / 0.9);
+}
+
+/* ── 3. THE POS DEVICE SURFACE — LIGHT IN BOTH THEMES ────────────────────────
+ * The till is a DEVICE. Its surface is a property of the hardware on the counter,
+ * not of the viewer's OS preference — so it does not follow the page theme. The
+ * dashboard themes; the POS does not.
+ *
+ * DECISION HISTORY. This rule flipped twice on 2026-09-14, and both flips matter:
+ *   1. It was DARK in both themes (glare, keys brightest). That broke, because the
+ *      inks kept theming: light-theme ink on a permanently dark shell measured
+ *      1.08:1, black on black.
+ *   2. The user reviewed a light-mode commercial POS reference and chose LIGHT.
+ *      The glare argument was raised once and overruled.
+ *
+ * THE LESSON FROM THE FIRST FLIP, WHICH THE SECOND MUST NOT REPEAT: pinning a
+ * surface means pinning EVERY token on it, not just the grounds. Pin the grounds
+ * light and let the inks theme, and a dark-theme viewer gets --c-ink #e6eaec on a
+ * white key face — 1.21:1. That is the identical defect, mirrored. So this block
+ * declares the COMPLETE device palette, and no dark block overrides any of it.
+ *
+ * What the scope buys beyond being light: the till's ground/key relationship. The
+ * dashboard puts white cards on a light ground for reading; the POS uses a DEEPER
+ * ground so the white key faces read as the raised, pressable thing.
+ *
+ * AND ONE HARD CONSEQUENCE, MEASURED: a white key on that ground is 1.22:1, so
+ * elevation ALONE cannot carry a control's edge. WCAG 1.4.11 wants 3:1 for the
+ * boundary of a UI component, so every pressable surface takes a
+ * --c-control-line border (4.73 on the ground). A shadow-only key is pretty and
+ * non-compliant. --c-line (1.55 here) is for decorative rules only.
+ *
+ * Audited: 182 ink x ground pairs, 0 failures, tightest 4.60 (ink-3 on bg-2). */
+[data-surface='pos'] {
+	color-scheme: light;
+
+	/* grounds — deeper than the page, so a white key reads as raised */
+	--c-bg: #e4e9ee;
+	--c-bg-2: #e1e6eb;
+	--c-raise: #ffffff;
+	--c-raise-2: #f4f7f9;
+	--c-line: #c8d1d8;
+	--c-line-soft: #dce3e8;
+
+	/* inks — PINNED. Letting these theme is the 1.21:1 bug described above. */
+	--c-ink: #161b20;
+	--c-ink-2: #4a5661;
+	--c-ink-3: #5c6771;
+
+	--c-accent: #0f6b7e;
+	--c-accent-ink: #ffffff;
+	--c-accent-soft: #ddeef2;
+
+	--c-ok: #2c6a48;
+	--c-ok-bg: #e2efe7;
+	--c-warn: #855a12;
+	--c-warn-bg: #f7ecd8;
+	--c-danger: #a13a2e;
+	--c-danger-bg: #f9e5e2;
+	--c-danger-ink: #ffffff;
+	--c-disabled-bg: #e1e6eb;
+	--c-disabled-ink: #4a5661; /* 5.98 */
+
+	--c-st-new: #0f6b7e;
+	--c-st-new-bg: #ddeef2;
+	--c-st-sent: #2c6a48;
+	--c-st-sent-bg: #e2efe7;
+	--c-st-voided: #a13a2e;
+	--c-st-voided-bg: #f9e5e2;
+	--c-st-billed: #855a12;
+	--c-st-billed-bg: #f7ecd8;
+	--c-st-paid: #2c6a48;
+	--c-st-paid-bg: #e2efe7;
+	--c-st-offline: #855a12;
+	--c-st-offline-bg: #f7ecd8;
+
+	/* Aliases re-declared: this scope is a <div>, not :root, so an alias declared
+     above it never recomputes here. See the note in :root. */
+	--c-ring: var(--c-accent);
+	--c-control-line: var(--c-ink-3); /* 4.73 on the POS ground — the key edge */
+
+	--c-shadow-flat: 0 1px 0 rgb(255 255 255 / 0.8), 0 1px 2px -1px rgb(22 27 32 / 0.18);
+	--c-shadow-raised: 0 1px 0 rgb(255 255 255 / 0.8), 0 6px 20px -14px rgb(22 27 32 / 0.45);
+	--c-shadow-floating: 0 1px 0 rgb(255 255 255 / 0.9), 0 18px 44px -22px rgb(22 27 32 / 0.55);
+}
+
+/* ── 3b. category bands ──────────────────────────────────────────────────────
+ * Menu keys carry a category colour instead of a photo: no image column in the
+ * schema, no image payload in the menu snapshot the POS caches offline, and no
+ * cache to invalidate when the menu version bumps.
+ *
+ * These are WAYFINDING, never status, and never the only carrier — the category
+ * name is always written beside the band. Each clears 3:1 on the white key face
+ * (5.02-7.70) so the band itself is perceivable, and none reuses a status hue at a
+ * status weight. */
+:root {
+	--c-cat-grills: #8a4a2b;
+	--c-cat-rice: #7a5c12;
+	--c-cat-somali: #0f6b7e;
+	--c-cat-drinks: #3f5ba8;
+	--c-cat-sides: #5a4a80;
+	--c-cat-sweets: #8f3d63;
+}
+
+/* ── 4. type roles ───────────────────────────────────────────────────────────
+ * One name is one COMPLETE role — size, line-height, tracking and weight together.
+ * In the app these are --text-<name> plus Tailwind v4's three modifiers
+ * (--line-height, --letter-spacing, --font-weight), so `text-title` carries all four.
+ * Here they are plain classes, because these samples use no build step. */
+:root {
+	--font-display: Archivo, system-ui, -apple-system, sans-serif;
+	--font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+	--font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+	--radius-control: 0.5rem;
+	--radius-card: 0.75rem;
+	--radius-sheet: 1rem;
+
+	--container-page: 72rem;
+	--container-measure: 68ch; /* NOT --container-prose: Tailwind hardcodes max-w-prose
+                                  at 65ch and never reads the --container-* namespace */
+	--container-form: 32rem;
+
+	--touch-min: 3.5rem; /* 56px ≈10mm — the absolute floor on the POS */
+	--touch: 4rem; /* 64px — standard target */
+	--touch-lg: 4.5rem; /* 72px — menu keys, function rail */
+	--touch-xl: 6rem; /* 96px — Pay, Send to kitchen: the one-touch closers */
+}
+
+* {
+	box-sizing: border-box;
+}
+
+body {
+	margin: 0;
+	background: var(--c-bg);
+	color: var(--c-ink);
+	font: 400 0.9375rem/1.6 var(--font-sans);
+	-webkit-font-smoothing: antialiased;
+}
+
+.t-display {
+	font-family: var(--font-display);
+	font-size: clamp(1.875rem, 1.4rem + 2.2vw, 2.875rem);
+	line-height: 1.08;
+	letter-spacing: -0.022em;
+	font-weight: 700;
+	text-wrap: balance;
+	margin: 0;
+}
+.t-title {
+	font-family: var(--font-display);
+	font-size: clamp(1.3125rem, 1.15rem + 0.7vw, 1.6875rem);
+	line-height: 1.18;
+	letter-spacing: -0.014em;
+	font-weight: 600;
+	text-wrap: balance;
+	margin: 0;
+}
+.t-section {
+	font-family: var(--font-display);
+	font-size: 1rem;
+	line-height: 1.4;
+	letter-spacing: -0.006em;
+	font-weight: 600;
+	margin: 0;
+}
+.t-body {
+	font-size: 0.9375rem;
+	line-height: 1.6;
+	margin: 0;
+	max-width: var(--container-measure);
+	text-wrap: pretty;
+}
+.t-caption {
+	font-size: 0.8125rem;
+	line-height: 1.45;
+	color: var(--c-ink-2);
+	margin: 0;
+}
+.t-eyebrow {
+	font-family: var(--font-mono);
+	font-size: 0.6875rem;
+	font-weight: 500;
+	letter-spacing: 0.16em;
+	text-transform: uppercase;
+	color: var(--c-accent);
+}
+
+/* Money. ALWAYS mono + tabular-nums, right-aligned in a column. A price set in the
+   body face is a bug. The UI never computes or rounds — these are display strings. */
+.money {
+	font-family: var(--font-mono);
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+}
+.money-neg {
+	color: var(--c-danger);
+} /* the − sign carries it too, never colour alone */
+.money-total {
+	font-family: var(--font-mono);
+	font-variant-numeric: tabular-nums;
+	font-size: 2.5rem;
+	line-height: 1;
+	letter-spacing: -0.02em;
+}
+
+/* ── 5. shared primitives ────────────────────────────────────────────────── */
+.card {
+	background: var(--c-raise);
+	border: 1px solid var(--c-line);
+	border-radius: var(--radius-card);
+	box-shadow: var(--c-shadow-raised);
+}
+.rule {
+	height: 1px;
+	background: var(--c-line-soft);
+	border: 0;
+	margin: 0;
+}
+
+.btn {
+	font: inherit;
+	font-weight: 500;
+	cursor: pointer;
+	border-radius: var(--radius-control);
+	padding: 0.5rem 0.875rem;
+	border: 1px solid var(--c-control-line);
+	background: var(--c-raise);
+	color: var(--c-ink);
+}
+.btn-primary {
+	background: var(--c-accent);
+	color: var(--c-accent-ink);
+	border-color: var(--c-accent);
+}
+.btn-danger {
+	background: var(--c-danger);
+	color: var(--c-danger-ink);
+	border-color: var(--c-danger);
+}
+.btn:disabled {
+	background: var(--c-disabled-bg);
+	color: var(--c-disabled-ink);
+	border-color: var(--c-control-line);
+	cursor: not-allowed;
+}
+
+.field {
+	display: flex;
+	flex-direction: column;
+	gap: 0.375rem;
+}
+.field > label {
+	font-size: 0.8125rem;
+	font-weight: 500;
+	color: var(--c-ink-2);
+}
+.field > input,
+.field > select {
+	font: inherit;
+	color: var(--c-ink);
+	background: var(--c-raise);
+	border: 1px solid var(--c-control-line); /* NOT --c-line: 1.58:1 is invisible */
+	border-radius: var(--radius-control);
+	padding: 0.5rem 0.625rem;
+}
+.hint {
+	font-size: 0.75rem;
+	color: var(--c-ink-2);
+}
+
+/* Status. Colour NEVER alone — every one carries its glyph. ~1 in 12 men has
+   red-green CVD and a counter screen is read under glare. WCAG 1.4.1. */
+.mark {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4em;
+	font-size: 0.8125rem;
+	font-weight: 500;
+}
+.mark .glyph {
+	font-family: var(--font-mono);
+}
+.mark-new {
+	color: var(--c-st-new);
+}
+.mark-sent {
+	color: var(--c-st-sent);
+}
+.mark-voided {
+	color: var(--c-st-voided);
+	text-decoration: line-through;
+}
+.mark-billed {
+	color: var(--c-st-billed);
+}
+.mark-paid {
+	color: var(--c-st-paid);
+}
+.mark-offline {
+	color: var(--c-st-offline);
+}
+
+.pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.4em;
+	font-size: 0.75rem;
+	font-weight: 500;
+	padding: 0.1875rem 0.5rem;
+	border-radius: 999px;
+	font-family: var(--font-mono);
+}
+.pill-new {
+	color: var(--c-st-new);
+	background: var(--c-st-new-bg);
+}
+.pill-sent {
+	color: var(--c-st-sent);
+	background: var(--c-st-sent-bg);
+}
+.pill-voided {
+	color: var(--c-st-voided);
+	background: var(--c-st-voided-bg);
+}
+.pill-billed {
+	color: var(--c-st-billed);
+	background: var(--c-st-billed-bg);
+}
+.pill-paid {
+	color: var(--c-st-paid);
+	background: var(--c-st-paid-bg);
+}
+.pill-offline {
+	color: var(--c-st-offline);
+	background: var(--c-st-offline-bg);
+}
+
+/* Focus. Every interactive element, ≥3:1 against its surroundings. NEVER `outline: none`
+   without a replacement — that is an accessibility regression, WCAG 2.4.7. */
+/* NO border-radius here. `outline` already follows the element's own radius in every
+   current engine, and a border-radius declaration on :focus-visible restyles the
+   element's BOX — at (0,1,0) specificity, declared after .btn in this same sheet, it
+   wins and squares the button's corners for as long as it has focus. */
+:focus-visible {
+	outline: 2px solid var(--c-ring);
+	outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
+}
+
+/* ── 6. sample-page chrome (not part of the design system) ───────────────── */
+.wrap {
+	max-width: var(--container-page);
+	margin: 0 auto;
+	padding-inline: 20px;
+	padding-block: 40px 72px;
+}
+.sample-note {
+	border-left: 3px solid var(--c-warn);
+	background: var(--c-warn-bg);
+	color: var(--c-ink);
+	padding: 12px 16px;
+	border-radius: 0 var(--radius-control) var(--radius-control) 0;
+	max-width: var(--container-measure);
+	font-size: 0.8125rem;
+}
+.samplebar {
+	display: flex;
+	gap: 0.5rem;
+	align-items: center;
+	flex-wrap: wrap;
+	background: var(--c-raise);
+	border-bottom: 1px solid var(--c-line);
+	padding: 10px 20px;
+	position: sticky;
+	top: 0;
+	z-index: 10;
+}
+.samplebar a {
+	color: var(--c-accent);
+	font-size: 0.8125rem;
+	text-decoration: none;
+}
+.samplebar a:hover {
+	text-decoration: underline;
+}
+.samplebar .spacer {
+	margin-left: auto;
+}
+
+/* The POS touch floor, enforced rather than remembered. Anything pressable on the
+   device surface is at least 56px tall — Apple's 44pt and Material's 48dp assume a
+   SEATED user holding the device, and are too small for a counter. */
+[data-surface='pos'] .btn,
+[data-surface='pos'] button:not(.samplebar button) {
+	min-height: var(--touch-min);
+}

@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>matcami · Receipt &amp; Kitchen Ticket</title>
+
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			rel="stylesheet"
+			href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+		/>
+
+		<link rel="stylesheet" href="tokens.css" />
+
+		<style>
+			/* Layout only. Every colour in this file is a var(--c-*) from tokens.css.
+   The receipt "paper" is --c-raise and the "ink" is --c-ink; that is the whole
+   palette a thermal printer has, which is the entire point of this sample. */
+
+			section {
+				margin-top: 4.5rem;
+			}
+			.stack {
+				display: flex;
+				flex-direction: column;
+				gap: 1rem;
+			}
+			.stack-s {
+				display: flex;
+				flex-direction: column;
+				gap: 0.5rem;
+			}
+			.lede {
+				font-size: 1.0625rem;
+				line-height: 1.55;
+				color: var(--c-ink-2);
+				max-width: 62ch;
+				margin: 0;
+				text-wrap: pretty;
+			}
+			.intro {
+				color: var(--c-ink-2);
+				margin-top: 0.875rem;
+			}
+			.after {
+				margin-top: 1.5rem;
+			}
+			.sr-only {
+				position: absolute;
+				width: 1px;
+				height: 1px;
+				padding: 0;
+				margin: -1px;
+				overflow: hidden;
+				clip-path: inset(50%);
+				white-space: nowrap;
+				border: 0;
+			}
+			.mono {
+				font-family: var(--font-mono);
+				font-variant-numeric: tabular-nums;
+			}
+			code {
+				font-family: var(--font-mono);
+				font-size: 0.875em;
+				color: var(--c-ink);
+				background: var(--c-bg-2);
+				padding: 0.1em 0.35em;
+				border-radius: 3px;
+			}
+
+			/* ── the paper ─────────────────────────────────────────────────────────────
+   width:fit-content is doing real work here: because every rule line is exactly
+   32 or 48 characters, the paper ends up exactly as wide as the receipt is.
+   Nothing on this page can silently reflow. */
+			.pair {
+				display: grid;
+				grid-template-columns: minmax(0, 27fr) minmax(0, 37fr);
+				gap: 2rem 2.5rem;
+				align-items: start;
+				margin-top: 1.75rem;
+			}
+			.split {
+				display: grid;
+				grid-template-columns: minmax(0, 1fr) auto;
+				gap: 2rem 2.5rem;
+				align-items: start;
+				margin-top: 1.75rem;
+			}
+			@media (max-width: 900px) {
+				.pair,
+				.split {
+					grid-template-columns: minmax(0, 1fr);
+					gap: 2.5rem;
+				}
+			}
+			/* Side by side, the two tapes should hang from one line even though their
+   captions differ in length. Subgrid shares the three rows; without it they
+   simply top-align, which is the same layout one notch less tidy. */
+			@supports (grid-template-rows: subgrid) {
+				@media (min-width: 901px) {
+					.pair {
+						grid-template-rows: auto auto auto;
+					}
+					.pair > .receipt {
+						display: grid;
+						grid-row: span 3;
+						grid-template-rows: subgrid;
+						justify-items: start;
+						align-content: start;
+					}
+				}
+			}
+
+			.receipt {
+				display: flex;
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 0.625rem;
+				min-width: 0;
+				max-width: 100%;
+				margin: 0;
+			}
+			.receipt > figcaption {
+				display: flex;
+				flex-direction: column;
+				gap: 0.5rem;
+				max-width: 100%;
+			}
+			.capline {
+				display: flex;
+				flex-wrap: wrap;
+				align-items: center;
+				gap: 0.5rem;
+			}
+			.note-under {
+				max-width: 44ch;
+				font-size: 0.8125rem;
+				line-height: 1.55;
+				color: var(--c-ink-2);
+				margin: 0;
+			}
+
+			.w32 {
+				--col: clamp(11px, 3.4vw, 14.5px);
+				--pad: 0.875rem;
+			}
+			.w48 {
+				--col: clamp(8.5px, 2.6vw, 12.5px);
+				--pad: 0.875rem;
+			}
+
+			.ruler,
+			.paper {
+				width: fit-content;
+				max-width: 100%;
+			}
+			.ruler {
+				padding-inline: calc(var(--pad) + 1px);
+				padding-bottom: 0.25rem;
+				color: var(--c-ink-3);
+				border-bottom: 1px solid var(--c-line);
+			}
+			.tape {
+				margin: 0;
+				white-space: pre;
+				font-family: var(--font-mono);
+				font-variant-numeric: tabular-nums;
+				font-size: var(--col);
+				line-height: 1.5;
+				letter-spacing: 0;
+				font-weight: 400;
+			}
+			.ruler .tape {
+				font-weight: 500;
+				line-height: 1.25;
+			}
+			.paper {
+				background: var(--c-raise);
+				color: var(--c-ink);
+				border: 1px solid var(--c-line-soft);
+				border-radius: 0;
+				box-shadow: var(--c-shadow-floating);
+				padding: 1.5rem var(--pad);
+			}
+			/* ESC/POS GS ! 0x11 — double width and double height. At 2em in a monospaced
+   face one character occupies exactly two columns, so the grid still holds. */
+			.dbl {
+				font-size: 2em;
+				line-height: 1.15;
+				font-weight: 600;
+			}
+			/* .money inside a tape changes nothing visually — the whole tape is already mono
+   and tabular. It is there because money is never set in the body face, anywhere. */
+			.tape .money {
+				text-align: inherit;
+			}
+
+			.tag {
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				font-weight: 500;
+				letter-spacing: 0.12em;
+				text-transform: uppercase;
+				color: var(--c-ink-3);
+			}
+			.eyebrow-warn {
+				color: var(--c-warn);
+			}
+
+			/* ── boundary table ───────────────────────────────────────────────────────── */
+			.tablewrap {
+				overflow-x: auto;
+				margin-top: 1.75rem;
+				background: var(--c-raise);
+				border: 1px solid var(--c-line);
+				border-radius: var(--radius-card);
+			}
+			table {
+				border-collapse: collapse;
+				width: 100%;
+				min-width: 560px;
+				font-size: 0.875rem;
+			}
+			th,
+			td {
+				text-align: left;
+				padding: 0.875rem 1rem;
+				vertical-align: top;
+				border-bottom: 1px solid var(--c-line-soft);
+			}
+			thead th {
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				letter-spacing: 0.1em;
+				text-transform: uppercase;
+				color: var(--c-ink-3);
+				font-weight: 500;
+				background: var(--c-raise-2);
+			}
+			tbody tr:last-child td {
+				border-bottom: 0;
+			}
+			tbody td {
+				color: var(--c-ink-2);
+			}
+			.col-what {
+				width: 20%;
+			}
+			.col-half {
+				width: 40%;
+			}
+			.cell-lead {
+				font-weight: 600;
+				color: var(--c-ink);
+			}
+			.glyphrun {
+				white-space: nowrap;
+			}
+			.cell-note {
+				display: block;
+				margin-top: 0.25rem;
+				font-size: 0.75rem;
+				color: var(--c-ink-3);
+			}
+			.total-demo {
+				font-size: 1.75rem;
+				display: block;
+				text-align: left;
+			}
+
+			/* ── open-decision callout ────────────────────────────────────────────────── */
+			.decisions {
+				margin-top: 1.75rem;
+				display: grid;
+				gap: 1rem;
+				grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+			}
+			.decision {
+				background: var(--c-raise);
+				border: 1px solid var(--c-line);
+				border-left: 3px solid var(--c-warn);
+				border-radius: 0 var(--radius-card) var(--radius-card) 0;
+				padding: 1rem 1.125rem;
+				display: flex;
+				flex-direction: column;
+				gap: 0.375rem;
+			}
+			.decision p {
+				margin: 0;
+				font-size: 0.8125rem;
+				line-height: 1.55;
+				color: var(--c-ink-2);
+			}
+
+			footer {
+				margin-top: 4.5rem;
+				padding-top: 1.375rem;
+				border-top: 1px solid var(--c-line-soft);
+				color: var(--c-ink-3);
+				font-size: 0.8125rem;
+				max-width: var(--container-measure);
+			}
+			@media (max-width: 640px) {
+				section {
+					margin-top: 3.25rem;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<nav class="samplebar">
+			<a href="index.html">← all samples</a><a href="01-foundations.html">Foundations</a
+			><a href="02-dashboard.html">Dashboard</a><a href="03-auth.html">Auth</a
+			><a href="04-pos-order.html">POS · Order</a><a href="05-pos-payment.html">POS · Payment</a
+			><a href="06-receipt.html" aria-current="page"><strong>Receipt</strong></a
+			><span class="spacer"></span
+			><button
+				class="btn"
+				onclick="
+					document.documentElement.dataset.theme =
+						document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'
+				"
+			>
+				Toggle theme
+			</button>
+		</nav>
+
+		<main class="wrap">
+			<header class="stack">
+				<p class="t-eyebrow">Sample 06 · thermal output · spec 11</p>
+				<h1 class="t-display">The receipt is not a screen</h1>
+				<p class="lede">
+					Every other sample is pixels, colour, theme states and touch targets. This one is 32 or 48
+					fixed characters burned into a roll of paper — no colour, no images, no layout engine, no
+					second chance. It is here to show where the design system stops.
+				</p>
+				<p class="sample-note">
+					<strong>What this is.</strong> Four real print jobs, previewed at their exact character
+					widths: a 32-column customer receipt, a 48-column kitchen ticket, the same receipt
+					reprinted as a <span class="mono">COPY</span>, and the
+					<span class="mono">VOID</span> ticket that a voided <span class="mono">SENT</span> item
+					sends to the kitchen. <strong>The rule it demonstrates is a boundary.</strong> None of the
+					screen tokens apply here (<span class="mono">design-system.md §8</span>). Paper is
+					<code>--c-raise</code>, ink is <code>--c-ink</code>, and that is the entire palette —
+					every other token on this page belongs to the chrome <em>around</em> the paper, never to
+					the paper itself.
+				</p>
+			</header>
+
+			<section>
+				<div class="stack-s">
+					<p class="t-eyebrow">Two widths, and you have to count them</p>
+					<h2 class="t-title">58 mm prints 32 characters. 80 mm prints 48.</h2>
+				</div>
+				<p class="t-body intro">
+					There is nothing in between and there is no reflow. A line one character too long wraps,
+					and a wrapped total is a phone call on a Friday night. So the layout is planned
+					<em>in characters</em>, previewed in <code>--font-mono</code> at the target width, and
+					carries a column ruler above it so the width is provable rather than asserted. Both tapes
+					below are generated from field widths, with every rule line asserted at full width — which
+					is why the paper is exactly as wide as the receipt is.
+				</p>
+
+				<div class="pair">
+					<figure class="receipt w32">
+						<figcaption>
+							<h3 class="t-section">Customer receipt · 58 mm · 32 columns</h3>
+							<div class="capline">
+								<span class="pill pill-paid"><span aria-hidden="true">●</span> PAID</span>
+								<span class="pill pill-offline"
+									><span aria-hidden="true">◆</span> OFFLINE · 3 UNSYNCED</span
+								>
+							</div>
+							<p class="note-under">
+								Printed at 19:42 with the POS offline. The invoice number is still
+								<span class="mono">POS1-000042</span> and still gap-free, because the sequence lives
+								on the device rather than the server (spec 6).
+								<strong>Subtotal → discount → taxable → tax</strong> is printed in that order
+								deliberately: the discount lands before the tax, and the paper proves it (invariant
+								7). Each line carries the price stored on <em>that</em> line, so a menu change
+								tomorrow cannot alter this receipt.
+							</p>
+						</figcaption>
+						<div class="ruler" aria-hidden="true">
+							<pre class="tape">
+         1         2         3  
+12345678901234567890123456789012</pre>
+						</div>
+						<p class="sr-only">
+							A ruler marking 32 character columns, followed by the customer receipt.
+						</p>
+						<!-- The discount prints as an ASCII hyphen, NOT U+2212, and carries no --c-danger.
+           Deliberate: CP437 has no minus sign and paper has no colour. See the boundary table. -->
+						<div class="paper">
+							<pre class="tape">        MAQAAYADDA HODAN
+   Makka Al-Mukarama Rd, Km4
+   Mogadishu  Tel 61 555 0142
+--------------------------------
+Date/Time      14 Sep 2026 19:42
+Business date        14 Sep 2026
+Invoice              POS1-000042
+Order #1042              Dine-in
+Table 4            Cashier Amina
+--------------------------------
+QTY ITEM                  AMOUNT
+--------------------------------
+  1 Bariis Iskukaris        <span class="money">7.50</span>
+    + Hilib ari             <span class="money">1.50</span>
+    - Aan basbaas lahayn
+  2 Suqaar Hilib Lo&#x27;       <span class="money">17.00</span>
+    @ 8.50 each
+  3 Sambuusa Hilib          <span class="money">6.00</span>
+    @ 2.00 each
+  2 Shaah Cadays            <span class="money">3.00</span>
+    @ 1.50 each
+  1 Casiir Cambe            <span class="money">3.00</span>
+--------------------------------
+Subtotal                   <span class="money">38.00</span>
+Discount (Regular)         <span class="money">-2.00</span>
+Taxable                    <span class="money">36.00</span>
+VAT 5% (exclusive)          <span class="money">1.80</span>
+================================
+TOTAL                     <span class="money">$37.80</span>
+================================
+CASH                       <span class="money">40.00</span>
+CHANGE                      <span class="money">2.20</span>
+--------------------------------
+    Mahadsanid!  Thank you!
+       All amounts in USD
+       matcami POS  POS1
+--------------------------------</pre>
+						</div>
+					</figure>
+
+					<figure class="receipt w48">
+						<figcaption>
+							<h3 class="t-section">Kitchen ticket · 80 mm · 48 columns</h3>
+							<div class="capline">
+								<span class="pill pill-sent"><span aria-hidden="true">▲</span> SENT</span>
+								<span class="tag">no prices, anywhere</span>
+							</div>
+							<p class="note-under">
+								The kitchen gets the order reference, the table, the waiter, the time, the items
+								with their modifiers, and the note — and nothing else (spec 11). Money on a kitchen
+								ticket is noise at best. The order line is ESC/POS double width and double height
+								(<span class="mono">GS ! 0x11</span>), so it spends 24 of the 48 columns instead of
+								48; the ruler still measures the base grid underneath it. Capitals throughout,
+								because this is read from two metres away, over a burner, by someone who is not
+								wearing their glasses.
+							</p>
+						</figcaption>
+						<div class="ruler" aria-hidden="true">
+							<pre class="tape">
+         1         2         3         4        
+123456789012345678901234567890123456789012345678</pre>
+						</div>
+						<p class="sr-only">
+							A ruler marking 48 character columns, followed by the kitchen ticket.
+						</p>
+						<div class="paper">
+							<pre class="tape">================================================
+<span class="dbl">       ORDER 1042</span>
+<span class="dbl">        TABLE  4</span>
+================================================
+WAITER  AMINA                  14 SEP 2026 19:31
+DINE-IN                            TERMINAL POS1
+================================================
+QTY  ITEM
+------------------------------------------------
+   1 BARIIS ISKUKARIS
+     + HILIB ARI
+     - AAN BASBAAS LAHAYN   (NO CHILLI)
+   2 SUQAAR HILIB LO&#x27;
+   3 SAMBUUSA HILIB
+   2 SHAAH CADAYS
+   1 CASIIR CAMBE
+------------------------------------------------
+** NOTE **
+BIRTHDAY TABLE. SEND THE SAMBUUSA FIRST,
+MAINS TEN MINUTES LATER.
+================================================
+             *** END OF TICKET ***
+================================================</pre>
+						</div>
+					</figure>
+				</div>
+			</section>
+
+			<section>
+				<div class="stack-s">
+					<p class="t-eyebrow">Reprints</p>
+					<h2 class="t-title">A reprint says COPY, and that is not a courtesy</h2>
+				</div>
+				<div class="split">
+					<div class="stack">
+						<p class="t-body">
+							Spec 11 requires the mark, and the reason is accounting rather than politeness: a
+							second piece of paper that looks identical to the first <em>is</em> a second receipt
+							for one sale. The reprint takes no new invoice number, records no payment, posts no
+							journal entry and does not kick the drawer. It is a print job the agent replays, not a
+							transaction (invariants 2 and 4).
+						</p>
+						<p class="t-body">
+							Which is why the banner sits at the top, in the widest mark the printer has, above the
+							restaurant name — a customer holding the paper at arm's length sees it before anything
+							else, and it cannot be torn off without taking the totals with it. The two timestamps
+							do the rest of the work: <span class="mono">Sold</span> and
+							<span class="mono">Reprinted</span> are separate lines, because collapsed into one the
+							copy would be indistinguishable from a sale made at 20:05.
+						</p>
+					</div>
+
+					<figure class="receipt w32">
+						<figcaption>
+							<h3 class="t-section">Reprint · 32 columns</h3>
+							<div class="capline">
+								<span class="pill pill-paid"><span aria-hidden="true">●</span> PAID</span>
+								<span class="tag">copy · no new sale</span>
+							</div>
+							<p class="note-under">
+								Abbreviated here to keep the sample short; a real reprint is the whole tape with
+								this banner on top, the same invoice number and the same business date.
+							</p>
+						</figcaption>
+						<div class="ruler" aria-hidden="true">
+							<pre class="tape">
+         1         2         3  
+12345678901234567890123456789012</pre>
+						</div>
+						<p class="sr-only">
+							A ruler marking 32 character columns, followed by the reprinted receipt.
+						</p>
+						<div class="paper">
+							<pre class="tape">********************************
+*             COPY             *
+********************************
+        MAQAAYADDA HODAN
+   Mogadishu  Tel 61 555 0142
+--------------------------------
+Invoice              POS1-000042
+Business date        14 Sep 2026
+Sold           14 Sep 2026 19:42
+Reprinted      14 Sep 2026 20:05
+Reprint by                 Amina
+--------------------------------
+9 items                    <span class="money">38.00</span>
+Discount (Regular)         <span class="money">-2.00</span>
+VAT 5% (exclusive)          <span class="money">1.80</span>
+================================
+TOTAL                     <span class="money">$37.80</span>
+================================
+CASH                       <span class="money">40.00</span>
+CHANGE                      <span class="money">2.20</span>
+--------------------------------
+  This is a COPY of a receipt
+  already issued. No new sale
+  has been recorded, and no
+  new invoice number taken.
+********************************</pre>
+						</div>
+					</figure>
+				</div>
+			</section>
+
+			<section>
+				<div class="stack-s">
+					<p class="t-eyebrow">The other exception ticket</p>
+					<h2 class="t-title">A voided SENT item prints a VOID ticket</h2>
+				</div>
+				<div class="split">
+					<div class="stack">
+						<p class="t-body">
+							Once an item is
+							<span class="mark mark-sent"><span class="glyph" aria-hidden="true">▲</span>SENT</span
+							>, removing it is a void, never a delete (spec 13). The kitchen already holds the
+							first ticket, and the only channel that reaches it is a second one. So the void is not
+							a screen event that quietly disappears a line — it is a piece of paper that has to
+							arrive at the pass before the food does.
+						</p>
+						<p class="t-body">
+							The ticket carries the reason code and the approver because both are mandatory and
+							both are already sitting in the audit row written inside the same transaction
+							(invariants 9 and 10). Deleting a
+							<span class="mark mark-new"><span class="glyph" aria-hidden="true">◇</span>NEW</span>
+							item prints nothing at all, needs no reason and needs no approval — nobody downstream
+							ever heard about it.
+						</p>
+					</div>
+
+					<figure class="receipt w48">
+						<figcaption>
+							<h3 class="t-section">Void ticket · 48 columns</h3>
+							<div class="capline">
+								<span class="pill pill-voided"><span aria-hidden="true">✕</span> VOIDED</span>
+								<span class="tag">owner PIN approved</span>
+							</div>
+						</figcaption>
+						<div class="ruler" aria-hidden="true">
+							<pre class="tape">
+         1         2         3         4        
+123456789012345678901234567890123456789012345678</pre>
+						</div>
+						<p class="sr-only">
+							A ruler marking 48 character columns, followed by the void ticket.
+						</p>
+						<div class="paper">
+							<pre class="tape">################################################
+<span class="dbl">      * * VOID * *</span>
+################################################
+ORDER 1042                               TABLE 4
+WAITER  AMINA                  14 SEP 2026 19:52
+------------------------------------------------
+REMOVE FROM ORDER 1042:
+   1 SUQAAR HILIB LO&#x27;
+------------------------------------------------
+REASON       KITCHEN ERROR
+APPROVED BY  OWNER PIN - FARHIYA
+################################################</pre>
+						</div>
+					</figure>
+				</div>
+			</section>
+
+			<section>
+				<div class="stack-s">
+					<p class="t-eyebrow">The boundary</p>
+					<h2 class="t-title">The same number, in two media</h2>
+				</div>
+				<p class="t-body intro">
+					This is the honest version of “none of the screen tokens apply”. Each row is one piece of
+					information the product has to render twice, and the paper column is always the poorer of
+					the two — which is what makes it the useful test of a rule.
+				</p>
+
+				<div class="tablewrap">
+					<table>
+						<caption class="sr-only">
+							How four pieces of information render on screen and on thermal paper.
+						</caption>
+						<thead>
+							<tr>
+								<th class="col-what" scope="col">What</th>
+								<th class="col-half" scope="col">On screen</th>
+								<th class="col-half" scope="col">On paper</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td class="cell-lead">The order total</td>
+								<td>
+									<span class="money money-total total-demo">$37.80</span>
+									<span class="cell-note mono"
+										>.money-total · --font-mono · tabular-nums · right-aligned</span
+									>
+								</td>
+								<td>
+									<span class="mono">TOTAL</span> at column 1,
+									<span class="mono">$37.80</span> right-aligned to column 32, fenced by two
+									<span class="mono">=</span> rules. Emphasis is double height, because there is
+									only ever one size.
+								</td>
+							</tr>
+							<tr>
+								<td class="cell-lead">A discount</td>
+								<td>
+									<span class="money money-neg">−2.00</span> — U+2212 <em>and</em>
+									<code>--c-danger</code>, per design-system.md §6. Never colour alone.
+								</td>
+								<td>
+									<span class="mono">-2.00</span> — an ASCII hyphen. CP437 has no U+2212, and the
+									printer has no colour at all, so the sign carries the entire meaning by itself.
+								</td>
+							</tr>
+							<tr>
+								<td class="cell-lead">Item status</td>
+								<td>
+									<span class="pill pill-sent"><span aria-hidden="true">▲</span> SENT</span>
+									<span class="pill pill-voided"><span aria-hidden="true">✕</span> VOIDED</span>
+									<span class="cell-note"
+										>glyph, plus colour, plus a strike-through for a void.</span
+									>
+								</td>
+								<td>
+									The word — or, for a void, an entire separate ticket.
+									<span class="mono glyphrun">◇ ▲ ✕ ● ◆</span> are a screen vocabulary; the
+									printer's code page cannot be relied on for any of them.
+								</td>
+							</tr>
+							<tr>
+								<td class="cell-lead">Everything else</td>
+								<td>
+									Twelve surface tokens across three theme states, a four-step touch scale, three
+									type families, elevation, focus rings.
+								</td>
+								<td>One ink. One paper. One monospaced face. A fixed grid of 32 or 48 columns.</td>
+							</tr>
+						</tbody>
+					</table>
+				</div>
+
+				<p class="t-body after">
+					<strong>The discount row is the one worth arguing about.</strong> On screen the rule is a
+					leading <span class="mono">−</span> <em>and</em> <code>--c-danger</code> — belt and
+					braces, because roughly one man in twelve has red-green colour vision deficiency and a
+					counter screen is read under glare. On paper, half of that rule is simply unavailable.
+					That is not the rule breaking; it is the reason the rule is written the way it is. A
+					design that had leaned on the red would have had nothing left to print.
+				</p>
+			</section>
+
+			<section>
+				<div class="stack-s">
+					<p class="t-eyebrow">Before this ships</p>
+					<h2 class="t-title">Two things on this paper are not decided</h2>
+				</div>
+				<p class="t-body intro">
+					Surfaced rather than quietly baked in, per the house rule. Both of them change the tape,
+					and one of them changes the chart of accounts.
+				</p>
+				<div class="decisions">
+					<div class="decision">
+						<p class="t-eyebrow eyebrow-warn">Spec 33 · decision 3 — open</p>
+						<h3 class="t-section">Legal receipt requirements</h3>
+						<p>
+							The sample prints <span class="mono">VAT 5% (exclusive)</span> and a
+							<span class="mono">Taxable</span> line, and carries <em>no</em> tax registration
+							number, no legally mandated wording and no fiscal signature — because nobody has
+							confirmed what is required locally. Working default: tax mode is a restaurant setting
+							read at calculation time, rounded once on the invoice total. Confirm with a local
+							accountant before the header block is treated as final.
+						</p>
+					</div>
+					<div class="decision">
+						<p class="t-eyebrow eyebrow-warn">Not in the spec at all — open</p>
+						<h3 class="t-section">A tip line, or a service charge</h3>
+						<p>
+							Neither appears above, and that is a choice rather than an oversight. A tip line needs
+							a liability account and a payout path; a service charge is revenue, and is taxed.
+							Either adds rows to the chart of accounts, so neither gets invented inside a receipt
+							mock-up. Proposed default: ship with neither, and treat a request for one as a new
+							decision.
+						</p>
+					</div>
+				</div>
+			</section>
+
+			<footer>
+				matcami · design sample 06. Every tape above is generated from field widths and asserted at
+				full width, so the rulers are measurements rather than illustrations. Paper
+				<code>--c-raise</code>, ink <code>--c-ink</code> — no other colour appears inside a receipt.
+			</footer>
+		</main>
+	</body>
+</html>

@@ -1,0 +1,1348 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>matcami · POS payment — tender, offline rules, owner approval</title>
+
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			rel="stylesheet"
+			href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+		/>
+
+		<link rel="stylesheet" href="tokens.css" />
+
+		<style>
+			/* ─────────────────────────────────────────────────────────────────────────────
+ * Layout only. Every colour below is a var(--c-*) from tokens.css — this file
+ * contains no raw colour value of any kind: no hex, no rgb(), no hsl(), no named
+ * colour. Sizes come from the token scale (--touch*, --radius-*, --container-*)
+ * or from the type-role classes.
+ *
+ * REBUILT 2026-09-14. The POS surface is now LIGHT and it FOLLOWS THE THEME
+ * (tokens.css §3). It used to be pinned dark in both themes. What the
+ * [data-surface="pos"] scope still buys is the till's ground/key relationship:
+ * a DEEPER ground than the dashboard, so the white key face reads as the raised,
+ * pressable thing. Toggle the theme in the bar above — the page moves, the device does not.
+ *
+ * THE CONSEQUENCE THAT DRIVES MOST OF THE CSS BELOW: a white key on that ground
+ * measures 1.22:1. Elevation alone cannot carry the edge of a control, and
+ * WCAG 1.4.11 wants 3:1 for it. So EVERY pressable surface on this screen —
+ * tender card, quick-cash key, keypad key, footer button — takes
+ * `border: 1px solid var(--c-control-line)` (4.73:1 on the POS ground).
+ * --c-line is 1.58:1 and is for DECORATIVE rules and non-interactive block
+ * edges only; a shadow-only key is pretty and non-compliant.
+ *
+ * Structure is borrowed from the light-mode commercial reference: information in
+ * DISCRETE BLOCKS rather than flat lists, keys with real presence, generous
+ * radius, soft elevation, a properly designed summary panel. Not borrowed, and
+ * deliberately absent: delivery, cloud-kitchen aggregation, reservations, dish
+ * photography (colour-coded category bands instead — no image column in the
+ * schema, no image payload in the offline menu snapshot) and the green accent
+ * (green already means SENT / PAID / OK here, so the accent stays teal).
+ *
+ * TOKEN GAPS FOUND WHILE DRAWING THIS SCREEN (noted, not silently invented):
+ *   · The app has --text-pos (17px, POS body read standing). The sample token
+ *     layer exposes type roles as classes and has no class for it, so .t-pos
+ *     below restates it. It is the one size here that is not in tokens.css.
+ *   · A keypad digit and a tender label have no type role of their own; the
+ *     closest are .t-title and .t-section. The numeric ones swap the family to
+ *     --font-mono, which is what makes a keypad scan as a keypad.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+			.sr-only {
+				position: absolute;
+				width: 1px;
+				height: 1px;
+				padding: 0;
+				margin: -1px;
+				overflow: hidden;
+				clip-path: inset(50%);
+				white-space: nowrap;
+				border: 0;
+			}
+
+			.stack {
+				display: flex;
+				flex-direction: column;
+				gap: 1rem;
+			}
+			section {
+				margin-top: 3.5rem;
+			}
+			.lede {
+				font-size: 1.0625rem;
+				color: var(--c-ink-2);
+				max-width: var(--container-measure);
+				margin: 0;
+				text-wrap: pretty;
+			}
+			.sec-head {
+				display: flex;
+				align-items: baseline;
+				justify-content: space-between;
+				gap: 1rem;
+				flex-wrap: wrap;
+			}
+
+			/* --text-pos, 17px. See the gap note above. */
+			.t-pos {
+				font-size: 1.0625rem;
+				line-height: 1.45;
+				margin: 0;
+			}
+
+			/* A code is not money. Invoice numbers, device ids and session numbers get the
+   mono face without borrowing .money's right-alignment or its meaning. */
+			.code {
+				font-family: var(--font-mono);
+				font-variant-numeric: tabular-nums;
+			}
+			/* .money is right-aligned because it lives in columns. Inside a sentence it must
+   not be, so prose money carries .inline alongside it. */
+			.money.inline {
+				text-align: left;
+			}
+
+			/* ── the device ─────────────────────────────────────────────────────────── */
+			/* position:relative is load-bearing, not decoration. .sr-only is position:absolute,
+   and without a positioned ancestor its containing block is the initial one — so it
+   escapes this scroll container and drags the PAGE into horizontal scroll at 400px
+   (measured: documentElement.scrollWidth 818 on a 400px viewport). Positioning the
+   scroller contains it. */
+			.screenwrap {
+				position: relative;
+				padding-bottom: 0.5rem;
+			}
+			.device {
+				min-width: 980px;
+				background: var(--c-bg);
+				color: var(--c-ink);
+				border: 1px solid var(--c-line);
+				border-radius: var(--radius-sheet);
+				overflow: hidden;
+				box-shadow: var(--c-shadow-floating);
+			}
+
+			/* ── permanent status bar ───────────────────────────────────────────────── */
+			.pos-status {
+				display: flex;
+				align-items: center;
+				gap: 0.75rem;
+				flex-wrap: nowrap;
+				padding: 0.625rem 1rem;
+				background: var(--c-raise);
+				border-bottom: 1px solid var(--c-line);
+				font-family: var(--font-mono);
+				font-size: 0.75rem;
+				color: var(--c-ink-2);
+			}
+			.pos-status > * {
+				white-space: nowrap;
+			}
+			.who {
+				display: inline-flex;
+				align-items: center;
+				gap: 0.5rem;
+				font-family: var(--font-sans);
+				font-size: 0.8125rem;
+				font-weight: 600;
+				color: var(--c-ink);
+			}
+			.avatar {
+				width: 1.75rem;
+				height: 1.75rem;
+				border-radius: 999px;
+				background: var(--c-accent-soft);
+				color: var(--c-accent);
+				display: inline-grid;
+				place-items: center;
+				font-size: 0.75rem;
+				font-weight: 700;
+			}
+			.vr {
+				width: 1px;
+				height: 1.25rem;
+				background: var(--c-line-soft);
+			}
+			.spacer {
+				margin-left: auto;
+			}
+			.chip {
+				display: inline-flex;
+				align-items: center;
+				gap: 0.4em;
+				padding: 0.25rem 0.5625rem;
+				border-radius: 999px;
+				font-weight: 500;
+				border: 1px solid var(--c-line);
+				background: var(--c-raise-2);
+				color: var(--c-ink-2);
+			}
+			/* table occupied = --accent + a filled ● (design-system §3) */
+			.chip-table {
+				color: var(--c-accent);
+				background: var(--c-accent-soft);
+				border-color: var(--c-accent-soft);
+			}
+			.meta {
+				color: var(--c-ink-3);
+			}
+
+			/* ── the block grid ─────────────────────────────────────────────────────── */
+			.pay-grid {
+				display: grid;
+				grid-template-columns: minmax(0, 1fr) 22rem;
+				gap: 0.875rem;
+				padding: 0.875rem 1rem 1rem;
+			}
+			.pay-col {
+				display: flex;
+				flex-direction: column;
+				gap: 0.875rem;
+				min-width: 0;
+			}
+
+			/* A block is not pressable, so --c-line is the correct edge for it. The keys
+   INSIDE it are pressable and take --c-control-line. That distinction is the
+   single biggest reason a light till either reads crisp or reads washed out. */
+			.block {
+				background: var(--c-raise);
+				border: 1px solid var(--c-line);
+				border-radius: var(--radius-card);
+				box-shadow: var(--c-shadow-flat);
+				overflow: hidden;
+			}
+			.block-head {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 1rem;
+				padding: 0.625rem 0.875rem;
+				background: var(--c-raise-2);
+				border-bottom: 1px solid var(--c-line-soft);
+			}
+			.block-title {
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				font-weight: 500;
+				letter-spacing: 0.14em;
+				text-transform: uppercase;
+				color: var(--c-ink-3);
+				margin: 0;
+			}
+			.block-body {
+				padding: 0.875rem;
+			}
+			.block-grow {
+				display: flex;
+				flex-direction: column;
+				flex: 1;
+			}
+			.block-grow .block-body {
+				flex: 1;
+				display: flex;
+				flex-direction: column;
+			}
+
+			/* ── amount due — the hero block ────────────────────────────────────────── */
+			.block-due .block-head {
+				background: var(--c-accent-soft);
+				border-bottom-color: var(--c-accent-soft);
+			}
+			.block-due .block-title {
+				color: var(--c-accent);
+			}
+
+			.lines {
+				list-style: none;
+				margin: 0;
+				padding: 0;
+			}
+			.line {
+				display: grid;
+				grid-template-columns: 0.25rem minmax(0, 1fr) auto 5.5rem;
+				gap: 0.75rem;
+				align-items: center;
+				padding: 0.4375rem 0;
+				border-bottom: 1px solid var(--c-line-soft);
+			}
+			.line:first-child {
+				padding-top: 0;
+			}
+			.line:last-child {
+				border-bottom: 0;
+				padding-bottom: 0;
+			}
+			/* Category bands are WAYFINDING, never status, and never the only carrier —
+   the category name is written on every line beside the band.
+   TOKEN GAP, noted not invented: tokens.css §3b declares --c-cat-* in the bare
+   :root only, and the values were measured against the WHITE key face (5.02–7.70).
+   On the dark device surface the same hues fall to roughly 2.1:1 against the key
+   face — still perceivable as a band, but under WCAG 1.4.11's 3:1. That is
+   tolerable ONLY because the band never carries meaning alone; if a band ever
+   becomes the sole signal, §3b needs a dark-mode set of values first. */
+			.band {
+				width: 0.25rem;
+				height: 2rem;
+				border-radius: 999px;
+			}
+			.band-grills {
+				background: var(--c-cat-grills);
+			}
+			.band-rice {
+				background: var(--c-cat-rice);
+			}
+			.band-sides {
+				background: var(--c-cat-sides);
+			}
+			.band-drinks {
+				background: var(--c-cat-drinks);
+			}
+			.line-name {
+				font-size: 0.9375rem;
+				font-weight: 500;
+				color: var(--c-ink);
+				line-height: 1.3;
+			}
+			.line-meta {
+				display: flex;
+				align-items: center;
+				gap: 0.4375rem;
+				font-size: 0.75rem;
+				color: var(--c-ink-2);
+			}
+			.line-qty {
+				font-family: var(--font-mono);
+				font-size: 0.8125rem;
+				color: var(--c-ink-2);
+			}
+
+			.breakdown {
+				margin: 0.75rem 0 0;
+				padding-top: 0.75rem;
+				border-top: 1px solid var(--c-line-soft);
+				display: grid;
+				grid-template-columns: minmax(0, 1fr) auto;
+				gap: 0.375rem 1.5rem;
+				align-items: baseline;
+			}
+			.breakdown dt {
+				font-size: 0.8125rem;
+				color: var(--c-ink-2);
+			}
+			.breakdown dd {
+				margin: 0;
+				font-size: 0.8125rem;
+				color: var(--c-ink-2);
+			}
+
+			.due-total {
+				display: flex;
+				align-items: flex-end;
+				justify-content: space-between;
+				gap: 1rem;
+				padding: 0.875rem;
+				background: var(--c-accent-soft);
+				border-top: 1px solid var(--c-line-soft);
+			}
+			.due-total h4 {
+				margin: 0 0 0.1875rem;
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				font-weight: 500;
+				letter-spacing: 0.14em;
+				text-transform: uppercase;
+				color: var(--c-accent);
+			}
+			.due-total .snap {
+				margin: 0;
+				font-size: 0.75rem;
+				color: var(--c-ink-2);
+				max-width: 34ch;
+				text-wrap: pretty;
+			}
+			.due-amount {
+				margin: 0;
+				color: var(--c-ink);
+			}
+			.due-total .due-amount {
+				font-size: 3rem;
+			}
+
+			/* ── tender ─────────────────────────────────────────────────────────────── */
+			.tenders {
+				display: grid;
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+				gap: 0.625rem;
+				flex: 1;
+			}
+			.tender {
+				font: inherit;
+				cursor: pointer;
+				text-align: left;
+				display: flex;
+				flex-direction: column;
+				justify-content: center;
+				gap: 0.625rem;
+				padding: 0.75rem 0.8125rem;
+				border: 1px solid var(--c-control-line);
+				border-radius: var(--radius-control);
+				background: var(--c-raise);
+				color: var(--c-ink);
+				box-shadow: var(--c-shadow-flat);
+				transition:
+					background 0.12s ease,
+					box-shadow 0.12s ease,
+					transform 0.06s ease;
+			}
+			.tender:hover:not(:disabled) {
+				background: var(--c-raise-2);
+			}
+			.tender:active:not(:disabled) {
+				transform: translateY(1px);
+			}
+			.tender-name {
+				font-size: 1.0625rem;
+				font-weight: 600;
+				line-height: 1.2;
+			}
+			/* Selected is carried by the ✓ AND the word, never by the fill alone. */
+			.tender.is-on {
+				background: var(--c-accent-soft);
+				border-color: var(--c-accent);
+				box-shadow: inset 0 0 0 2px var(--c-accent);
+			}
+			/* A disabled tender is RECESSED, not faded: it drops to the deeper ground, takes
+   a dashed edge and --ink-3 ink. Fading it the way tokens.css fades .btn (.55)
+   would push the label under 4.5:1 — and a control that has to EXPLAIN why it is
+   unavailable has to stay readable while it does. The dashed edge carries
+   "unavailable" without relying on hue. */
+			.tender:disabled {
+				cursor: not-allowed;
+				background: var(--c-bg-2);
+				border-style: dashed;
+				border-color: var(--c-line);
+				color: var(--c-ink-3);
+				box-shadow: none;
+			}
+			.tstate {
+				display: inline-flex;
+				align-items: center;
+				gap: 0.375rem;
+				align-self: flex-start;
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				font-weight: 500;
+				letter-spacing: 0.02em;
+				padding: 0.1875rem 0.4375rem;
+				border-radius: 999px;
+			}
+			.tstate-on {
+				color: var(--c-accent-ink);
+				background: var(--c-accent);
+			}
+			.tstate-off {
+				color: var(--c-st-offline);
+				background: var(--c-st-offline-bg);
+			}
+			.tnote {
+				margin: 0.75rem 0 0;
+				font-size: 0.8125rem;
+				color: var(--c-ink-2);
+				max-width: 72ch;
+				text-wrap: pretty;
+			}
+			.tnote strong {
+				color: var(--c-ink);
+				font-weight: 600;
+			}
+
+			/* ── quick cash ─────────────────────────────────────────────────────────── */
+			.quick {
+				display: grid;
+				grid-template-columns: repeat(4, minmax(0, 1fr));
+				gap: 0.5rem;
+			}
+			.qkey {
+				font: inherit;
+				cursor: pointer;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				gap: 0.1875rem;
+				padding: 0.5rem 0.25rem;
+				border: 1px solid var(--c-control-line);
+				border-radius: var(--radius-control);
+				background: var(--c-raise);
+				color: var(--c-ink);
+				box-shadow: var(--c-shadow-flat);
+				transition:
+					background 0.12s ease,
+					transform 0.06s ease;
+			}
+			.qkey:hover {
+				background: var(--c-raise-2);
+			}
+			.qkey:active {
+				transform: translateY(1px);
+			}
+			.qkey .cap {
+				font-family: var(--font-mono);
+				font-size: 0.625rem;
+				letter-spacing: 0.09em;
+				text-transform: uppercase;
+				color: var(--c-ink-2);
+			}
+			.qkey .money {
+				text-align: center;
+				font-size: 1rem;
+				font-weight: 600;
+			}
+			.qkey.is-on {
+				background: var(--c-accent-soft);
+				border-color: var(--c-accent);
+				box-shadow: inset 0 0 0 2px var(--c-accent);
+			}
+			.qkey.is-on .cap {
+				color: var(--c-accent);
+			}
+
+			/* ── keypad ─────────────────────────────────────────────────────────────── */
+			.readout {
+				display: flex;
+				align-items: baseline;
+				justify-content: space-between;
+				gap: 0.75rem;
+				width: 100%;
+			}
+			.readout .money {
+				font-size: 1.75rem;
+				font-weight: 600;
+				color: var(--c-ink);
+			}
+			.keypad {
+				display: grid;
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+				gap: 0.5rem;
+			}
+			.key {
+				font: inherit;
+				cursor: pointer;
+				font-family: var(--font-mono);
+				font-variant-numeric: tabular-nums;
+				font-size: 1.375rem;
+				font-weight: 500;
+				border: 1px solid var(--c-control-line);
+				border-radius: var(--radius-control);
+				background: var(--c-raise);
+				color: var(--c-ink);
+				box-shadow: var(--c-shadow-flat);
+				transition:
+					background 0.12s ease,
+					transform 0.06s ease;
+			}
+			.key:hover {
+				background: var(--c-raise-2);
+			}
+			.key:active {
+				transform: translateY(1px);
+			}
+			.key-fn {
+				font-family: var(--font-sans);
+				font-size: 0.9375rem;
+				font-weight: 500;
+				color: var(--c-ink-2);
+				background: var(--c-raise-2);
+			}
+			.key-fn:hover {
+				background: var(--c-bg-2);
+			}
+			.keyhint {
+				margin: 0.625rem 0 0;
+				font-size: 0.75rem;
+				color: var(--c-ink-2);
+				text-wrap: pretty;
+			}
+
+			/* ── change due ─────────────────────────────────────────────────────────── */
+			.change .block-body {
+				background: var(--c-raise-2);
+				display: flex;
+				align-items: flex-end;
+				justify-content: space-between;
+				gap: 1rem;
+			}
+			.change-amount {
+				margin: 0;
+				color: var(--c-ink);
+			}
+			.change .change-amount {
+				font-size: 2.25rem;
+			}
+			.change .from {
+				margin: 0;
+				font-size: 0.75rem;
+				color: var(--c-ink-2);
+			}
+
+			/* ── the one-touch closer ───────────────────────────────────────────────── */
+			.pay {
+				font: inherit;
+				cursor: pointer;
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 1rem;
+				width: 100%;
+				padding: 1rem 1.25rem;
+				text-align: left;
+				border: 1px solid var(--c-accent);
+				border-radius: var(--radius-card);
+				background: var(--c-accent);
+				color: var(--c-accent-ink);
+				box-shadow: var(--c-shadow-raised);
+				transition: transform 0.06s ease;
+			}
+			.pay:active {
+				transform: translateY(1px);
+			}
+			.pay .lbl {
+				font-family: var(--font-display);
+				font-size: 1.3125rem;
+				font-weight: 600;
+				line-height: 1.15;
+			}
+			.pay .sub {
+				display: block;
+				margin-top: 0.25rem;
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				font-weight: 400;
+				letter-spacing: 0.02em;
+			}
+			.pay .money {
+				font-size: 1.75rem;
+				font-weight: 600;
+			}
+
+			/* ── touch floors, raised ABOVE the floor ───────────────────────────────────
+ * tokens.css enforces the 56px floor with
+ * `[data-surface="pos"] button:not(.samplebar button)`, whose specificity is
+ * (0,2,2) — :not() contributes its most specific argument. A bare
+ * `.key{min-height:var(--touch-lg)}` is (0,1,0), loses, and silently collapses a
+ * 72px key back to 56 with nothing in the source to show it happened. That is a
+ * real bug this file shipped once; it was caught by MEASURING the rendered page,
+ * not by reading the CSS. Raising a key above the floor therefore has to out-rank
+ * that selector, which the [type="button"] attribute does at (0,3,1) — cheaper to
+ * read than !important, and it still loses to a later, more specific rule the way
+ * a cascade should. Measured in Chromium after this block: keys and tender cards
+ * 72, the closer 96, dialog actions 64, nothing pressable under 56. */
+			[data-surface='pos'] button[type='button'].tender,
+			[data-surface='pos'] button[type='button'].qkey,
+			[data-surface='pos'] button[type='button'].key {
+				min-height: var(--touch-lg);
+			}
+			[data-surface='pos'] button[type='button'].pay {
+				min-height: var(--touch-xl);
+			}
+			[data-surface='pos'] .dialog-actions .btn {
+				min-height: var(--touch);
+			}
+
+			/* ── permanent chrome footer ────────────────────────────────────────────── */
+			.pos-foot {
+				display: flex;
+				align-items: center;
+				gap: 0.875rem;
+				flex-wrap: wrap;
+				padding: 0.875rem 1rem;
+				background: var(--c-raise);
+				border-top: 1px solid var(--c-line);
+			}
+			.pos-foot .btn {
+				min-height: var(--touch-min);
+				padding-inline: 1.25rem;
+				font-size: 0.9375rem;
+				box-shadow: var(--c-shadow-flat);
+			}
+			/* opacity:1 deliberately overrides tokens' .btn:disabled fade, for the same
+   reason as the disabled tender: this control has to be read, not just seen. */
+			.pos-foot .btn:disabled {
+				opacity: 1;
+				cursor: not-allowed;
+				background: var(--c-bg-2);
+				border-style: dashed;
+				border-color: var(--c-line);
+				color: var(--c-ink-3);
+				box-shadow: none;
+			}
+			.blocked {
+				margin: 0;
+				display: flex;
+				align-items: center;
+				gap: 0.5rem;
+				max-width: 66ch;
+				text-wrap: pretty;
+				font-size: 0.8125rem;
+				color: var(--c-ink);
+				background: var(--c-st-offline-bg);
+				border-radius: var(--radius-control);
+				padding: 0.5rem 0.75rem;
+			}
+			.blocked strong {
+				font-weight: 600;
+			}
+
+			/* ── the approval dialog, as a second block on the same device ──────────── */
+			/* Drawn IN PLACE rather than over a blurred ghost, so both states of the screen
+   are legible in one static sample. In the app it is a true overlay: focus
+   trapped, Escape cancels, nothing behind it reachable. Modals exist for reason
+   codes, owner approval and errors — never for ordinary ordering. */
+			.stage {
+				border-top: 1px solid var(--c-line);
+				background: var(--c-bg-2);
+				padding: 1.25rem 1rem 1.5rem;
+			}
+			.stage-head {
+				max-width: var(--container-form);
+				margin: 0 auto 0.875rem;
+				display: flex;
+				align-items: baseline;
+				gap: 0.625rem;
+				flex-wrap: wrap;
+			}
+			.stage-head p {
+				margin: 0;
+				font-size: 0.75rem;
+				color: var(--c-ink-2);
+			}
+			.dialog {
+				margin: 0 auto;
+				max-width: var(--container-form);
+				background: var(--c-raise);
+				border: 1px solid var(--c-line);
+				border-radius: var(--radius-sheet);
+				box-shadow: var(--c-shadow-floating);
+				padding: 1.25rem 1.375rem 1.375rem;
+				display: flex;
+				flex-direction: column;
+				gap: 0.875rem;
+			}
+			.dialog-head {
+				display: flex;
+				align-items: flex-start;
+				justify-content: space-between;
+				gap: 1rem;
+			}
+			.appr-action {
+				background: var(--c-bg-2);
+				border: 1px solid var(--c-line-soft);
+				border-radius: var(--radius-control);
+				padding: 0.75rem 0.875rem;
+			}
+			.appr-action .t-caption {
+				margin-top: 0.25rem;
+			}
+			.dialog .field > select,
+			.dialog .field > input {
+				min-height: var(--touch-min);
+				font-size: 1.0625rem;
+			}
+			.dialog .field > input {
+				font-family: var(--font-mono);
+				letter-spacing: 0.35em;
+			}
+			.req {
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				letter-spacing: 0.08em;
+				text-transform: uppercase;
+				color: var(--c-st-voided);
+			}
+			.dialog-actions {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 0.625rem;
+				margin-top: 0.125rem;
+			}
+			.dialog-actions .btn {
+				font-size: 1.0625rem;
+				font-weight: 600;
+				box-shadow: var(--c-shadow-flat);
+			}
+			.audit {
+				border-top: 1px solid var(--c-line-soft);
+				padding-top: 0.875rem;
+			}
+			.audit-rec {
+				margin: 0.5rem 0 0.625rem;
+				display: grid;
+				grid-template-columns: auto minmax(0, 1fr);
+				gap: 0.25rem 0.875rem;
+				font-family: var(--font-mono);
+				font-size: 0.75rem;
+			}
+			.audit-rec dt {
+				color: var(--c-ink-3);
+				letter-spacing: 0.06em;
+				text-transform: uppercase;
+			}
+			.audit-rec dd {
+				margin: 0;
+				color: var(--c-ink);
+			}
+			.audit-rec dd.money {
+				text-align: left;
+			}
+
+			/* ── closing notes (page surface, not the device) ───────────────────────── */
+			.cols {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+				gap: 1rem;
+			}
+			.note-card {
+				padding: 1.125rem 1.25rem;
+				display: flex;
+				flex-direction: column;
+				gap: 0.5rem;
+			}
+			.note-card h3 {
+				margin: 0;
+			}
+			.note-card p {
+				margin: 0;
+				font-size: 0.875rem;
+				color: var(--c-ink-2);
+				text-wrap: pretty;
+			}
+			.note-card p .pill {
+				margin-right: 0.25rem;
+			}
+			.note-card .tag {
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				letter-spacing: 0.1em;
+				text-transform: uppercase;
+				color: var(--c-ink-3);
+			}
+			footer.page {
+				margin-top: 3.5rem;
+				padding-top: 1.25rem;
+				border-top: 1px solid var(--c-line-soft);
+				color: var(--c-ink-3);
+				font-size: 0.8125rem;
+			}
+		</style>
+	</head>
+
+	<body>
+		<nav class="samplebar">
+			<a href="index.html">← all samples</a><a href="01-foundations.html">Foundations</a
+			><a href="02-dashboard.html">Dashboard</a><a href="03-auth.html">Auth</a
+			><a href="04-pos-order.html">POS · Order</a
+			><strong><a href="05-pos-payment.html" aria-current="page">POS · Payment</a></strong
+			><a href="06-receipt.html">Receipt</a><span class="spacer"></span
+			><button
+				class="btn"
+				onclick="
+					document.documentElement.dataset.theme =
+						document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'
+				"
+			>
+				Toggle theme
+			</button>
+		</nav>
+
+		<div class="wrap">
+			<header class="stack">
+				<div class="t-eyebrow">Sample 05 · routes/(pos)/payment</div>
+				<h1 class="t-display">The tender step</h1>
+				<p class="lede">
+					Taking <span class="money inline">$27.50</span> for table 4 while the till is offline with
+					three operations queued — the one screen where every offline rule is visible at once.
+				</p>
+				<p class="sample-note">
+					<strong>What this demonstrates.</strong> Degraded state is permanent chrome, never a
+					toast: the unsynced count sits in the status bar and again in the footer, where it
+					disables session close <em>with a stated reason</em>. Card and mobile money disable
+					<em>before</em> the tap rather than failing after it. Every figure is a display string
+					formatted by the money module — the screen does no arithmetic and no rounding. The POS
+					surface is light and pinned in both themes; what makes it a device rather than page chrome
+					is the deeper ground, the density, and a drawn edge on every key.
+				</p>
+			</header>
+
+			<section class="stack">
+				<div class="sec-head">
+					<h2 class="t-title">Payment · order #A-1042</h2>
+					<p class="t-caption">Hooyo&rsquo;s Kitchen · POS1 · business day 12 Sep</p>
+				</div>
+
+				<!-- The device is wider than a phone, so it gets ONE horizontal scroller and the
+       page itself never scrolls sideways. data-surface="pos" is what re-points the
+       token NAMES at the till palette: same names, a deeper ground, in both themes. -->
+				<div class="screenwrap" style="overflow-x: auto">
+					<div class="device" data-surface="pos">
+						<!-- ── permanent status bar ───────────────────────────────────────────
+           spec 6: the unsynced count is on screen at ALL times, and it is chrome,
+           not a notification. A missed toast is indistinguishable from one that
+           never fired, and the queue is the only data that exists nowhere else. -->
+						<div class="pos-status">
+							<span class="who"
+								><span class="avatar" aria-hidden="true">A</span> Amina · Cashier</span
+							>
+							<span class="vr" aria-hidden="true"></span>
+							<span class="chip chip-table"
+								><span aria-hidden="true">●</span> Dine-in · Table 4<span class="sr-only">
+									(occupied)</span
+								></span
+							>
+							<span class="pill pill-offline"
+								><span aria-hidden="true">◆</span> Offline · 3 unsynced</span
+							>
+							<span class="spacer"></span>
+							<span class="meta">Business day 12 Sep</span>
+							<span class="vr" aria-hidden="true"></span>
+							<span class="meta">Session #41</span>
+							<span class="vr" aria-hidden="true"></span>
+							<span class="meta">POS1</span>
+						</div>
+
+						<div class="pay-grid">
+							<!-- ══ left column ═══════════════════════════════════════════════ -->
+							<div class="pay-col">
+								<!-- ── amount due ─────────────────────────────────────────────────
+               The hero block. Lines carry their category band for wayfinding and
+               their SENT mark for status; subtotal, discount and tax sit above the
+               total in --ink-2. Discount is applied BEFORE tax, and the tax is
+               charged on the discounted amount — 10% of $25.00, not of $26.50. -->
+								<div class="block block-due">
+									<div class="block-head">
+										<h3 class="block-title">Table 4 · Order #A-1042</h3>
+										<span class="mark mark-billed"
+											><span class="glyph" aria-hidden="true">◐</span> BILLED</span
+										>
+									</div>
+
+									<div class="block-body">
+										<ul class="lines">
+											<li class="line">
+												<span class="band band-grills" aria-hidden="true"></span>
+												<span>
+													<span class="line-name">Suqaar Hilib</span>
+													<span class="line-meta"
+														>Grills ·
+														<span class="mark mark-sent"
+															><span class="glyph" aria-hidden="true">▲</span> SENT</span
+														></span
+													>
+												</span>
+												<span class="line-qty">×1</span>
+												<span class="money">$9.50</span>
+											</li>
+											<li class="line">
+												<span class="band band-rice" aria-hidden="true"></span>
+												<span>
+													<span class="line-name">Bariis Iskukaris</span>
+													<span class="line-meta"
+														>Rice ·
+														<span class="mark mark-sent"
+															><span class="glyph" aria-hidden="true">▲</span> SENT</span
+														></span
+													>
+												</span>
+												<span class="line-qty">×1</span>
+												<span class="money">$8.00</span>
+											</li>
+											<li class="line">
+												<span class="band band-sides" aria-hidden="true"></span>
+												<span>
+													<span class="line-name">Sambuusa</span>
+													<span class="line-meta"
+														>Sides ·
+														<span class="mark mark-sent"
+															><span class="glyph" aria-hidden="true">▲</span> SENT</span
+														></span
+													>
+												</span>
+												<span class="line-qty">×3</span>
+												<span class="money">$4.50</span>
+											</li>
+											<li class="line">
+												<span class="band band-drinks" aria-hidden="true"></span>
+												<span>
+													<span class="line-name">Shaah Cadays</span>
+													<span class="line-meta"
+														>Drinks ·
+														<span class="mark mark-sent"
+															><span class="glyph" aria-hidden="true">▲</span> SENT</span
+														></span
+													>
+												</span>
+												<span class="line-qty">×2</span>
+												<span class="money">$4.50</span>
+											</li>
+										</ul>
+
+										<dl class="breakdown">
+											<dt>Subtotal · 4 lines</dt>
+											<dd class="money">$26.50</dd>
+											<dt>Discount · staff family rate</dt>
+											<dd class="money money-neg">−$1.50</dd>
+											<dt>Tax 10% · exclusive (restaurant setting)</dt>
+											<dd class="money">$2.50</dd>
+										</dl>
+									</div>
+
+									<div class="due-total">
+										<div>
+											<h4>Amount due</h4>
+											<p class="snap">
+												Each line stores the unit price and tax rate used at the time of sale. A
+												menu edit tonight cannot move this number.
+											</p>
+										</div>
+										<p class="money money-total due-amount">$27.50</p>
+									</div>
+								</div>
+
+								<!-- ── tender ───────────────────────────────────────────────────
+               HOUSE RULE, FAIL CLOSED (invariant 5 / spec 6): card and mobile
+               payments are NEVER auto-completed offline unless the provider or
+               terminal explicitly supports offline authorization. Neither does
+               here, so the tender disables BEFORE the tap, with the reason
+               written on the control — it must never accept the tap and fail
+               afterwards, which would leave the cashier holding a card and the
+               order in an undefined state. Failing closed means exactly: no
+               receipt, no invoice number, no Payment Clearing posting, and the
+               order stays BILLED. -->
+								<div class="block block-grow">
+									<div class="block-head">
+										<h3 class="block-title">Tender</h3>
+										<span class="mark mark-offline"
+											><span class="glyph" aria-hidden="true">◆</span> Cash only while offline</span
+										>
+									</div>
+									<div class="block-body">
+										<div class="tenders">
+											<button type="button" class="tender is-on" aria-pressed="true">
+												<span class="tender-name">Cash</span>
+												<span class="tstate tstate-on"
+													><span aria-hidden="true">✓</span> Selected</span
+												>
+											</button>
+
+											<button
+												type="button"
+												class="tender"
+												disabled
+												aria-describedby="why-offline"
+												aria-pressed="false"
+											>
+												<span class="tender-name">Card</span>
+												<span class="tstate tstate-off"
+													><span aria-hidden="true">◆</span> Unavailable offline</span
+												>
+											</button>
+
+											<button
+												type="button"
+												class="tender"
+												disabled
+												aria-describedby="why-offline"
+												aria-pressed="false"
+											>
+												<span class="tender-name">Mobile money</span>
+												<span class="tstate tstate-off"
+													><span aria-hidden="true">◆</span> Unavailable offline</span
+												>
+											</button>
+										</div>
+										<p class="tnote" id="why-offline">
+											<strong>Card and mobile money need a connection to authorize</strong>, and
+											neither provider offers offline authorization, so both disable before the tap
+											rather than failing after it. Cash completes now: it opens the drawer and
+											takes invoice <span class="code">POS1-000042</span> from this device&rsquo;s
+											own gap-free sequence — the same number online or offline.
+										</p>
+									</div>
+								</div>
+							</div>
+							<!-- /left column -->
+
+							<!-- ══ right column ══════════════════════════════════════════════ -->
+							<div class="pay-col">
+								<!-- ── quick cash: the two documented flavours — exact amount due and
+               next-highest notes — with the note actually handed over selected. -->
+								<div class="block">
+									<div class="block-head"><h3 class="block-title">Quick cash</h3></div>
+									<div class="block-body">
+										<div class="quick">
+											<button type="button" class="qkey" aria-pressed="false">
+												<span class="cap">Exact</span>
+												<span class="money">$27.50</span>
+											</button>
+											<button type="button" class="qkey is-on" aria-pressed="true">
+												<span class="cap"><span aria-hidden="true">✓</span> Tendered</span>
+												<span class="money">$30.00</span>
+											</button>
+											<button type="button" class="qkey" aria-pressed="false">
+												<span class="money">$40.00</span>
+											</button>
+											<button type="button" class="qkey" aria-pressed="false">
+												<span class="money">$50.00</span>
+											</button>
+										</div>
+									</div>
+								</div>
+
+								<!-- ── keypad ─────────────────────────────────────────────────── -->
+								<div class="block">
+									<div class="block-head">
+										<div class="readout">
+											<h3 class="block-title">Amount tendered</h3>
+											<span class="money">$30.00</span>
+										</div>
+									</div>
+									<div class="block-body">
+										<div class="keypad" role="group" aria-label="Numeric keypad">
+											<button type="button" class="key">7</button>
+											<button type="button" class="key">8</button>
+											<button type="button" class="key">9</button>
+											<button type="button" class="key">4</button>
+											<button type="button" class="key">5</button>
+											<button type="button" class="key">6</button>
+											<button type="button" class="key">1</button>
+											<button type="button" class="key">2</button>
+											<button type="button" class="key">3</button>
+											<button type="button" class="key">0</button>
+											<button type="button" class="key key-fn">
+												<span aria-hidden="true">⌫</span><span class="sr-only">Backspace</span>
+											</button>
+											<button type="button" class="key key-fn">Clear</button>
+										</div>
+										<p class="keyhint">
+											Keys enter cents: <span class="code">3000</span> is
+											<span class="money inline">$30.00</span>. Money is integer minor units all the
+											way down.
+										</p>
+									</div>
+								</div>
+
+								<!-- ── change due ───────────────────────────────────────────────
+               STATIC MOCKUP VALUE. Nothing on this screen is computed here: the
+               UI never does money arithmetic and never rounds. There is ONE
+               rounding rule in ONE function (src/lib/server/money), shared by the
+               POS, the server and the reports — a second rounding inside a
+               component is the bug that makes the receipt disagree with the
+               books. The screen receives integer cents and renders a string. -->
+								<div class="block change">
+									<div class="block-head"><h3 class="block-title">Change due</h3></div>
+									<div class="block-body">
+										<p class="from">From <span class="money inline">$30.00</span> tendered</p>
+										<p class="money money-total change-amount">$2.50</p>
+									</div>
+								</div>
+
+								<!-- The one-touch closer: --touch-xl, 96px. The tender step is the
+               highest-value real estate on a till; the target is one touch. -->
+								<button type="button" class="pay">
+									<span class="lbl"
+										>Pay · Cash
+										<span class="sub">Invoice POS1-000042</span>
+									</span>
+									<span class="money">$27.50</span>
+								</button>
+							</div>
+							<!-- /right column -->
+						</div>
+						<!-- /pay-grid -->
+
+						<!-- ── permanent chrome: the queue outranks the shift ───────────────
+           Unsynced work cannot be recreated from anywhere else, so logout and POS
+           session close stay blocked while the queue is non-empty — and the
+           disabled control SAYS WHY rather than sitting dead. -->
+						<footer class="pos-foot">
+							<button type="button" class="btn" disabled aria-describedby="why-close">
+								Close session
+							</button>
+							<p class="blocked" id="why-close">
+								<span aria-hidden="true">◆</span>
+								<span
+									><strong>Blocked: 3 operations unsynced.</strong> Closing a session needs a
+									connection — reconciliation runs on the server.</span
+								>
+							</p>
+							<span class="spacer"></span>
+							<button type="button" class="btn">Retry sync</button>
+						</footer>
+
+						<!-- ── second block: the exception path ────────────────────────────── -->
+						<div class="stage">
+							<div class="stage-head">
+								<span class="t-eyebrow">Exception path</span>
+								<p>
+									Drawn in place here so both states read in one sample; in the app it is a true
+									overlay with focus trapped.
+								</p>
+							</div>
+
+							<div class="dialog" role="group" aria-labelledby="appr-title">
+								<div class="dialog-head">
+									<div>
+										<h3 class="t-title" id="appr-title">Owner approval required</h3>
+										<p class="t-caption">Requested by Amina · Cashier · 12 Sep, 21:14</p>
+									</div>
+									<span class="pill pill-voided"><span aria-hidden="true">↩</span> REFUND</span>
+								</div>
+
+								<!-- A refund moves money OUT of the drawer, so it renders negative:
+               a leading U+2212 MINUS plus --danger, never colour alone. -->
+								<div class="appr-action">
+									<p class="t-pos">
+										Refund <span class="money money-neg inline">−$27.50</span> to Cash
+									</p>
+									<p class="t-caption">
+										Order #A-1039 · invoice <span class="code">POS1-000039</span> · back to the
+										original method. The food does not come back, and the posted invoice is never
+										edited — the refund writes NEW records.
+									</p>
+								</div>
+
+								<div class="field">
+									<label for="reason-code">Reason code <span class="req">required</span></label>
+									<select id="reason-code" name="reason-code">
+										<option value="" selected>Choose a reason…</option>
+										<option>Wrong item</option>
+										<option>Customer changed mind</option>
+										<option>Kitchen error</option>
+										<option>Other</option>
+									</select>
+									<p class="hint">
+										Mandatory on voids, refunds, discounts and comps. There is no setting that turns
+										it off.
+									</p>
+								</div>
+
+								<div class="field">
+									<label for="owner-pin">Owner PIN</label>
+									<input
+										id="owner-pin"
+										name="owner-pin"
+										type="password"
+										inputmode="numeric"
+										autocomplete="off"
+										minlength="4"
+										maxlength="6"
+										placeholder="••••"
+										aria-describedby="pin-hint"
+									/>
+									<p class="hint" id="pin-hint">
+										4–6 digits, stored only as a slow salted hash and never logged. Five wrong
+										attempts lock the employee out for five minutes and write an audit event.
+									</p>
+								</div>
+
+								<div class="dialog-actions">
+									<button type="button" class="btn">Cancel</button>
+									<button type="button" class="btn btn-primary">Approve refund</button>
+								</div>
+
+								<div class="audit">
+									<h4 class="t-eyebrow">Written in the same transaction</h4>
+									<dl class="audit-rec">
+										<dt>action</dt>
+										<dd>REFUND</dd>
+										<dt>employee</dt>
+										<dd>Amina · Cashier</dd>
+										<dt>approver</dt>
+										<dd>Owner · identified by PIN</dd>
+										<dt>reason</dt>
+										<dd>— not yet chosen</dd>
+										<dt>amount</dt>
+										<dd class="money money-neg">−$27.50</dd>
+									</dl>
+									<p class="hint">
+										One record holds the action, the acting employee, the approver and the reason
+										together — split across rows it proves nothing. The approver is only meaningful
+										while each person has their own PIN: a shared owner PIN is the normal way this
+										control quietly stops identifying anyone.
+									</p>
+								</div>
+							</div>
+						</div>
+					</div>
+					<!-- /device -->
+				</div>
+			</section>
+
+			<section class="stack">
+				<h2 class="t-title">What this screen is proving</h2>
+				<div class="cols">
+					<div class="card note-card">
+						<span class="tag">Invariant 5 · spec 6</span>
+						<h3 class="t-section">Fail closed, before the tap</h3>
+						<p>
+							A card tender that is accepted and then fails leaves a cashier holding a card and an
+							order in an undefined state. Disabling the control with a written reason costs one
+							label and removes the failure mode entirely.
+						</p>
+					</div>
+					<div class="card note-card">
+						<span class="tag">Invariant 5 · spec 6</span>
+						<h3 class="t-section">The queue outranks the shift</h3>
+						<p>
+							Unsynced sales are the only data on the device that exists nowhere else. Close session
+							and logout stay blocked until the queue drains, and the count is chrome in two places
+							— a missed toast is indistinguishable from one that never fired.
+						</p>
+					</div>
+					<div class="card note-card">
+						<span class="tag">Invariants 1 · 7 · spec 17</span>
+						<h3 class="t-section">The screen never does arithmetic</h3>
+						<p>
+							Every figure here is a display string from one formatter: integer cents in, a string
+							out. One rounding rule in one function, shared by POS, server and reports. Change due
+							included — it is mocked here and computed there.
+						</p>
+					</div>
+					<div class="card note-card">
+						<span class="tag">WCAG 1.4.11</span>
+						<h3 class="t-section">A white key needs a drawn edge</h3>
+						<p>
+							The till ground is deeper than the dashboard&rsquo;s so a white key reads as raised —
+							but that key measures only 1.22:1 against it. Elevation cannot carry a boundary that
+							needs 3:1, so every pressable surface takes a
+							<span class="code">--c-control-line</span> border at 4.73:1.
+						</p>
+					</div>
+					<div class="card note-card">
+						<span class="tag">WCAG 1.4.1 · invariant 9</span>
+						<h3 class="t-section">Colour never goes alone</h3>
+						<p>
+							<span class="pill pill-billed"><span aria-hidden="true">◐</span> BILLED</span>
+							<span class="pill pill-offline"><span aria-hidden="true">◆</span> OFFLINE</span>
+							<span class="pill pill-voided"><span aria-hidden="true">↩</span> REFUND</span>
+							<span class="money money-neg inline">−$27.50</span><br />
+							Each state carries a glyph and a word, the minus sign carries the negative as much as
+							the colour does, and the category bands never appear without the category written.
+							Roughly one man in twelve reads this screen without the hue, most of them under glare.
+						</p>
+					</div>
+				</div>
+			</section>
+
+			<footer class="page">
+				matcami design sample · the POS surface is light and pinned in both themes (changed
+				2026-09-14) — it stays a device through its deeper ground, its density and a drawn edge on
+				every key, not through a pinned palette. Sample data is fictional; every amount is a display
+				string, never a computed value.
+			</footer>
+		</div>
+	</body>
+</html>

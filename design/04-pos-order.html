@@ -1,0 +1,1221 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>matcami · POS Order</title>
+
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			rel="stylesheet"
+			href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+		/>
+
+		<link rel="stylesheet" href="tokens.css" />
+
+		<style>
+			/* ─────────────────────────────────────────────────────────────────────────────
+ * Layout only. Every colour in this file is a var(--c-*) from tokens.css —
+ * no hex, no rgb(), no hsl(), no named colour, not one. Radii, fonts, the touch
+ * scale and the elevation ladder are tokens too; raw lengths appear only as grid
+ * tracks, gaps and padding.
+ *
+ * REBUILT 2026-09-14 against the light POS surface. The device used to be pinned
+ * dark in both themes; tokens.css §3 now makes it light and theme-following, and
+ * the structure below follows a light-mode commercial reference: information in
+ * DISCRETE BLOCKS rather than flat lists, order type as a segmented control,
+ * menu keys with real presence, a properly designed check panel.
+ *
+ * What that reference has and this deliberately does NOT: delivery (CLAUDE.md
+ * "Do NOT build"), multi-brand aggregation (one restaurant, one branch), table
+ * reservation (tables exist to open orders against), dish photography (colour-coded
+ * category bands instead — no image column in the schema, no image payload in the
+ * offline menu snapshot), and the green accent (green already means SENT / PAID /
+ * OK here, so the accent stays teal and a Pay button never reads like a status).
+ *
+ * TOKEN GAPS FOUND WHILE DRAWING THIS SCREEN — noted, not silently invented:
+ *   · no .sr-only in tokens.css; every sample restates it.
+ *   · no .mono helper: the .money rules also right-align, and a glyph in a
+ *     sentence must not. Restated below without the alignment.
+ *   · no .mark-open and no .mark-refunded. Order OPEN is --c-ink-2 + ○ per
+ *     docs/design-system.md §3.
+ *   · no "needs owner approval" role. --c-warn is the closest fit and is what a
+ *     PIN gate means in practice: guarded, not destructive. Used for .pill-pin.
+ *   · no --c-cat-all, and there should not be one — "All" is not a category.
+ *     The All chip carries --c-ink-3, a neutral, so the band reads as "no band".
+ *   · the six --c-cat-* bands are declared in the bare :root ONLY and are never
+ *     re-tuned for dark. tokens.css §3b verifies them against the WHITE key face,
+ *     where they measure 6.13-7.70. Measured against the DARK key face (#252b33)
+ *     they fall to 1.85-2.33. Nothing here can fix that without inventing a colour,
+ *     so it is flagged, not patched: the band is reinforcement and the category
+ *     NAME is the carrier, and the boundary WCAG 1.4.11 actually governs is the
+ *     key's --c-control-line border, which measures 5.37 on that same dark face.
+ *     Six dark band values are a tokens.css change, and a decision to ask for.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+			/* ── page chrome (light/dark, themes; the device below does NOT) ──────────── */
+			.sr-only {
+				position: absolute;
+				width: 1px;
+				height: 1px;
+				padding: 0;
+				margin: -1px;
+				overflow: hidden;
+				clip-path: inset(50%);
+				white-space: nowrap;
+				border: 0;
+			}
+			.mono {
+				font-family: var(--font-mono);
+				font-variant-numeric: tabular-nums;
+			}
+			.lede {
+				color: var(--c-ink-2);
+			}
+			.head-stack {
+				display: flex;
+				flex-direction: column;
+				gap: 0.875rem;
+			}
+			.screenwrap {
+				padding-bottom: 0.5rem;
+				margin-top: 1.75rem;
+			}
+			.section-head {
+				margin-top: 2.75rem;
+				display: flex;
+				flex-direction: column;
+				gap: 0.5rem;
+			}
+			.mark-open {
+				color: var(--c-ink-2);
+			}
+
+			/* ── the device ──────────────────────────────────────────────────────────────
+ * A containing block for the .sr-only spans inside. Without it they resolve
+ * against the initial containing block, escape .screenwrap's overflow clip and
+ * scroll the whole document sideways at 400px — the one thing the responsive
+ * rule forbids. */
+			.pos {
+				min-width: 980px;
+				position: relative;
+				background: var(--c-bg);
+				color: var(--c-ink);
+				border: 1px solid var(--c-line);
+				border-radius: var(--radius-sheet);
+				box-shadow: var(--c-shadow-floating);
+				overflow: hidden;
+				font-family: var(--font-sans);
+			}
+
+			/* Status bar — permanent chrome, mono, small. */
+			.pos-status {
+				display: flex;
+				align-items: center;
+				gap: 1.25rem;
+				white-space: nowrap;
+				background: var(--c-bg-2);
+				border-bottom: 1px solid var(--c-line);
+				padding: 0.6875rem 1rem;
+				font-family: var(--font-mono);
+				font-size: 0.71875rem;
+				line-height: 1.4;
+				color: var(--c-ink-2);
+				font-variant-numeric: tabular-nums;
+			}
+			.pos-status .who {
+				color: var(--c-ink);
+				font-weight: 600;
+			}
+			.pos-status .v {
+				color: var(--c-ink);
+			}
+			.pos-status .k {
+				color: var(--c-ink-3);
+			}
+			.pos-status .spacer {
+				margin-left: auto;
+			}
+
+			/* ── two columns: order entry · the permanent guest check ────────────────── */
+			.pos-body {
+				display: grid;
+				grid-template-columns: minmax(0, 1fr) 24rem;
+				align-items: stretch;
+			}
+			.entry {
+				min-width: 0;
+				padding: 0.875rem;
+				display: flex;
+				flex-direction: column;
+				gap: 0.75rem;
+			}
+
+			/* THE BLOCK. The single thing worth taking from the reference: each concern is a
+   bounded region with its own label, not a run of controls floating on a ground.
+   Depth ladder, and it holds in BOTH themes — check the values in tokens.css §3
+   before changing one: ground (--c-bg) → block (--c-bg-2) → key face (--c-raise).
+   The block edge is --c-line, which is decorative and may be low-contrast; the
+   edge of anything PRESSABLE is --c-control-line. tokens.css says so outright. */
+			.block {
+				background: var(--c-bg-2);
+				border: 1px solid var(--c-line);
+				border-radius: var(--radius-card);
+			}
+			.block-head {
+				display: flex;
+				align-items: center;
+				gap: 0.875rem;
+				padding: 0.75rem 0.75rem 0.625rem;
+			}
+			.block-label {
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				font-weight: 500;
+				letter-spacing: 0.14em;
+				text-transform: uppercase;
+				color: var(--c-ink-3);
+				margin: 0;
+			}
+			.block-hint {
+				margin: 0 0 0 auto;
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				color: var(--c-ink-3);
+				font-variant-numeric: tabular-nums;
+			}
+			.block-menu {
+				flex: 1;
+				display: flex;
+				flex-direction: column;
+				min-height: 0;
+			}
+
+			/* ── order type: a segmented control, two options, no third ─────────────────
+ * The boundary rule is satisfied by the GROUP: the container carries the
+ * --c-control-line edge and the chosen segment is filled, which is how a
+ * segmented control is meant to read. The segments themselves take no border,
+ * so nothing shifts by a pixel when the choice moves. */
+			.seg {
+				display: inline-flex;
+				gap: 0.1875rem;
+				padding: 0.1875rem;
+				background: var(--c-raise);
+				border: 1px solid var(--c-control-line);
+				border-radius: var(--radius-control);
+				box-shadow: var(--c-shadow-flat);
+			}
+			.seg-btn {
+				border: 0;
+				cursor: pointer;
+				min-width: 8rem;
+				padding: 0 1.25rem;
+				border-radius: calc(var(--radius-control) - 0.125rem);
+				background: var(--c-raise);
+				color: var(--c-ink-2);
+				font: 500 0.9375rem/1.2 var(--font-sans);
+			}
+			/* WCAG 1.4.11: an unselected segment paints the same token as its container, so
+   without this it has a 1.00:1 boundary and is not an identifiable target. An INSET
+   ring rather than a border, so selecting one shifts nothing by a pixel. */
+			.seg-btn:not([aria-pressed='true']) {
+				box-shadow: inset 0 0 0 1px var(--c-control-line);
+			}
+			.seg-btn[aria-pressed='true'] {
+				background: var(--c-accent);
+				color: var(--c-accent-ink);
+				font-weight: 600;
+			}
+			.seg-btn:not([aria-pressed='true']):hover {
+				background: var(--c-raise-2);
+				color: var(--c-ink);
+			}
+
+			.tablebtn {
+				margin-left: auto;
+				display: inline-flex;
+				align-items: center;
+				gap: 0.5rem;
+				padding: 0 0.875rem;
+				cursor: pointer;
+				text-align: left;
+				background: var(--c-raise);
+				color: var(--c-ink);
+				border: 1px solid var(--c-control-line);
+				border-radius: var(--radius-control);
+				box-shadow: var(--c-shadow-flat);
+				font: 500 0.875rem/1.2 var(--font-sans);
+			}
+			.tablebtn .glyph {
+				font-family: var(--font-mono);
+				color: var(--c-accent);
+			}
+			.tablebtn .sub {
+				display: block;
+				font-family: var(--font-mono);
+				font-size: 0.625rem;
+				font-weight: 500;
+				letter-spacing: 0.1em;
+				text-transform: uppercase;
+				color: var(--c-ink-3);
+			}
+
+			/* ── category chips ──────────────────────────────────────────────────────────
+ * Each chip carries its category band on the left edge AND writes the category
+ * name. The band is wayfinding, never status, and never the only carrier. */
+			.cats {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 0.5rem;
+				padding: 0 0.75rem 0.75rem;
+			}
+			.cat {
+				--band: var(--c-ink-3);
+				display: inline-flex;
+				align-items: center;
+				padding: 0 0.875rem;
+				cursor: pointer;
+				background: var(--c-raise);
+				color: var(--c-ink-2);
+				border: 1px solid var(--c-control-line);
+				border-left: 4px solid var(--band);
+				border-radius: var(--radius-control);
+				box-shadow: var(--c-shadow-flat);
+				font: 500 0.875rem/1.2 var(--font-sans);
+			}
+			.cat:hover {
+				background: var(--c-raise-2);
+				color: var(--c-ink);
+			}
+			.cat[aria-current] {
+				background: var(--c-accent-soft);
+				color: var(--c-accent);
+				font-weight: 600;
+				border-color: var(--c-accent);
+				border-left-color: var(--band);
+			}
+			.cat-grills {
+				--band: var(--c-cat-grills);
+			}
+			.cat-rice {
+				--band: var(--c-cat-rice);
+			}
+			.cat-somali {
+				--band: var(--c-cat-somali);
+			}
+			.cat-drinks {
+				--band: var(--c-cat-drinks);
+			}
+			.cat-sides {
+				--band: var(--c-cat-sides);
+			}
+			.cat-sweets {
+				--band: var(--c-cat-sweets);
+			}
+
+			/* ── the menu key grid ───────────────────────────────────────────────────── */
+			.keys {
+				flex: 1;
+				display: grid;
+				gap: 0.625rem;
+				padding: 0 0.75rem 0.75rem;
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+				/* --touch-lg (72px) is a FLOOR, not a ceiling: the rows share whatever height
+     the check leaves, so the keys grow to meet it rather than stranding empty
+     ground under the grid. Three columns over four rows is what makes the two
+     halves of the device finish at the same line. */
+				grid-auto-rows: minmax(var(--touch-lg), 1fr);
+			}
+			.key {
+				--band: var(--c-ink-3);
+				display: flex;
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 0.25rem;
+				min-height: var(--touch-lg);
+				padding: 0.875rem 0.75rem 0.75rem;
+				cursor: pointer;
+				text-align: left;
+				font: inherit;
+				color: var(--c-ink);
+				background: var(--c-raise);
+				/* A white key on the POS ground measures 1.22:1 — and in dark the key face on
+     the dark ground measures 1.25:1, so this is not a light-mode quirk. Elevation
+     alone cannot carry an edge that WCAG 1.4.11 wants at 3:1, so every key takes
+     the control line: 4.73 on the light ground, 5.37 on the dark key face. A
+     shadow-only key is pretty and non-compliant. */
+				border: 1px solid var(--c-control-line);
+				border-radius: var(--radius-control);
+				/* The category band is an inset top edge: it follows the radius, and it leaves
+     the compliant border alone instead of replacing one side of it. */
+				box-shadow:
+					inset 0 4px 0 0 var(--band),
+					var(--c-shadow-flat);
+			}
+			.key:hover {
+				background: var(--c-raise-2);
+			}
+			.key-grills {
+				--band: var(--c-cat-grills);
+			}
+			.key-rice {
+				--band: var(--c-cat-rice);
+			}
+			.key-somali {
+				--band: var(--c-cat-somali);
+			}
+			.key-drinks {
+				--band: var(--c-cat-drinks);
+			}
+			.key-sides {
+				--band: var(--c-cat-sides);
+			}
+			.key-sweets {
+				--band: var(--c-cat-sweets);
+			}
+			.key-cat {
+				font-family: var(--font-mono);
+				font-size: 0.625rem;
+				font-weight: 500;
+				letter-spacing: 0.12em;
+				text-transform: uppercase;
+				color: var(--c-ink-3);
+			}
+			.key-name {
+				font-family: var(--font-display);
+				font-size: 1.0625rem;
+				font-weight: 600;
+				line-height: 1.18;
+				letter-spacing: -0.01em;
+			}
+			/* .money right-aligns, which is right in a COLUMN of figures and wrong inside a
+   tile. The alignment is the only thing overridden: mono, tabular-nums and the
+   formatter that produced the string all stay. */
+			.key-price {
+				margin-top: auto;
+				text-align: left;
+				font-size: 1.0625rem;
+				font-weight: 500;
+			}
+
+			/* THE TOUCH FLOORS, AND THE ONE CASCADE TRAP IN THIS FILE. tokens.css enforces the
+   56px floor with [data-surface="pos"] button:not(.samplebar button) — and :not()
+   takes the specificity of its argument, so that selector is (0,2,2). A plain
+   .closer { min-height: var(--touch-xl) } is (0,1,0) and LOSES: the 96px closers
+   silently rendered at 64. Measured, not guessed. These two rules are (0,3,0) and
+   win, which is why the floor is written here and not on the component. */
+			[data-surface='pos'] .closers .closer {
+				min-height: var(--touch-xl);
+			} /* 96px */
+			[data-surface='pos'] .keys .key {
+				min-height: var(--touch-lg);
+			} /* 72px */
+
+			/* ── guest check: the document, permanent, never unmounts ────────────────── */
+			.check {
+				background: var(--c-raise);
+				border-left: 1px solid var(--c-line);
+				display: flex;
+				flex-direction: column;
+				min-width: 0;
+			}
+			.check-head {
+				display: flex;
+				align-items: flex-start;
+				justify-content: space-between;
+				gap: 0.625rem;
+				padding: 0.75rem 1rem 0.625rem;
+				border-bottom: 1px solid var(--c-line-soft);
+			}
+			.check-id {
+				display: block;
+				margin-top: 0.1875rem;
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				color: var(--c-ink-3);
+			}
+
+			.lines {
+				flex: 1;
+				padding: 0.125rem 1rem 0.625rem;
+			}
+			table.check-lines {
+				width: 100%;
+				border-collapse: collapse;
+			}
+			.check-lines thead th {
+				padding: 0;
+				height: 0;
+				line-height: 0;
+				border: 0;
+			}
+			.check-lines tbody + tbody td {
+				border-top: 1px solid var(--c-line-soft);
+			}
+			.check-lines td {
+				padding: 0.5rem 0 0.5rem 0.5rem;
+				vertical-align: top;
+			}
+			.check-lines td:first-child {
+				padding-left: 0;
+			}
+			.check-lines tr.sub td {
+				padding-top: 0;
+				border-top: 0;
+			}
+			.c-st {
+				width: 5rem;
+			}
+			.c-qty {
+				width: 2.25rem;
+			}
+			.c-amt {
+				width: 4.25rem;
+				font-size: 0.875rem;
+			}
+			.c-name {
+				font-size: 0.875rem;
+				line-height: 1.35;
+				color: var(--c-ink);
+			}
+			.c-name.mod {
+				color: var(--c-ink-2);
+				padding-left: 1rem;
+			}
+			.qty {
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+				min-width: 1.875rem;
+				padding: 0.0625rem 0.25rem;
+				font-family: var(--font-mono);
+				font-size: 0.75rem;
+				font-variant-numeric: tabular-nums;
+				color: var(--c-ink-2);
+				background: var(--c-bg-2);
+				border: 1px solid var(--c-line);
+				border-radius: var(--radius-control);
+			}
+			.voided .c-name,
+			.voided .c-amt,
+			.voided .qty {
+				color: var(--c-ink-3);
+			}
+			/* The strike goes on <s> around the dish name, not on the cell: text-decoration
+   propagates into descendants and cannot be switched off there, which would have
+   struck the stored unit price and tax rate too. */
+			.voided .c-amt {
+				text-decoration: line-through;
+			}
+			.reason-code {
+				color: var(--c-st-voided);
+				font-size: 0.8125rem;
+			}
+			.voided .reason {
+				padding-left: 1rem;
+			}
+			.snap {
+				display: block;
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				line-height: 1.45;
+				color: var(--c-ink-3);
+				font-variant-numeric: tabular-nums;
+				text-decoration: none;
+			}
+
+			/* ── totals + actions: one recessed block inside the check ───────────────── */
+			.check-foot {
+				background: var(--c-bg-2);
+				border-top: 1px solid var(--c-line);
+			}
+			.totals {
+				margin: 0;
+				padding: 0.75rem 1rem 0.5rem;
+				display: flex;
+				flex-direction: column;
+				gap: 0.375rem;
+			}
+			.tot-row {
+				display: flex;
+				align-items: baseline;
+				justify-content: space-between;
+				gap: 0.75rem;
+				color: var(--c-ink);
+			}
+			/* No font-size here: .tot-row dd would be (0,1,1) and outrank .money-total's
+   (0,1,0), silently rendering the most important number on the screen at body size. */
+			.tot-row dd {
+				margin: 0;
+			}
+			.tot-row dt {
+				font-size: 0.8125rem;
+				color: var(--c-ink-2);
+			}
+			.tot-grand {
+				padding-top: 0.625rem;
+				margin-top: 0.1875rem;
+				border-top: 1px solid var(--c-line);
+			}
+			.tot-grand > dt {
+				font-family: var(--font-mono);
+				font-size: 0.75rem;
+				font-weight: 500;
+				letter-spacing: 0.14em;
+				text-transform: uppercase;
+				color: var(--c-ink);
+			}
+			.totals-note {
+				margin: 0.125rem 0 0;
+				padding: 0 1rem 0.625rem;
+			}
+
+			.actions {
+				padding: 0.125rem 1rem 0.875rem;
+				display: flex;
+				flex-direction: column;
+				gap: 0.625rem;
+			}
+			.closers {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 0.625rem;
+			}
+			.closer {
+				min-height: var(--touch-xl);
+				padding: 0 0.875rem;
+				cursor: pointer;
+				display: flex;
+				flex-direction: column;
+				align-items: flex-start;
+				justify-content: center;
+				gap: 0.25rem;
+				font: inherit;
+				color: var(--c-ink);
+				background: var(--c-raise);
+				border: 1px solid var(--c-control-line);
+				border-radius: var(--radius-control);
+				box-shadow: var(--c-shadow-flat);
+			}
+			.closer-label {
+				font-family: var(--font-display);
+				font-size: 1.0625rem;
+				font-weight: 600;
+				letter-spacing: -0.01em;
+			}
+			/* Teal, not green. Green is SENT / PAID / OK in this product; a green Pay key and
+   a green PAID badge must never read as the same kind of thing. */
+			.closer-pay {
+				background: var(--c-accent);
+				border-color: var(--c-accent);
+				color: var(--c-accent-ink);
+				box-shadow: var(--c-shadow-raised);
+			}
+			.closer-pay .closer-label {
+				font-size: 1.25rem;
+			}
+			.closer-amt {
+				text-align: left;
+				font-size: 1.5rem;
+				font-weight: 600;
+				line-height: 1.1;
+			}
+
+			/* Owner-PIN actions live behind a divider, under their own label, and clear of the
+   96px Pay key: fast to reach deliberately, hard to hit by accident. */
+			.fn-row {
+				display: grid;
+				grid-template-columns: 1fr 1px 1fr 1fr;
+				gap: 0.5rem;
+				grid-template-rows: auto auto;
+				align-items: stretch;
+				padding-top: 0.625rem;
+				border-top: 1px solid var(--c-line);
+			}
+			.fn-eyebrow {
+				grid-column: 3 / span 2;
+				grid-row: 1;
+				margin: 0 0 0.125rem;
+				align-self: end;
+				text-align: center;
+				font-family: var(--font-mono);
+				font-size: 0.625rem;
+				font-weight: 500;
+				letter-spacing: 0.12em;
+				text-transform: uppercase;
+				color: var(--c-warn);
+			}
+			.fn-divider {
+				grid-column: 2;
+				grid-row: 1 / span 2;
+				background: var(--c-line);
+			}
+			.fn-row .fnbtn:nth-of-type(1) {
+				grid-column: 1;
+			}
+			.fn-row .fnbtn:nth-of-type(2) {
+				grid-column: 3;
+			}
+			.fn-row .fnbtn:nth-of-type(3) {
+				grid-column: 4;
+			}
+			.fnbtn {
+				grid-row: 2;
+				min-height: var(--touch-min);
+				padding: 0.375rem 0.25rem;
+				cursor: pointer;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				gap: 0.25rem;
+				font: 500 0.8125rem/1.2 var(--font-sans);
+				color: var(--c-ink);
+				background: var(--c-raise);
+				border: 1px solid var(--c-control-line);
+				border-radius: var(--radius-control);
+				box-shadow: var(--c-shadow-flat);
+			}
+			.fnbtn:hover {
+				background: var(--c-raise-2);
+			}
+			.fnbtn-pin {
+				border-color: var(--c-warn);
+			}
+			.fnbtn-void {
+				color: var(--c-st-voided);
+				border-color: var(--c-st-voided);
+			}
+			.pill-pin {
+				font-size: 0.5625rem;
+				font-weight: 600;
+				letter-spacing: 0.1em;
+				padding: 0.0625rem 0.375rem;
+				color: var(--c-warn);
+				background: var(--c-warn-bg);
+			}
+
+			/* ── notes under the mockup (page chrome again) ──────────────────────────── */
+			.notes {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+				gap: 0.875rem;
+				margin-top: 1.25rem;
+			}
+			.note {
+				padding: 1rem 1.125rem;
+				display: flex;
+				flex-direction: column;
+				gap: 0.4375rem;
+			}
+			.note .tag {
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				letter-spacing: 0.09em;
+				text-transform: uppercase;
+				color: var(--c-ink-3);
+			}
+			.note p {
+				margin: 0;
+				font-size: 0.8125rem;
+				line-height: 1.5;
+				color: var(--c-ink-2);
+			}
+			/* .money is right-aligned for columns; inside a sentence it must not be. */
+			.money.inline {
+				text-align: left;
+			}
+		</style>
+	</head>
+	<body>
+		<nav class="samplebar">
+			<a href="index.html">← all samples</a><a href="01-foundations.html">Foundations</a
+			><a href="02-dashboard.html">Dashboard</a><a href="03-auth.html">Auth</a
+			><strong><a href="04-pos-order.html">POS · Order</a></strong
+			><a href="05-pos-payment.html">POS · Payment</a><a href="06-receipt.html">Receipt</a
+			><span class="spacer"></span
+			><button
+				class="btn"
+				onclick="
+					document.documentElement.dataset.theme =
+						document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'
+				"
+			>
+				Toggle theme
+			</button>
+		</nav>
+
+		<main class="wrap">
+			<div class="head-stack">
+				<p class="t-eyebrow">Sample 04 · routes/(pos)/order</p>
+				<h1 class="t-display">The order screen</h1>
+				<p class="t-body lede">
+					A dine-in check at table 4, mid-service, on a device that has been offline for a few
+					minutes. Four blocks: how the order is being taken, which part of the menu is showing, the
+					menu itself, and the guest check — which is permanent and never unmounts, because the
+					cashier must never navigate away to see what has been rung in.
+				</p>
+
+				<p class="sample-note">
+					<strong>The POS is light, and pinned that way in both themes.</strong> It used to stay
+					dark in both themes; <code>tokens.css</code> §3 reversed that. Press
+					<em>Toggle theme</em> — the device moves with the page. What
+					<code>data-surface="pos"</code> still changes is the ground/key relationship and the
+					density: a <em>deeper</em> ground than the dashboard, so the white key faces read as the
+					raised, pressable thing. One measured consequence rules the whole screen: a white key on
+					that ground is only <span class="mono">1.22:1</span>, so elevation alone cannot carry its
+					edge, and every key takes a <code>--c-control-line</code> border —
+					<span class="mono">4.73</span> on the ground, against WCAG 1.4.11's 3:1. It also shows the
+					full glyph vocabulary — <span class="mono">◇ NEW</span>, <span class="mono">▲ SENT</span>,
+					<span class="mono">✕ VOIDED</span>, <span class="mono">○ OPEN</span>,
+					<span class="mono">◆ offline</span> — because colour never carries meaning alone.
+				</p>
+			</div>
+
+			<!-- TOUCH FLOORS, per docs/design-system.md §5. Nothing inside the device is smaller:
+         56px  --touch-min   absolute floor — category chips, segments, Split / Discount / Void
+         64px  --touch       standard target
+         72px  --touch-lg    menu keys (a floor: they grow to fill the column)
+         96px  --touch-xl    Pay and Send to kitchen — the one-touch closers
+       tokens.css enforces the floor rather than trusting anyone to remember it:
+       [data-surface="pos"] button { min-height: var(--touch-min) }. Apple's 44pt and
+       Material's 48dp assume a seated user holding the device; the standing-kiosk
+       literature puts the target near 20mm and the accuracy floor near 9.2mm. Verify in
+       mm on real hardware. The .samplebar above is page chrome and is deliberately exempt. -->
+
+			<div class="screenwrap" style="overflow-x: auto">
+				<div class="pos" data-surface="pos">
+					<!-- STATUS BAR. The unsynced count is the one piece of UI the specification actually
+           mandates: spec §6, line 68 — "The number of unsynced operations is always visible
+           on screen." It is permanent chrome, never a toast; a toast that was missed is
+           indistinguishable from one that never fired. While the queue is non-empty, logout
+           and POS session close are BLOCKED, and the disabled control must say why rather
+           than sit dead. -->
+					<div class="pos-status">
+						<span class="who">Amina · Cashier</span>
+						<span
+							><span class="k">Session</span> <span class="v">12</span> ·
+							<span class="k">business date</span> <span class="v">2026-09-14</span></span
+						>
+						<span><span class="k">Device</span> <span class="v">POS1</span></span>
+						<span class="spacer"></span>
+						<span class="pill pill-offline"
+							><span aria-hidden="true">◆</span>Offline · 3 unsynced<span class="sr-only">
+								operations waiting to sync</span
+							></span
+						>
+					</div>
+
+					<div class="pos-body">
+						<section class="entry" aria-label="Order entry">
+							<h2 class="sr-only">Order entry</h2>
+
+							<!-- BLOCK 1 · ORDER TYPE. Two options, and there is no third: delivery is on the
+               do-not-build list, and a disabled third segment would still be a promise. The
+               table control sits beside it because dine-in is the branch that needs one. -->
+							<div class="block">
+								<div class="block-head">
+									<h3 class="block-label" id="ordertype-label">Order type</h3>
+									<div class="seg" role="group" aria-labelledby="ordertype-label">
+										<button class="seg-btn" type="button" aria-pressed="true">Dine-in</button>
+										<button class="seg-btn" type="button" aria-pressed="false">Takeaway</button>
+									</div>
+									<button class="tablebtn" type="button">
+										<span class="glyph" aria-hidden="true">●</span>
+										<span>Table 4<span class="sub">occupied · change</span></span>
+									</button>
+								</div>
+							</div>
+
+							<!-- BLOCK 2 · THE MENU. Categories are TABS, not drill-down-and-back. Oracle and NCR
+               both publish tabbed category templates, and the reason is operational: a
+               drill-down costs a tap per level — operators count taps, not seconds — and the
+               "back" view is what eventually pushes the permanent check off a narrow screen.
+               Tabs swap the grid only; the check never moves.
+
+               The keys themselves are GENERATED from the menu snapshot (spec §5). Hand-placing
+               buttons would be a second source of truth that drifts from the menu version — the
+               integer the POS compares against /api/menu/version before replacing its whole
+               local copy. -->
+							<div class="block block-menu">
+								<div class="block-head">
+									<h3 class="block-label">Menu</h3>
+									<p class="block-hint">snapshot v37 · 48 items · all categories</p>
+								</div>
+
+								<nav class="cats" aria-label="Menu categories">
+									<button class="cat" type="button" aria-current="true">All</button>
+									<button class="cat cat-grills" type="button">Grills</button>
+									<button class="cat cat-rice" type="button">Rice</button>
+									<button class="cat cat-somali" type="button">Somali</button>
+									<button class="cat cat-drinks" type="button">Drinks</button>
+									<button class="cat cat-sides" type="button">Sides</button>
+									<button class="cat cat-sweets" type="button">Sweets</button>
+								</nav>
+
+								<!-- Twelve keys, two per category, three across. The grid is GENERATED — a
+                 hand-placed button is a second source of truth that drifts from the menu
+                 version — so the geometry has to survive whatever the snapshot contains:
+                 uniform cells, a floor of --touch-lg, and rows that share the leftover
+                 height instead of a pixel layout hand-tuned to one terminal the way
+                 Aloha's is. Verify the finished target in mm on real hardware, not in px. -->
+								<div class="keys">
+									<button class="key key-grills" type="button">
+										<span class="key-cat">Grills</span>
+										<span class="key-name">Suqaar Hilib</span>
+										<span class="money key-price">$9.50</span>
+									</button>
+									<button class="key key-grills" type="button">
+										<span class="key-cat">Grills</span>
+										<span class="key-name">Hilib Ari</span>
+										<span class="money key-price">$12.00</span>
+									</button>
+									<button class="key key-rice" type="button">
+										<span class="key-cat">Rice</span>
+										<span class="key-name">Bariis Iskukaris</span>
+										<span class="money key-price">$6.50</span>
+									</button>
+									<button class="key key-rice" type="button">
+										<span class="key-cat">Rice</span>
+										<span class="key-name">Federation Rice</span>
+										<span class="money key-price">$10.50</span>
+									</button>
+									<button class="key key-somali" type="button">
+										<span class="key-cat">Somali</span>
+										<span class="key-name">Canjeero &amp; Suqaar</span>
+										<span class="money key-price">$8.00</span>
+									</button>
+									<button class="key key-somali" type="button">
+										<span class="key-cat">Somali</span>
+										<span class="key-name">Sambuusa ×3</span>
+										<span class="money key-price">$3.00</span>
+									</button>
+									<button class="key key-drinks" type="button">
+										<span class="key-cat">Drinks</span>
+										<span class="key-name">Shaah Cadays</span>
+										<span class="money key-price">$1.50</span>
+									</button>
+									<button class="key key-drinks" type="button">
+										<span class="key-cat">Drinks</span>
+										<span class="key-name">Casiir Mango</span>
+										<span class="money key-price">$3.50</span>
+									</button>
+									<button class="key key-sides" type="button">
+										<span class="key-cat">Sides</span>
+										<span class="key-name">Basbaas</span>
+										<span class="money key-price">$0.75</span>
+									</button>
+									<button class="key key-sides" type="button">
+										<span class="key-cat">Sides</span>
+										<span class="key-name">Sabaayad</span>
+										<span class="money key-price">$2.00</span>
+									</button>
+									<button class="key key-sweets" type="button">
+										<span class="key-cat">Sweets</span>
+										<span class="key-name">Malawax</span>
+										<span class="money key-price">$4.50</span>
+									</button>
+									<button class="key key-sweets" type="button">
+										<span class="key-cat">Sweets</span>
+										<span class="key-name">Buskud Xalwo</span>
+										<span class="money key-price">$2.50</span>
+									</button>
+								</div>
+							</div>
+						</section>
+
+						<!-- GUEST CHECK. Permanent: the blocks on the left swap around it, it never unmounts.
+             Modals are reserved for reason codes, owner approval and errors — never ordinary
+             ordering. It is the one white panel on the screen because it is the document. -->
+						<section class="check" aria-labelledby="check-h">
+							<div class="check-head">
+								<div>
+									<h2 class="t-section" id="check-h">
+										<span class="sr-only">Guest check — </span>Table 4 · Dine-in
+									</h2>
+									<span class="check-id">Order #1042 · opened 19:42 · Amina</span>
+								</div>
+								<span class="mark mark-open"
+									><span class="glyph" aria-hidden="true">○</span>OPEN</span
+								>
+							</div>
+
+							<div class="lines">
+								<table class="check-lines">
+									<caption class="sr-only">
+										Lines on order #1042
+									</caption>
+									<thead>
+										<tr>
+											<th scope="col"><span class="sr-only">Status</span></th>
+											<th scope="col"><span class="sr-only">Quantity</span></th>
+											<th scope="col"><span class="sr-only">Item</span></th>
+											<th scope="col"><span class="sr-only">Amount</span></th>
+										</tr>
+									</thead>
+
+									<tbody>
+										<tr>
+											<td class="c-st">
+												<span class="pill pill-sent"><span aria-hidden="true">▲</span>SENT</span>
+											</td>
+											<td class="c-qty"><span class="qty">1×</span></td>
+											<td class="c-name">
+												Baasto Suugo<span class="snap"
+													>@ <span class="money">$7.00</span> · tax 5%</span
+												>
+											</td>
+											<td class="c-amt money">$7.00</td>
+										</tr>
+										<!-- A MODIFIER changes the price AND the recipe, so it changes the stock
+                     deduction too: this line adds $1.50 to the check and 80 g of suqaar to
+                     what comes out of inventory when the order is paid. Roughly half of all
+                     drive-thru order errors in one 2025 study were a single missed modifier —
+                     here a mis-tap corrupts stock, not just the plate. -->
+										<tr class="sub">
+											<td></td>
+											<td></td>
+											<td class="c-name mod">
+												+ Extra suqaar<span class="snap">recipe +80 g suqaar</span>
+											</td>
+											<td class="c-amt money">$1.50</td>
+										</tr>
+									</tbody>
+
+									<tbody>
+										<tr>
+											<td class="c-st">
+												<span class="pill pill-sent"><span aria-hidden="true">▲</span>SENT</span>
+											</td>
+											<td class="c-qty"><span class="qty">2×</span></td>
+											<td class="c-name">
+												Bariis Iskukaris<span class="snap"
+													>@ <span class="money">$6.50</span> · tax 5%</span
+												>
+											</td>
+											<td class="c-amt money">$13.00</td>
+										</tr>
+									</tbody>
+
+									<tbody>
+										<tr>
+											<td class="c-st">
+												<span class="pill pill-new"><span aria-hidden="true">◇</span>NEW</span>
+											</td>
+											<td class="c-qty"><span class="qty">1×</span></td>
+											<td class="c-name">
+												Casiir Mango<span class="snap"
+													>@ <span class="money">$3.50</span> · tax 5%</span
+												>
+											</td>
+											<td class="c-amt money">$3.50</td>
+										</tr>
+									</tbody>
+
+									<!-- VOIDED, and never colour alone — the ✕, the strike, the reason code and the
+                   approver all carry it. An item already SENT cannot be deleted: removing it is
+                   a void, it needs owner-PIN approval, the reason code is mandatory, and the
+                   food is recorded as waste (spec §14, invariant 9). Simphony lets the reason
+                   code be switched off entirely; do not inherit that flexibility. -->
+									<tbody class="voided">
+										<tr>
+											<td class="c-st">
+												<span class="pill pill-voided"
+													><span aria-hidden="true">✕</span>VOIDED</span
+												>
+											</td>
+											<td class="c-qty"><span class="qty">1×</span></td>
+											<td class="c-name">
+												<s>Hilib Ari</s
+												><span class="snap">@ <span class="money">$12.00</span> · tax 5%</span>
+											</td>
+											<td class="c-amt money">$12.00</td>
+										</tr>
+										<tr class="sub">
+											<td></td>
+											<td></td>
+											<td class="c-name reason" colspan="2">
+												<span class="reason-code">86’d — out of stock</span>
+												<span class="snap">approved by Owner · 20:07 · recorded as waste</span>
+											</td>
+										</tr>
+									</tbody>
+								</table>
+							</div>
+
+							<footer class="check-foot">
+								<!-- TOTALS. Discount first, then tax the DISCOUNTED amount. The screen never
+                 computes and never rounds: one rounding rule in one function, shared by POS,
+                 server and reports — full precision per line, rounded once on the invoice
+                 total. 5% of $22.50 is $1.125, and this is the single place it becomes $1.13.
+                 Tax mode (inclusive vs exclusive) is a restaurant setting read at calculation
+                 time; spec §33 decision 3 is still open, so nothing here is hardcoded. -->
+								<h3 class="sr-only">Totals</h3>
+								<dl class="totals">
+									<div class="tot-row">
+										<dt>Subtotal</dt>
+										<dd class="money">$25.00</dd>
+									</div>
+									<div class="tot-row">
+										<dt>
+											Discount 10%<span class="snap">within the 10% limit · no approval</span>
+										</dt>
+										<dd class="money money-neg">−$2.50</dd>
+									</div>
+									<div class="tot-row">
+										<dt>
+											Tax 5%<span class="snap"
+												>exclusive · on <span class="money inline">$22.50</span> · rounded once,
+												here</span
+											>
+										</dt>
+										<dd class="money">$1.13</dd>
+									</div>
+									<div class="tot-row tot-grand">
+										<dt>Total</dt>
+										<dd class="money money-total">$23.63</dd>
+									</div>
+								</dl>
+								<p class="snap totals-note">
+									Each line stores the unit price and tax rate it was sold at — a later menu edit
+									cannot alter this sale.
+								</p>
+
+								<!-- ACTION RAIL. Two 96px closers, then the function row behind a divider. Owner-PIN
+                 actions are kept in their own labelled zone and clear of Pay: destructive work
+                 must be fast to reach deliberately and hard to hit by accident. The approval
+                 dialog captures action, acting employee, approver and reason code in ONE audit
+                 record — which only identifies anyone if nobody lends their PIN. -->
+								<div class="actions">
+									<h3 class="sr-only">Actions</h3>
+
+									<div class="closers">
+										<button class="closer" type="button">
+											<span class="closer-label">Send to kitchen</span>
+											<span class="mark mark-new"
+												><span class="glyph" aria-hidden="true">◇</span>1 new item</span
+											>
+										</button>
+
+										<button class="closer closer-pay" type="button">
+											<span class="closer-label">Pay</span>
+											<span class="money closer-amt">$23.63</span>
+										</button>
+									</div>
+
+									<div class="fn-row">
+										<p class="fn-eyebrow">Owner PIN required</p>
+										<button class="fnbtn" type="button">Split bill</button>
+										<span class="fn-divider" aria-hidden="true"></span>
+										<button class="fnbtn fnbtn-pin" type="button">
+											Discount <span class="pill pill-pin">PIN</span>
+											<span class="sr-only">— owner PIN required above the 10% limit</span>
+										</button>
+										<button class="fnbtn fnbtn-pin fnbtn-void" type="button">
+											<span><span aria-hidden="true">✕</span> Void</span>
+											<span class="pill pill-pin">PIN</span>
+											<span class="sr-only"
+												>— owner PIN required for an item already sent to the kitchen</span
+											>
+										</button>
+									</div>
+								</div>
+							</footer>
+						</section>
+					</div>
+				</div>
+			</div>
+
+			<div class="section-head">
+				<p class="t-eyebrow">Why it is built this way</p>
+				<h2 class="t-title">Seven rules this screen is proving</h2>
+			</div>
+
+			<div class="notes">
+				<article class="card note">
+					<span class="tag">tokens.css §3 · WCAG 1.4.11</span>
+					<h3 class="t-section">A device surface, still — just a light one</h3>
+					<p>
+						The scope survived the reversal because it was never about darkness: it is a deeper
+						ground and a tighter density, so a white key face reads as the raised thing. That costs
+						something measurable — white on this ground is <span class="mono">1.22:1</span> — so
+						every key carries a <span class="mono">--c-control-line</span> border at
+						<span class="mono">4.73</span>. Elevation is decoration; the border is the compliance.
+					</p>
+				</article>
+
+				<article class="card note">
+					<span class="tag">design-system §7</span>
+					<h3 class="t-section">The check never unmounts</h3>
+					<p>
+						Categories and the key grid swap <em>around</em> the guest check. Every vendor manual
+						states the same rule outright: the operator must never navigate away to see what has
+						been rung in. Modals are for reason codes, owner approval and errors only — never
+						ordinary ordering.
+					</p>
+				</article>
+
+				<article class="card note">
+					<span class="tag">WCAG 1.4.1 · 1 in 12 men</span>
+					<h3 class="t-section">Colour never alone</h3>
+					<p>
+						Aloha encodes void-versus-delete by item text colour alone. Here every state carries a
+						glyph and a word as well — <span class="mono">◇ NEW</span>,
+						<span class="mono">▲ SENT</span>, <span class="mono">✕ VOIDED</span> plus a
+						strike-through — so red–green colour vision deficiency and counter glare cost nothing.
+					</p>
+				</article>
+
+				<article class="card note">
+					<span class="tag">spec §5 · tokens.css §3b</span>
+					<h3 class="t-section">Bands, not photographs</h3>
+					<p>
+						The reference sells with dish photos. A photo is an image column in the schema, an image
+						payload in the offline menu snapshot and a cache to invalidate on every version bump.
+						Category bands buy the same wayfinding for nothing — and because colour is never the
+						only carrier, the category name is written on every key and every chip. Flagged, not
+						patched: the six band values exist in light only, and measure
+						<span class="mono">1.85–2.33</span> on the dark key face against
+						<span class="mono">6.13–7.70</span> on the white one. Six dark values are a
+						<code>tokens.css</code> change and a decision to ask for.
+					</p>
+				</article>
+
+				<article class="card note">
+					<span class="tag">spec §6</span>
+					<h3 class="t-section">Offline is chrome, not a toast</h3>
+					<p>
+						The unsynced count is the one piece of UI the specification mandates outright, and it
+						sits in the status bar permanently. A completed offline cash sale is a recorded fact,
+						not a request — so the number on screen is work the restaurant owns and has not yet
+						handed over.
+					</p>
+				</article>
+
+				<article class="card note">
+					<span class="tag">invariant 7 · spec §17</span>
+					<h3 class="t-section">Each line keeps its own numbers</h3>
+					<p>
+						Under every item is the unit price and the tax rate stored on that line. Discount
+						applies before tax; the screen displays and never calculates. One rounding rule in one
+						function means the check, the invoice and the trial balance cannot disagree —
+						<span class="money inline">$1.125</span> becomes
+						<span class="money inline">$1.13</span> exactly once.
+					</p>
+				</article>
+
+				<article class="card note">
+					<span class="tag">invariant 9 · spec §8, §14</span>
+					<h3 class="t-section">Approval is a place, not a colour</h3>
+					<p>
+						Discount above the limit and the void of a sent item are gated by owner PIN, so they sit
+						in their own labelled zone behind a divider — and both sit clear of the 96px Pay key.
+						The approval dialog then captures action, employee, approver and reason code in one
+						audit record.
+					</p>
+				</article>
+			</div>
+		</main>
+	</body>
+</html>

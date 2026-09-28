@@ -1,0 +1,1150 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>matcami · Auth</title>
+
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			rel="stylesheet"
+			href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+		/>
+
+		<link rel="stylesheet" href="tokens.css" />
+
+		<style>
+			/* ─────────────────────────────────────────────────────────────────────────────
+ * REBUILT 2026-09-14 as SPLIT PAGES. Both doors were one card each on an empty
+ * ground; each is now a two-panel page — the form on one side, and on the other a
+ * single accent panel that says what the form is a door into.
+ *
+ * Layout only. Every colour in this file is a var(--c-*) from tokens.css — no hex,
+ * no rgb(), no hsl(), no named colour, not one. Radii, fonts and the elevation
+ * ladder are tokens too; raw lengths appear only as grid tracks, gaps and padding.
+ *
+ * THESE ARE DASHBOARD-SURFACE PAGES. They follow the theme — press Toggle theme and
+ * both splits move. The POS surface scope from tokens.css §3 appears nowhere in this
+ * file: that scope is the till, it is pinned light, and an auth page is not a device.
+ *
+ * TOKEN GAPS FOUND WHILE DRAWING THIS SCREEN — noted, not silently invented:
+ *   · no .sr-only in tokens.css; every sample restates it.
+ *   · NO SECONDARY INK FOR THE ACCENT GROUND. The only pair tokens.css guarantees
+ *     against --c-accent is --c-accent-ink, at 6.13:1. --c-ink-2 and --c-ink-3 are
+ *     page-ground roles and are NOT legible there, so the brand panel builds its
+ *     hierarchy out of size, weight and tracking instead of a faded colour. The one
+ *     place opacity appears is .brand-rule, a decorative divider carrying no text.
+ *   · .t-eyebrow is hardcoded to --c-accent and .t-caption to --c-ink-2 — both
+ *     invisible-to-illegible on the accent ground. The brand panel restates them
+ *     rather than overriding a shared class with a second colour.
+ *   · no "paper" token for the check slip. It uses --c-raise, so in dark it is a
+ *     dark slip on a bright teal ground rather than a white one on a deep one. That
+ *     is coherent (--c-ink on --c-raise is audited in both themes) but it is not the
+ *     same picture. Pinning a paper colour is a tokens.css decision, so it is
+ *     flagged here, not patched in a sample.
+ *   · --c-line is decorative (1.58 on raise) and is used only for slip rules and
+ *     panel edges; every control edge is --c-control-line, per tokens.css.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+			/* ── page chrome ─────────────────────────────────────────────────────────── */
+			.wrap-head {
+				padding-block: 40px 30px;
+			}
+			.wrap-tail {
+				padding-block: 44px 72px;
+			}
+			header.page {
+				display: flex;
+				flex-direction: column;
+				gap: 14px;
+			}
+			.lede {
+				font-size: 1.0625rem;
+				line-height: 1.55;
+				color: var(--c-ink-2);
+				max-width: 62ch;
+				margin: 0;
+			}
+			.note-top {
+				margin-top: 22px;
+			}
+			.samplebar strong {
+				font-size: 0.8125rem;
+				font-weight: 600;
+				color: var(--c-ink);
+			}
+
+			.sr-only {
+				position: absolute;
+				width: 1px;
+				height: 1px;
+				padding: 0;
+				margin: -1px;
+				overflow: hidden;
+				clip-path: inset(50%);
+				white-space: nowrap;
+				border: 0;
+			}
+
+			/* The specimen label above each split. Sample chrome, on the page ground, aligned
+   with the header column — so it never reads as part of the page being shown. */
+			.specbar {
+				max-width: var(--container-page);
+				margin-inline: auto;
+				padding: 30px 20px 16px;
+				display: flex;
+				flex-direction: column;
+				gap: 5px;
+			}
+			.specbar .t-caption {
+				max-width: 76ch;
+			}
+
+			.divider-band {
+				max-width: var(--container-page);
+				margin-inline: auto;
+				padding-inline: 20px;
+			}
+			.sec-divider {
+				border: 0;
+				height: 1px;
+				background: var(--c-line);
+				margin-block: 46px;
+			}
+
+			/* ── THE SPLIT ───────────────────────────────────────────────────────────────
+ * Roughly 5:4 — the form gets the larger half because it is the half with work in
+ * it. Below 54rem (864px) it is ONE column and the brand panel moves ABOVE the
+ * form: it is the smaller, and a form must never be pushed off the first screen.
+ *
+ * The move is `order`, not source order, so the DOM keeps the form first and the
+ * FIRST TAB STOP AFTER THE PAGE CHROME IS THE EMAIL FIELD at every width. A
+ * keyboard user never tabs through the marketing to reach the door. */
+			.split-section {
+				scroll-margin-top: 4rem;
+			}
+			.split {
+				display: grid;
+				grid-template-columns: 1fr;
+				border-top: 1px solid var(--c-line);
+				border-bottom: 1px solid var(--c-line);
+			}
+			.panel {
+				min-width: 0;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+			}
+
+			.panel-form {
+				background: var(--c-raise);
+				padding: clamp(30px, 5vw, 64px) clamp(20px, 4vw, 56px);
+			}
+			.panel-inner {
+				width: 100%;
+				max-width: var(--container-form);
+				min-width: 0;
+				display: flex;
+				flex-direction: column;
+				gap: 22px;
+			}
+
+			.panel-brand {
+				background: var(--c-accent);
+				color: var(--c-accent-ink);
+				order: -1; /* stacked: the brand half sits ON TOP of the form */
+				padding: clamp(30px, 5vw, 56px) clamp(20px, 4vw, 48px);
+			}
+			@media (min-width: 54rem) {
+				.split {
+					grid-template-columns: 5fr 4fr;
+					min-height: 38rem;
+				}
+				.panel-brand {
+					order: 0;
+				} /* side by side: form left, brand right */
+				/* The registration form is seven fields long and its half is therefore far taller
+     than the brand half's content. Sticky rather than stranded: the slip tracks the
+     scroll instead of sitting marooned in the middle of an empty accent field. It
+     moves nothing on the narrow layout, where the panel is only as tall as itself. */
+				.brand-inner {
+					position: sticky;
+					top: 4.5rem;
+				}
+			}
+			.brand-inner {
+				width: 100%;
+				max-width: 26rem;
+				min-width: 0;
+				display: flex;
+				flex-direction: column;
+				gap: 20px;
+			}
+
+			/* ── the form half ───────────────────────────────────────────────────────── */
+			.wordmark {
+				font-family: var(--font-display);
+				font-weight: 700;
+				font-size: 1.0625rem;
+				letter-spacing: -0.012em;
+				color: var(--c-ink);
+				margin: 0 0 2px;
+			}
+			.wordmark-dot {
+				color: var(--c-accent);
+			}
+			.formhead {
+				display: flex;
+				flex-direction: column;
+				gap: 4px;
+			}
+
+			.form {
+				display: flex;
+				flex-direction: column;
+				gap: 18px;
+				min-width: 0;
+			}
+			.field {
+				min-width: 0;
+			}
+			.field > input,
+			.field > select {
+				width: 100%;
+			}
+			.field > input:hover,
+			.field > select:hover {
+				border-color: var(--c-ink-2);
+			}
+			.hint {
+				margin: 0;
+			}
+			.mono-input {
+				font-family: var(--font-mono);
+				letter-spacing: 0.03em;
+			}
+			::placeholder {
+				color: var(--c-ink-3);
+				opacity: 1;
+			}
+
+			/* Browsers repaint an autofilled field with a UA colour the token layer cannot
+   reach; these lines put it back on the theme without naming a colour. */
+			input:-webkit-autofill,
+			input:-webkit-autofill:hover,
+			input:-webkit-autofill:focus {
+				-webkit-text-fill-color: var(--c-ink);
+				box-shadow: inset 0 0 0 100px var(--c-raise);
+				caret-color: var(--c-ink);
+			}
+
+			.group {
+				border: 0;
+				margin: 0;
+				padding: 0;
+				min-width: 0;
+			}
+			.grouplegend {
+				padding: 0;
+				margin-bottom: 14px;
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				font-weight: 500;
+				letter-spacing: 0.13em;
+				text-transform: uppercase;
+				color: var(--c-ink-3);
+			}
+			.fields {
+				display: flex;
+				flex-direction: column;
+				gap: 18px;
+			}
+
+			.submit {
+				display: flex;
+				flex-direction: column;
+				gap: 8px;
+			}
+			.btn-block {
+				width: 100%;
+				padding-block: 0.8125rem;
+				font-weight: 600;
+			}
+
+			/* The alternate door. Written label carries it; the arrow is decoration. */
+			.alt {
+				margin: 0;
+				display: flex;
+				flex-wrap: wrap;
+				align-items: center;
+				gap: 0.4rem;
+				font-size: 0.875rem;
+				color: var(--c-ink-2);
+			}
+			.alt a {
+				display: inline-flex;
+				align-items: center;
+				gap: 0.4rem;
+				color: var(--c-accent);
+				font-weight: 500;
+				text-decoration: none;
+			}
+			.alt a:hover {
+				text-decoration: underline;
+			}
+			.alt svg {
+				width: 1em;
+				height: 1em;
+				flex: none;
+			}
+
+			/* The failure — danger ground, danger ink, FLAT rung, and a glyph so the state
+   survives greyscale and red-green CVD (design-system §1.2, WCAG 1.4.1). */
+			.alert {
+				display: grid;
+				grid-template-columns: auto 1fr;
+				gap: 10px;
+				align-items: start;
+				background: var(--c-danger-bg);
+				border-left: 3px solid var(--c-danger);
+				border-radius: 0 var(--radius-control) var(--radius-control) 0;
+				padding: 12px 14px;
+				box-shadow: var(--c-shadow-flat);
+			}
+			.alert-glyph {
+				font-family: var(--font-mono);
+				font-size: 0.875rem;
+				line-height: 1.5;
+				color: var(--c-danger);
+			}
+			.alert-body {
+				display: flex;
+				flex-direction: column;
+				gap: 3px;
+				min-width: 0;
+			}
+			.alert-msg {
+				margin: 0;
+				font-size: 0.875rem;
+				font-weight: 600;
+				color: var(--c-danger);
+			}
+			.alert-sub {
+				margin: 0;
+				font-size: 0.8125rem;
+				color: var(--c-danger);
+			}
+			.num {
+				font-family: var(--font-mono);
+				font-variant-numeric: tabular-nums;
+			}
+
+			/* The first-run note — accent-soft ground, FLAT rung, inside the form half. */
+			.notepanel {
+				display: flex;
+				flex-direction: column;
+				gap: 8px;
+				background: var(--c-accent-soft);
+				border-left: 3px solid var(--c-accent);
+				border-radius: 0 var(--radius-control) var(--radius-control) 0;
+				padding: 15px 17px;
+				box-shadow: var(--c-shadow-flat);
+			}
+			.notepanel p {
+				margin: 0;
+			}
+			/* The panel eyebrow. .t-eyebrow already carries --c-accent, but 5.11:1 on
+   --c-accent-soft is a pairing worth stating where it is used. */
+			.note-eyebrow {
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				font-weight: 500;
+				letter-spacing: 0.16em;
+				text-transform: uppercase;
+				color: var(--c-accent);
+			}
+			.notepanel-body {
+				font-size: 0.875rem;
+				line-height: 1.55;
+				color: var(--c-ink);
+			}
+
+			code {
+				font-family: var(--font-mono);
+				font-size: 0.9em;
+				background: var(--c-raise-2);
+				border: 1px solid var(--c-line-soft);
+				border-radius: var(--radius-control);
+				padding: 0.06em 0.38em;
+			}
+			.path {
+				font-family: var(--font-mono);
+				font-size: 0.9em;
+				white-space: nowrap;
+			}
+
+			/* ── the brand half ──────────────────────────────────────────────────────────
+ * Type, tokens and CSS only: no photograph, no <img>, no gradient, no blur, no
+ * decorative icon. One accent ground, one floating slip, and hierarchy made of
+ * size and tracking — because --c-accent-ink is the ONLY ink this ground has. */
+			.brand-eyebrow {
+				margin: 0;
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				font-weight: 500;
+				letter-spacing: 0.16em;
+				text-transform: uppercase;
+			}
+			.brand-line {
+				margin: 0;
+				font-family: var(--font-display);
+				font-weight: 600;
+				font-size: clamp(1.375rem, 1.05rem + 1.5vw, 2rem);
+				line-height: 1.14;
+				letter-spacing: -0.018em;
+				text-wrap: balance;
+			}
+			.brand-rule {
+				border: 0;
+				height: 1px;
+				margin: 2px 0;
+				background: var(--c-accent-ink);
+				opacity: 0.3;
+			}
+
+			.mini {
+				margin: 0;
+				display: flex;
+				flex-direction: column;
+				gap: 14px;
+				align-items: flex-start;
+			}
+			.mini-card {
+				width: 100%;
+				max-width: 21rem;
+				background: var(--c-raise);
+				color: var(--c-ink);
+				border-radius: var(--radius-card);
+				box-shadow: var(--c-shadow-floating);
+				padding: 16px 18px 14px;
+				font-family: var(--font-mono);
+				font-size: 0.75rem;
+				line-height: 1.5;
+				font-variant-numeric: tabular-nums;
+				transform: rotate(-1.2deg);
+			}
+			.mini-b .mini-card {
+				transform: rotate(1.2deg);
+			}
+
+			.mini-head {
+				display: flex;
+				flex-direction: column;
+				gap: 1px;
+				padding-bottom: 9px;
+				border-bottom: 1px dashed var(--c-line);
+			}
+			.mini-name {
+				margin: 0;
+				font-size: 0.75rem;
+				font-weight: 600;
+				letter-spacing: 0.12em;
+				text-transform: uppercase;
+			}
+			.mini-meta {
+				margin: 0;
+				font-size: 0.625rem;
+				letter-spacing: 0.09em;
+				text-transform: uppercase;
+				color: var(--c-ink-3);
+			}
+
+			table.mini-lines {
+				width: 100%;
+				border-collapse: collapse;
+				margin: 0;
+			}
+			.mini-lines td {
+				padding: 0.25rem 0;
+				vertical-align: top;
+			}
+			.mini-lines .mq {
+				width: 2.25rem;
+				color: var(--c-ink-3);
+			}
+			.mini-lines .mn {
+				color: var(--c-ink);
+				padding-right: 0.5rem;
+				overflow-wrap: anywhere;
+			}
+			.mini-lines .mn.mod {
+				color: var(--c-ink-2);
+				padding-left: 0.75rem;
+			}
+			.mini-lines .ma {
+				width: 3.75rem;
+			}
+			.mini-lines .lbl {
+				color: var(--c-ink-2);
+				font-size: 0.6875rem;
+				letter-spacing: 0.09em;
+				text-transform: uppercase;
+			}
+			.mini-lines tr.mini-first td {
+				border-top: 1px dashed var(--c-line);
+				padding-top: 0.5rem;
+			}
+			.mini-lines tr.mini-total td {
+				border-top: 1px solid var(--c-line);
+				padding-top: 0.4375rem;
+				font-size: 0.8125rem;
+				font-weight: 600;
+			}
+			.mini-lines tr.mini-total .lbl {
+				color: var(--c-ink);
+				font-size: 0.6875rem;
+			}
+			.mini-stamp {
+				margin: 9px 0 0;
+				padding-top: 8px;
+				border-top: 1px dashed var(--c-line);
+				font-size: 0.625rem;
+				letter-spacing: 0.14em;
+				text-transform: uppercase;
+				color: var(--c-ink-2);
+			}
+			.mini-cap {
+				font-size: 0.8125rem;
+				line-height: 1.5;
+				max-width: 34ch;
+			}
+			.mini-cap .num {
+				font-size: 0.95em;
+			}
+
+			/* ── the notes under the two splits (page chrome again) ──────────────────── */
+			.section-head {
+				display: flex;
+				flex-direction: column;
+				gap: 0.5rem;
+			}
+			.notes {
+				display: grid;
+				grid-template-columns: repeat(
+					auto-fit,
+					minmax(min(20rem, 100%), 1fr)
+				); /* min(): keeps two-up where there is room, collapses the floor where there is not — no breakpoint to keep in sync */
+				gap: 0.875rem;
+				margin-top: 1.25rem;
+			}
+			.note {
+				padding: 1rem 1.125rem;
+				display: flex;
+				flex-direction: column;
+				gap: 0.4375rem;
+			}
+			.note .tag {
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				letter-spacing: 0.09em;
+				text-transform: uppercase;
+				color: var(--c-ink-3);
+			}
+			.note p {
+				margin: 0;
+				font-size: 0.8125rem;
+				line-height: 1.5;
+				color: var(--c-ink-2);
+			}
+
+			footer {
+				margin-top: 56px;
+				padding-top: 22px;
+				border-top: 1px solid var(--c-line-soft);
+				color: var(--c-ink-3);
+				font-size: 0.8125rem;
+			}
+			footer p {
+				margin: 0;
+				max-width: var(--container-measure);
+			}
+		</style>
+	</head>
+	<body>
+		<nav class="samplebar">
+			<a href="index.html">← all samples</a><a href="01-foundations.html">Foundations</a
+			><a href="02-dashboard.html">Dashboard</a><strong aria-current="page">Auth</strong
+			><a href="04-pos-order.html">POS · Order</a><a href="05-pos-payment.html">POS · Payment</a
+			><a href="06-receipt.html">Receipt</a><span class="spacer"></span
+			><button
+				class="btn"
+				onclick="
+					document.documentElement.dataset.theme =
+						document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'
+				"
+			>
+				Toggle theme
+			</button>
+		</nav>
+
+		<main>
+			<div class="wrap wrap-head">
+				<header class="page">
+					<p class="t-eyebrow">Sample 03 · auth</p>
+					<h1 class="t-display">Two doors, one split</h1>
+					<p class="lede">
+						Everything a person can reach without a session: the sign-in page — shown with the
+						throttle's rejection in place — and the one-time registration that brings the restaurant
+						into existence. Each is a split: the form on one side, and on the other the one thing
+						this product is actually about.
+					</p>
+				</header>
+
+				<p class="sample-note note-top">
+					<strong>What this demonstrates.</strong> One split grammar serving a 2-field form and a
+					7-field one. The form half is <code>--c-raise</code>, vertically centred, capped at
+					<code>--container-form</code>; the brand half is <code>--c-accent</code> with
+					<code>--c-accent-ink</code> at <span class="num">6.13:1</span>, and it is made of
+					<em>type and tokens only</em> — no photograph, no <code>&lt;img&gt;</code>, no gradient.
+					Below <span class="num">864px</span> the split becomes one column and the brand half moves
+					<em>above</em> the form, by <code>order</code> — so the DOM keeps the form first and the
+					email field is still the first tab stop. Press <strong>Tab</strong> to walk the page and
+					watch the 2px <code>--c-ring</code> outline land on every control; the failure carries a
+					glyph and words, never colour alone. Toggle the theme — no value here is written twice.
+				</p>
+			</div>
+
+			<!-- ══ SECTION 1 · /login ══════════════════════════════════════════════════ -->
+			<section class="split-section" id="signin" aria-labelledby="signin-h">
+				<div class="specbar">
+					<p class="t-eyebrow">Route · /login</p>
+					<p class="t-caption">
+						Outside the route groups, so it answers without a session. The POS never uses this door
+						— POS access is a registered device plus a 4–6 digit PIN (spec 7, 9). Drawn in its
+						rejected state, because that is the state the page is most often in when anyone looks at
+						it.
+					</p>
+				</div>
+
+				<div class="split">
+					<!-- ── the form half ─────────────────────────────────────────────────── -->
+					<div class="panel panel-form">
+						<div class="panel-inner">
+							<div class="formhead">
+								<p class="wordmark">
+									matcami<span class="wordmark-dot" aria-hidden="true">.</span>
+								</p>
+								<h2 class="t-title" id="signin-h">Sign in</h2>
+								<p class="t-caption">Management dashboard</p>
+							</div>
+
+							<!-- The failure, in place. role="alert" so it is announced rather than merely
+               drawn. The message never says WHICH of the two was wrong — that would turn
+               the form into an account-enumeration oracle — and it names the number of
+               seconds because the server is throttling, not because the account is dead. -->
+							<div class="alert" role="alert" id="signin-error">
+								<span class="alert-glyph" aria-hidden="true">✕</span>
+								<div class="alert-body">
+									<p class="alert-msg">
+										<span class="sr-only">Error: </span>Email or password is not correct.
+									</p>
+									<p class="alert-sub">Try again in <span class="num">34</span> seconds.</p>
+								</div>
+							</div>
+
+							<form class="form" method="post" onsubmit="return false;">
+								<div class="field">
+									<label for="signin-email">Email</label>
+									<input
+										id="signin-email"
+										name="email"
+										type="email"
+										inputmode="email"
+										autocomplete="username"
+										autocapitalize="off"
+										spellcheck="false"
+										value="cabdi@matcamisuugo.so"
+										aria-describedby="signin-error"
+										required
+									/>
+								</div>
+
+								<div class="field">
+									<!-- The password is deliberately NOT echoed back; the server never returns
+                   it, so the field re-renders empty. -->
+									<label for="signin-password">Password</label>
+									<input
+										id="signin-password"
+										name="password"
+										type="password"
+										autocomplete="current-password"
+										aria-describedby="signin-error"
+										required
+									/>
+								</div>
+
+								<!-- A disabled control must SAY WHY. The button is dead only for as long as
+                 the throttle is counting, and both the alert above and the line below it
+                 say so, in words and in a number. -->
+								<div class="submit">
+									<button
+										class="btn btn-primary btn-block"
+										type="submit"
+										disabled
+										aria-describedby="signin-error signin-disabled"
+									>
+										Sign in
+									</button>
+									<p class="hint" id="signin-disabled">
+										Disabled for <span class="num">34</span> seconds — the server throttles repeated
+										attempts before it hashes anything.
+									</p>
+								</div>
+							</form>
+
+							<hr class="rule" />
+
+							<p class="alt">
+								First time here?
+								<a href="#setup"
+									>Set up your restaurant
+									<svg
+										viewBox="0 0 16 16"
+										width="16"
+										height="16"
+										stroke="currentColor"
+										fill="none"
+										stroke-width="1.6"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										aria-hidden="true"
+									>
+										<path d="M2.5 8h10" />
+										<path d="M8.75 4.25 12.5 8l-3.75 3.75" />
+									</svg>
+								</a>
+							</p>
+						</div>
+					</div>
+
+					<!-- ── the brand half ────────────────────────────────────────────────────
+           NO MONEY FIGURE ON THE DASHBOARD. Nothing on a dashboard surface may state
+           this restaurant's revenue, today's takings or any other computed figure —
+           not even a zero, because the money module does not exist yet and a zero is
+           indistinguishable from a broken query.
+
+           The slip below is not an exception to that rule. It is an ILLUSTRATION of the
+           POS document, drawn from the menu in sample 04, its arithmetic done by hand,
+           and its caption says outright that it is a specimen. It is a picture of what
+           the product is, in the product's own typeface — not a number this page read
+           from anywhere. The moment it claims to be live data it becomes a lie, so it
+           never leaves this panel and no figure like it appears in the dashboard. -->
+					<aside class="panel panel-brand" aria-labelledby="brand-line-1">
+						<div class="brand-inner">
+							<p class="brand-eyebrow">Restaurant management &amp; point of sale</p>
+							<h3 class="brand-line" id="brand-line-1">
+								Every sale, every shift, every number that has to tie out.
+							</h3>
+							<hr class="brand-rule" />
+
+							<figure class="mini">
+								<div class="mini-card">
+									<div class="mini-head">
+										<p class="mini-name">Matcami Suugo</p>
+										<p class="mini-meta">Table 4 · Dine-in · Order #1042</p>
+									</div>
+
+									<table class="mini-lines">
+										<caption class="sr-only">
+											Specimen guest check: four lines, a subtotal, tax and a total
+										</caption>
+										<tbody>
+											<tr>
+												<td class="mq">1×</td>
+												<td class="mn">Baasto Suugo</td>
+												<td class="ma money">$7.00</td>
+											</tr>
+											<tr>
+												<td class="mq"></td>
+												<td class="mn mod">+ Extra suqaar</td>
+												<td class="ma money">$1.50</td>
+											</tr>
+											<tr>
+												<td class="mq">2×</td>
+												<td class="mn">Bariis Iskukaris</td>
+												<td class="ma money">$13.00</td>
+											</tr>
+											<tr>
+												<td class="mq">1×</td>
+												<td class="mn">Casiir Mango</td>
+												<td class="ma money">$3.50</td>
+											</tr>
+										</tbody>
+										<tbody>
+											<tr class="mini-first">
+												<td class="lbl" colspan="2">Subtotal</td>
+												<td class="ma money">$25.00</td>
+											</tr>
+											<tr>
+												<td class="lbl" colspan="2">Tax 5%</td>
+												<td class="ma money">$1.25</td>
+											</tr>
+											<tr class="mini-total">
+												<td class="lbl" colspan="2">Total</td>
+												<td class="ma money">$26.25</td>
+											</tr>
+										</tbody>
+									</table>
+								</div>
+
+								<figcaption class="mini-cap">
+									A specimen check, not live data. The till writes it; the dashboard behind this
+									door is where it has to agree with the books.
+								</figcaption>
+							</figure>
+						</div>
+					</aside>
+				</div>
+			</section>
+
+			<div class="divider-band"><hr class="sec-divider" /></div>
+
+			<!-- ══ SECTION 2 · /register ═══════════════════════════════════════════════ -->
+			<section class="split-section" id="setup" aria-labelledby="setup-h">
+				<div class="specbar">
+					<p class="t-eyebrow">Route · /register</p>
+					<p class="t-caption">
+						First run only. Creates the restaurant and its owner account in one transaction, then
+						closes behind itself. Same split, same field primitive, same button — seven fields
+						instead of two.
+					</p>
+				</div>
+
+				<div class="split">
+					<!-- ── the form half ─────────────────────────────────────────────────── -->
+					<div class="panel panel-form">
+						<div class="panel-inner">
+							<div class="formhead">
+								<p class="wordmark">
+									matcami<span class="wordmark-dot" aria-hidden="true">.</span>
+								</p>
+								<h2 class="t-title" id="setup-h">Set up your restaurant</h2>
+								<p class="t-caption">
+									This creates the restaurant and its owner account. It can only be done once.
+								</p>
+							</div>
+
+							<form class="form" method="post" onsubmit="return false;">
+								<fieldset class="group">
+									<legend class="grouplegend">The restaurant</legend>
+									<div class="fields">
+										<div class="field">
+											<label for="reg-name">Restaurant name</label>
+											<input
+												id="reg-name"
+												name="restaurantName"
+												type="text"
+												autocomplete="organization"
+												value="Matcami Suugo"
+												required
+											/>
+											<p class="hint">Printed at the head of every receipt and kitchen ticket.</p>
+										</div>
+
+										<div class="field">
+											<label for="reg-tz">Time zone</label>
+											<select id="reg-tz" name="timeZone" required>
+												<option value="Africa/Mogadishu" selected>Africa/Mogadishu · UTC+03</option>
+												<option value="Africa/Djibouti">Africa/Djibouti · UTC+03</option>
+												<option value="Africa/Nairobi">Africa/Nairobi · UTC+03</option>
+												<option value="Africa/Addis_Ababa">Africa/Addis_Ababa · UTC+03</option>
+												<option value="Europe/London">Europe/London · UTC+00</option>
+												<option value="UTC">UTC</option>
+											</select>
+											<p class="hint">
+												Decides which business date a sale belongs to: a check closed at 01:30
+												counts toward the previous evening, not the new calendar day. Changeable
+												later.
+											</p>
+										</div>
+									</div>
+								</fieldset>
+
+								<hr class="rule" />
+
+								<fieldset class="group">
+									<legend class="grouplegend">The owner account</legend>
+									<div class="fields">
+										<div class="field">
+											<label for="reg-owner">Your name</label>
+											<input
+												id="reg-owner"
+												name="ownerDisplayName"
+												type="text"
+												autocomplete="name"
+												value="Cabdi Warsame"
+												required
+											/>
+										</div>
+
+										<div class="field">
+											<label for="reg-email">Email</label>
+											<input
+												id="reg-email"
+												name="email"
+												type="email"
+												inputmode="email"
+												autocomplete="username"
+												autocapitalize="off"
+												spellcheck="false"
+												value="cabdi@matcamisuugo.so"
+												required
+											/>
+										</div>
+
+										<div class="field">
+											<label for="reg-password">Password</label>
+											<input
+												id="reg-password"
+												name="password"
+												type="password"
+												autocomplete="new-password"
+												minlength="8"
+												aria-describedby="reg-password-hint"
+												required
+											/>
+											<p class="hint" id="reg-password-hint">At least 8 characters.</p>
+										</div>
+
+										<div class="field">
+											<label for="reg-password-2">Confirm password</label>
+											<input
+												id="reg-password-2"
+												name="passwordConfirm"
+												type="password"
+												autocomplete="new-password"
+												minlength="8"
+												required
+											/>
+										</div>
+									</div>
+								</fieldset>
+
+								<hr class="rule" />
+
+								<fieldset class="group">
+									<legend class="grouplegend">Authorisation</legend>
+									<div class="fields">
+										<div class="field">
+											<label for="reg-token">Setup token</label>
+											<input
+												id="reg-token"
+												name="setupToken"
+												class="mono-input"
+												type="text"
+												autocomplete="off"
+												spellcheck="false"
+												placeholder="7f3c9b1e-…"
+												aria-describedby="reg-token-hint"
+												required
+											/>
+											<p class="hint" id="reg-token-hint">
+												The one-time value of the server's <code>SETUP_TOKEN</code> environment
+												variable — read it from the machine matcami runs on. It is required only for
+												the first restaurant, and should be unset once this succeeds.
+											</p>
+										</div>
+									</div>
+								</fieldset>
+
+								<button class="btn btn-primary btn-block" type="submit">Create restaurant</button>
+							</form>
+
+							<aside class="notepanel">
+								<p class="note-eyebrow">The door closes behind itself</p>
+								<p class="notepanel-body">
+									<code>/register</code> answers only while <strong>zero restaurants exist</strong>
+									<em>and</em> the submitted token matches <code>SETUP_TOKEN</code>. Once the first
+									restaurant is created the route stops answering — there is no environment variable
+									that re-opens it, and no flag that resets it. Further restaurants are created on
+									the server with <code>pnpm restaurant:create</code>.
+								</p>
+							</aside>
+
+							<hr class="rule" />
+
+							<p class="alt">
+								Already set up?
+								<a href="#signin"
+									>Sign in
+									<svg
+										viewBox="0 0 16 16"
+										width="16"
+										height="16"
+										stroke="currentColor"
+										fill="none"
+										stroke-width="1.6"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										aria-hidden="true"
+									>
+										<path d="M2.5 8h10" />
+										<path d="M8.75 4.25 12.5 8l-3.75 3.75" />
+									</svg>
+								</a>
+							</p>
+						</div>
+					</div>
+
+					<!-- ── the brand half ───────────────────────────────────────────────────
+           The same grammar, a different slip and a different line — the copy is
+           never reused between the two doors. Again: a specimen, never a figure.
+           No dashboard surface in this product states a real money number until the
+           money module exists to produce one. -->
+					<aside class="panel panel-brand mini-b" aria-labelledby="brand-line-2">
+						<div class="brand-inner">
+							<p class="brand-eyebrow">First run · one time only</p>
+							<h3 class="brand-line" id="brand-line-2">
+								One restaurant. One till. Books that balance.
+							</h3>
+							<hr class="brand-rule" />
+
+							<figure class="mini">
+								<div class="mini-card">
+									<div class="mini-head">
+										<p class="mini-name">Matcami Suugo</p>
+										<p class="mini-meta">Takeaway · POS1-000001</p>
+									</div>
+
+									<table class="mini-lines">
+										<caption class="sr-only">
+											Specimen guest check: three lines, a subtotal, tax, a total and the tender
+										</caption>
+										<tbody>
+											<tr>
+												<td class="mq">2×</td>
+												<td class="mn">Sambuusa ×3</td>
+												<td class="ma money">$6.00</td>
+											</tr>
+											<tr>
+												<td class="mq">1×</td>
+												<td class="mn">Canjeero &amp; Suqaar</td>
+												<td class="ma money">$8.00</td>
+											</tr>
+											<tr>
+												<td class="mq">1×</td>
+												<td class="mn">Shaah Cadays</td>
+												<td class="ma money">$1.50</td>
+											</tr>
+										</tbody>
+										<tbody>
+											<tr class="mini-first">
+												<td class="lbl" colspan="2">Subtotal</td>
+												<td class="ma money">$15.50</td>
+											</tr>
+											<tr>
+												<td class="lbl" colspan="2">Tax 5%</td>
+												<td class="ma money">$0.78</td>
+											</tr>
+											<tr class="mini-total">
+												<td class="lbl" colspan="2">Total</td>
+												<td class="ma money">$16.28</td>
+											</tr>
+										</tbody>
+									</table>
+
+									<p class="mini-stamp">Paid · Cash · 20:41</p>
+								</div>
+
+								<figcaption class="mini-cap">
+									The first check this restaurant will ever close. Its invoice number comes from the
+									device, gap-free, online or off — and <span class="num">5%</span> of
+									<span class="num">$15.50</span> is <span class="num">$0.775</span>, rounded to
+									<span class="num">$0.78</span> exactly once, on the total.
+								</figcaption>
+							</figure>
+						</div>
+					</aside>
+				</div>
+			</section>
+
+			<div class="wrap wrap-tail">
+				<div class="section-head">
+					<p class="t-eyebrow">Why it is built this way</p>
+					<h2 class="t-title">Five decisions in this split</h2>
+				</div>
+
+				<div class="notes">
+					<article class="card note">
+						<span class="tag">layout · 54rem</span>
+						<h3 class="t-section">The brand half goes on top, not underneath</h3>
+						<p>
+							Stacked, the smaller panel leads and the form follows — a form pushed below a full
+							screen of marketing is a form nobody reaches. The move is <code>order</code>, not
+							source order, so the DOM still reads form-then-brand and the email field is the first
+							tab stop at every width.
+						</p>
+					</article>
+
+					<article class="card note">
+						<span class="tag">spec 7 · house rule</span>
+						<h3 class="t-section">Why the message names a number</h3>
+						<p>
+							Five wrong PINs lock a POS employee out for five minutes. Applied literally to a page
+							anyone on the internet can reach, that rule becomes a lever for locking the owner out
+							of their own restaurant — so this door pairs a per-account delay with a per-IP
+							throttle in front of the password hash, and says how long it has left rather than
+							leaving the owner to guess.
+						</p>
+					</article>
+
+					<article class="card note">
+						<span class="tag">first run only</span>
+						<h3 class="t-section">The door closes behind itself</h3>
+						<p>
+							<code>/register</code> answers only while zero restaurants exist <em>and</em> the
+							token matches <code>SETUP_TOKEN</code>. No environment variable re-opens it and no
+							flag resets it; more restaurants are made on the server with
+							<code>pnpm restaurant:create</code>. The panel says that on the page, where the person
+							holding the token can read it.
+						</p>
+					</article>
+
+					<article class="card note">
+						<span class="tag">tokens.css · WCAG 1.4.3</span>
+						<h3 class="t-section">The brand half is made of type</h3>
+						<p>
+							No photograph, no <code>&lt;img&gt;</code>, no gradient — a rendered guest check
+							instead, because it says "restaurant point of sale" in one glance and costs nothing to
+							ship. It also has one ink: <code>--c-accent-ink</code> is the only pair tokens.css
+							guarantees on <code>--c-accent</code>, at <span class="num">6.13:1</span>, so every
+							level of hierarchy there is size, weight or tracking and never a faded colour.
+						</p>
+					</article>
+
+					<article class="card note">
+						<span class="tag">invariant 1 · the money module</span>
+						<h3 class="t-section">A specimen, never a figure</h3>
+						<p>
+							No dashboard surface in this product prints a money figure yet — not revenue, not
+							today's takings, not a zero, because a zero and a broken query look identical. The
+							slips here are drawn from sample 04's menu with their arithmetic done by hand, and
+							each caption says so. When real numbers arrive they will come from
+							<code>lib/server/money</code>, which owns the one rounding rule.
+						</p>
+					</article>
+				</div>
+
+				<footer>
+					<p>
+						Design sample — not application code. Tokens
+						<span class="path">design/tokens.css</span> · rules
+						<span class="path">docs/design-system.md</span> §1 principles, §2 theme contract, §9
+						accessibility floor · spec 7, 9 · invariant 12.
+					</p>
+				</footer>
+			</div>
+		</main>
+	</body>
+</html>

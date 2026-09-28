@@ -1,0 +1,1489 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>matcami · Foundations</title>
+
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			rel="stylesheet"
+			href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+		/>
+
+		<link rel="stylesheet" href="tokens.css" />
+
+		<style>
+			/* Layout only. Every colour below is a var(--c-*) from tokens.css — no literal
+   anywhere in this file, which is the whole point of the exercise. */
+
+			/* ── page rhythm ─────────────────────────────────────────────────────── */
+			section {
+				margin-top: 4.5rem;
+			}
+			.sec-head {
+				display: flex;
+				flex-direction: column;
+				gap: 0.5rem;
+				margin-bottom: 1.5rem;
+			}
+			.lede {
+				font-size: 1.0625rem;
+				line-height: 1.55;
+				color: var(--c-ink-2);
+				max-width: 62ch;
+				margin: 0;
+				text-wrap: pretty;
+			}
+			.dim-prose {
+				color: var(--c-ink-2);
+			}
+			.stack {
+				display: flex;
+				flex-direction: column;
+				gap: 1rem;
+			}
+			.stack-s {
+				display: flex;
+				flex-direction: column;
+				gap: 0.5rem;
+			}
+			h1,
+			h2,
+			h3 {
+				margin: 0;
+			}
+			header.page {
+				display: flex;
+				flex-direction: column;
+				gap: 1.125rem;
+			}
+
+			.mono {
+				font-family: var(--font-mono);
+			}
+			code {
+				font-family: var(--font-mono);
+				font-size: 0.8125em;
+				color: var(--c-ink);
+				background: var(--c-raise-2);
+				border: 1px solid var(--c-line-soft);
+				border-radius: 0.25rem;
+				padding: 0.0625rem 0.3125rem;
+				white-space: nowrap;
+			}
+			.panel {
+				background: var(--c-raise);
+				border: 1px solid var(--c-line-soft);
+				border-radius: var(--radius-card);
+				padding: 1.25rem;
+			}
+			.sub {
+				font-family: var(--font-display);
+				font-size: 0.875rem;
+				font-weight: 600;
+				letter-spacing: -0.004em;
+				margin: 0;
+			}
+			.note-inline {
+				font-size: 0.8125rem;
+				color: var(--c-ink-2);
+				max-width: var(--container-measure);
+				margin: 0;
+			}
+			.sr-only {
+				position: absolute;
+				width: 1px;
+				height: 1px;
+				padding: 0;
+				margin: -1px;
+				overflow: hidden;
+				clip-path: inset(50%);
+				white-space: nowrap;
+				border: 0;
+			}
+
+			/* ── 1. surfaces ─────────────────────────────────────────────────────── */
+			.surfaces {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+				gap: 1rem;
+			}
+			.surf {
+				background: var(--c-bg);
+				border: 1px solid var(--c-line);
+				border-radius: var(--radius-card);
+				padding: 0.875rem;
+				display: flex;
+				flex-direction: column;
+				gap: 0.75rem;
+			}
+			.surf-cap {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 0.5rem;
+				flex-wrap: wrap;
+			}
+			.surf-sel {
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				color: var(--c-ink-2);
+			}
+			.surf-body {
+				display: flex;
+				flex-direction: column;
+				gap: 0.625rem;
+			}
+			.demo-card {
+				padding: 0.875rem;
+				display: flex;
+				flex-direction: column;
+				gap: 0.625rem;
+			}
+			.demo-top {
+				display: flex;
+				align-items: baseline;
+				justify-content: space-between;
+				gap: 0.75rem;
+			}
+			.demo-name {
+				font-family: var(--font-display);
+				font-size: 0.9375rem;
+				font-weight: 600;
+				margin: 0;
+			}
+			.demo-foot {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 0.75rem;
+			}
+			.live {
+				color: var(--c-ok);
+			}
+			.idle {
+				color: var(--c-ink-3);
+			}
+
+			/* Which of the two PAGE states is rendering right now. The POS card is always
+   rendering, because [data-surface="pos"] is a light device surface that themes. */
+			.if-light {
+				display: inline-flex;
+			}
+			.if-dark {
+				display: none;
+			}
+			.state-dark .surf-body {
+				opacity: 0.34;
+			}
+			.state-dark .surf-body .card {
+				border-style: dashed;
+			}
+			@media (prefers-color-scheme: dark) {
+				:root:not([data-theme='light']) .if-light {
+					display: none;
+				}
+				:root:not([data-theme='light']) .if-dark {
+					display: inline-flex;
+				}
+				:root:not([data-theme='light']) .state-dark .surf-body {
+					opacity: 1;
+				}
+				:root:not([data-theme='light']) .state-dark .surf-body .card {
+					border-style: solid;
+				}
+				:root:not([data-theme='light']) .state-light .surf-body {
+					opacity: 0.34;
+				}
+				:root:not([data-theme='light']) .state-light .surf-body .card {
+					border-style: dashed;
+				}
+			}
+			:root[data-theme='dark'] .if-light {
+				display: none;
+			}
+			:root[data-theme='dark'] .if-dark {
+				display: inline-flex;
+			}
+			:root[data-theme='dark'] .state-dark .surf-body {
+				opacity: 1;
+			}
+			:root[data-theme='dark'] .state-dark .surf-body .card {
+				border-style: solid;
+			}
+			:root[data-theme='dark'] .state-light .surf-body {
+				opacity: 0.34;
+			}
+			:root[data-theme='dark'] .state-light .surf-body .card {
+				border-style: dashed;
+			}
+
+			/* ── 2. palette ──────────────────────────────────────────────────────── */
+			.swatches {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+				gap: 0.75rem;
+			}
+			.sw {
+				/* --c-control-line, not --c-line: a swatch edge is load-bearing here, it is the
+     only thing separating two grounds that differ by a few percent (WCAG 1.4.11). */
+				border: 1px solid var(--c-control-line);
+				border-radius: var(--radius-control);
+				padding: 0.75rem 0.875rem;
+				min-height: 6rem;
+				display: flex;
+				flex-direction: column;
+				justify-content: space-between;
+				gap: 0.625rem;
+			}
+			.sw .aa {
+				font-family: var(--font-display);
+				font-size: 1.75rem;
+				font-weight: 700;
+				line-height: 1;
+			}
+			.sw .nm {
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				line-height: 1.3;
+				color: var(--c-ink-2);
+			}
+			.sw .role {
+				font-size: 0.6875rem;
+				color: var(--c-ink-3);
+			}
+			.g-bg {
+				background: var(--c-bg);
+			}
+			.g-bg2 {
+				background: var(--c-bg-2);
+			}
+			.g-raise {
+				background: var(--c-raise);
+			}
+			.g-raise2 {
+				background: var(--c-raise-2);
+			}
+			.g-bg .aa,
+			.g-bg2 .aa,
+			.g-raise .aa,
+			.g-raise2 .aa {
+				color: var(--c-ink);
+			}
+			.ink-sw {
+				background: var(--c-raise);
+			}
+			.i-ink {
+				color: var(--c-ink);
+			}
+			.i-ink2 {
+				color: var(--c-ink-2);
+			}
+			.i-ink3 {
+				color: var(--c-ink-3);
+			}
+			.i-accent {
+				color: var(--c-accent);
+			}
+			.i-ok {
+				color: var(--c-ok);
+			}
+			.i-warn {
+				color: var(--c-warn);
+			}
+			.i-danger {
+				color: var(--c-danger);
+			}
+
+			.retunes {
+				list-style: none;
+				margin: 0;
+				padding: 0;
+				display: flex;
+				flex-direction: column;
+				gap: 0.75rem;
+			}
+			.retunes li {
+				display: grid;
+				grid-template-columns: minmax(0, 9.5rem) 1fr;
+				gap: 0.25rem 0.875rem;
+				font-size: 0.8125rem;
+				color: var(--c-ink-2);
+				align-items: baseline;
+			}
+			.retunes b {
+				color: var(--c-ink);
+				font-weight: 600;
+			}
+			@media (max-width: 34rem) {
+				.retunes li {
+					grid-template-columns: 1fr;
+				}
+			}
+
+			/* ── 3. type ─────────────────────────────────────────────────────────── */
+			.typerows {
+				background: var(--c-raise);
+				border: 1px solid var(--c-line-soft);
+				border-radius: var(--radius-card);
+				overflow: hidden;
+			}
+			.typerow {
+				display: grid;
+				grid-template-columns: minmax(0, 9.5rem) minmax(0, 1fr);
+				gap: 0.375rem 1.25rem;
+				padding: 1.125rem 1.25rem;
+				border-bottom: 1px solid var(--c-line-soft);
+				align-items: baseline;
+			}
+			.typerow:last-child {
+				border-bottom: 0;
+			}
+			.typerow .key {
+				font-family: var(--font-mono);
+				font-size: 0.75rem;
+				color: var(--c-ink-3);
+			}
+			.typerow .key small {
+				display: block;
+				font-size: 0.6875rem;
+				color: var(--c-ink-3);
+				margin-top: 0.25rem;
+			}
+			@media (max-width: 44rem) {
+				.typerow {
+					grid-template-columns: 1fr;
+				}
+			}
+
+			/* ── 4. money ────────────────────────────────────────────────────────── */
+			.tblwrap {
+				background: var(--c-raise);
+				border: 1px solid var(--c-line-soft);
+				border-radius: var(--radius-card);
+				overflow: hidden;
+			}
+			table.tbl {
+				width: 100%;
+				border-collapse: collapse;
+			}
+			.tbl th,
+			.tbl td {
+				padding: 0.6875rem 1rem;
+				border-bottom: 1px solid var(--c-line-soft);
+				vertical-align: baseline;
+				text-align: left;
+			}
+			.tbl thead th {
+				background: var(--c-raise-2);
+				color: var(--c-ink-3);
+				font-weight: 500;
+				font-family: var(--font-mono);
+				font-size: 0.625rem;
+				letter-spacing: 0.1em;
+				text-transform: uppercase;
+			}
+			.tbl tbody tr:last-child td {
+				border-bottom: 0;
+			}
+			.tbl .ta-r,
+			.tbl .money {
+				text-align: right;
+			} /* .tbl td (0,1,1) outranks .money (0,1,0) */
+			.tbl .sub-td {
+				color: var(--c-ink-2);
+			}
+			.tbl .mod {
+				display: block;
+				font-size: 0.8125rem;
+				color: var(--c-ink-2);
+				padding-left: 0.625rem;
+			}
+			.tbl .by {
+				font-family: var(--font-mono);
+				font-size: 0.75rem;
+				color: var(--c-ink-3);
+				white-space: nowrap;
+			}
+			.totalblock {
+				display: flex;
+				align-items: baseline;
+				justify-content: space-between;
+				gap: 1rem;
+				flex-wrap: wrap;
+				padding: 1rem 1.25rem;
+				border-top: 1px solid var(--c-line);
+				background: var(--c-raise-2);
+			}
+			.totalblock .lbl {
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				letter-spacing: 0.1em;
+				text-transform: uppercase;
+				color: var(--c-ink-2);
+			}
+			@media (max-width: 26rem) {
+				.tbl th,
+				.tbl td {
+					padding: 0.625rem 0.5rem;
+				}
+			}
+
+			/* ── 5. status ───────────────────────────────────────────────────────── */
+			.statusgrid {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+				gap: 1px;
+				background: var(--c-line-soft);
+				border: 1px solid var(--c-line-soft);
+				border-radius: var(--radius-card);
+				overflow: hidden;
+			}
+			.statuscell {
+				background: var(--c-raise);
+				padding: 1.125rem 1.25rem;
+				display: flex;
+				flex-direction: column;
+				gap: 0.875rem;
+			}
+			.statusrow {
+				display: grid;
+				grid-template-columns: minmax(0, 7.25rem) minmax(0, 1fr);
+				gap: 0.5rem 0.75rem;
+				align-items: baseline;
+			}
+			.statusrow .side {
+				display: flex;
+				align-items: center;
+				gap: 0.625rem;
+				flex-wrap: wrap;
+				min-width: 0;
+			}
+			.statusrow .why {
+				font-size: 0.75rem;
+				color: var(--c-ink-3);
+			}
+			/* tokens.css ships .mark-* / .pill-* for new, sent, voided, billed, paid, offline.
+   GAP: order OPEN, order REFUNDED, table free/occupied and sync ONLINE have tokens
+   but no ready-made class, so they are composed from tokens here. Worth adding. */
+			.mark-open {
+				color: var(--c-ink-2);
+			}
+			.pill-open {
+				color: var(--c-ink-2);
+				background: var(--c-bg-2);
+			}
+			.mark-refunded {
+				color: var(--c-st-voided);
+			} /* ↩ is NOT struck through — the record stands */
+			.pill-refunded {
+				color: var(--c-st-voided);
+				background: var(--c-st-voided-bg);
+			}
+			.mark-free {
+				color: var(--c-ink-3);
+			}
+			.pill-free {
+				color: var(--c-ink-3);
+				background: var(--c-bg-2);
+			}
+			.mark-occupied {
+				color: var(--c-accent);
+			}
+			.pill-occupied {
+				color: var(--c-accent);
+				background: var(--c-accent-soft);
+			}
+			.mark-online {
+				color: var(--c-ok);
+			}
+			.pill-online {
+				color: var(--c-ok);
+				background: var(--c-ok-bg);
+			}
+			.voidline {
+				display: flex;
+				align-items: baseline;
+				gap: 0.625rem;
+				flex-wrap: wrap;
+			}
+			.voidline .rsn {
+				font-size: 0.75rem;
+				color: var(--c-ink-2);
+			}
+
+			/* ── 6. controls ─────────────────────────────────────────────────────── */
+			.controls {
+				display: flex;
+				gap: 0.625rem;
+				flex-wrap: wrap;
+				align-items: center;
+			}
+			.formrow {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+				gap: 1rem;
+				max-width: var(--container-form);
+			}
+			.borderdemo {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+				gap: 1rem;
+			}
+			.bd {
+				background: var(--c-raise);
+				border-radius: var(--radius-control);
+				padding: 1rem;
+				display: flex;
+				flex-direction: column;
+				gap: 0.375rem;
+			}
+			.bd-control {
+				border: 1px solid var(--c-control-line);
+			}
+			.bd-decor {
+				border: 1px solid var(--c-line);
+			}
+			.bd .r {
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				color: var(--c-ink-3);
+			}
+
+			/* ── 7. elevation & radius ───────────────────────────────────────────── */
+			.rungs,
+			.radii {
+				display: grid;
+				grid-template-columns: repeat(auto-fit, minmax(11.5rem, 1fr));
+				gap: 1.25rem;
+			}
+			.rung {
+				background: var(--c-raise);
+				border: 1px solid var(--c-line-soft);
+				border-radius: var(--radius-card);
+				padding: 1rem;
+				min-height: 6.5rem;
+				display: flex;
+				flex-direction: column;
+				justify-content: flex-end;
+				gap: 0.1875rem;
+			}
+			.rung-flat {
+				box-shadow: var(--c-shadow-flat);
+			}
+			.rung-raised {
+				box-shadow: var(--c-shadow-raised);
+			}
+			.rung-floating {
+				box-shadow: var(--c-shadow-floating);
+			}
+			.rad {
+				background: var(--c-raise-2);
+				border: 1px solid var(--c-control-line);
+				min-height: 5.5rem;
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				justify-content: center;
+				gap: 0.25rem;
+			}
+			.rad-control {
+				border-radius: var(--radius-control);
+			}
+			.rad-card {
+				border-radius: var(--radius-card);
+			}
+			.rad-sheet {
+				border-radius: var(--radius-sheet);
+			}
+			.lbl-mono {
+				font-family: var(--font-mono);
+				font-size: 0.6875rem;
+				color: var(--c-ink-2);
+			}
+			.lbl-sub {
+				font-size: 0.6875rem;
+				color: var(--c-ink-3);
+			}
+
+			/* ── 8. touch ────────────────────────────────────────────────────────── */
+			.posframe {
+				background: var(--c-bg);
+				border: 1px solid var(--c-line);
+				border-radius: var(--radius-card);
+				padding: 1rem;
+			}
+			.touchstack {
+				display: flex;
+				flex-direction: column;
+				gap: 0.5rem;
+			}
+			.tkey {
+				font: inherit;
+				text-align: left;
+				cursor: pointer;
+				width: 100%;
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 1rem;
+				background: var(--c-raise);
+				color: var(--c-ink);
+				border: 1px solid var(--c-line);
+				border-radius: var(--radius-control);
+				padding-inline: 1rem;
+			}
+			.tkey .what {
+				font-weight: 500;
+			}
+			.tkey .what .money {
+				margin-left: 0.375rem;
+			}
+			.tkey .spec {
+				font-family: var(--font-mono);
+				font-size: 0.75rem;
+				color: var(--c-ink-2);
+				text-align: right;
+			}
+			.t-56 {
+				min-height: var(--touch-min);
+			}
+			.t-64 {
+				min-height: var(--touch);
+			}
+			.t-72 {
+				min-height: var(--touch-lg);
+			}
+			.t-96 {
+				min-height: var(--touch-xl);
+				font-size: 1.0625rem;
+			}
+			.refbars {
+				display: flex;
+				flex-direction: column;
+				gap: 0.5rem;
+				margin-top: 0.75rem;
+			}
+			.refbar {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				gap: 1rem;
+				border: 1px dashed var(--c-control-line);
+				border-radius: var(--radius-control);
+				padding-inline: 1rem;
+				color: var(--c-ink-3);
+				font-size: 0.8125rem;
+			}
+			.refbar .spec {
+				font-family: var(--font-mono);
+				font-size: 0.75rem;
+			}
+			.ref-44 {
+				min-height: 2.75rem;
+			}
+			.ref-48 {
+				min-height: 3rem;
+			}
+			/* Narrow: tighten rather than stack. Stacking makes every key the height of its
+   own content, which would flatten 56/64/72/96 into one size — and the whole
+   point of this section is that you can see the four apart. */
+			@media (max-width: 30rem) {
+				.tkey {
+					padding-inline: 0.75rem;
+					gap: 0.625rem;
+				}
+				.tkey .spec {
+					font-size: 0.6875rem;
+					line-height: 1.35;
+				}
+				.tkey .what {
+					font-size: 0.875rem;
+				}
+				.t-96 {
+					font-size: 0.9375rem;
+				}
+				.refbar {
+					padding-inline: 0.75rem;
+					font-size: 0.75rem;
+				}
+			}
+
+			footer {
+				margin-top: 4.5rem;
+				padding-top: 1.375rem;
+				border-top: 1px solid var(--c-line-soft);
+				color: var(--c-ink-3);
+				font-size: 0.8125rem;
+			}
+			@media (max-width: 40rem) {
+				section {
+					margin-top: 3.25rem;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<nav class="samplebar">
+			<a href="index.html">← all samples</a
+			><a href="01-foundations.html"><strong>Foundations</strong></a
+			><a href="02-dashboard.html">Dashboard</a><a href="03-auth.html">Auth</a
+			><a href="04-pos-order.html">POS · Order</a><a href="05-pos-payment.html">POS · Payment</a
+			><a href="06-receipt.html">Receipt</a><span class="spacer"></span
+			><button
+				class="btn"
+				onclick="
+					document.documentElement.dataset.theme =
+						document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'
+				"
+			>
+				Toggle theme
+			</button>
+		</nav>
+
+		<main class="wrap">
+			<header class="page">
+				<div class="t-eyebrow">matcami · design system</div>
+				<h1 class="t-display">Foundations</h1>
+				<p class="lede">
+					Everything a matcami screen is allowed to be made of — three surfaces, one palette, six
+					type roles, one money rule, one status vocabulary, and a touch scale sized for someone
+					standing at a counter.
+				</p>
+				<p class="sample-note">
+					<strong>What this is.</strong> The reference sheet a developer opens before writing a
+					component. Every element below is drawn with a token from <code>tokens.css</code> — there
+					is not one literal colour in this file. The rule it demonstrates:
+					<strong>a component names a role, never a colour</strong>, which is what lets the same
+					markup render correctly on the light page, the dark page and the permanently dark POS
+					shell.
+				</p>
+			</header>
+
+			<!-- ────────────────────────────────────────────────────────────────── 1 -->
+			<section aria-labelledby="s-surfaces">
+				<div class="sec-head">
+					<div class="t-eyebrow">01 · surfaces</div>
+					<h2 class="t-title" id="s-surfaces">Three states, not two</h2>
+					<p class="lede">
+						The card below is written once — <code>background: var(--c-raise)</code>,
+						<code>color: var(--c-ink)</code>, <code>border-color: var(--c-line)</code> — and
+						rendered three times. The token
+						<strong>names are identical in all three states</strong>; only their values differ. That
+						is the whole contract.
+					</p>
+				</div>
+
+				<div class="surfaces">
+					<div class="surf state-light">
+						<div class="surf-cap">
+							<span class="surf-sel">:root</span>
+							<span class="mark live if-light"
+								><span class="glyph" aria-hidden="true">●</span> live</span
+							>
+							<span class="mark idle if-dark"
+								><span class="glyph" aria-hidden="true">○</span> idle</span
+							>
+						</div>
+						<div class="surf-body">
+							<p class="t-caption">
+								<strong>Light</strong> — the default, and the complete palette
+							</p>
+							<article class="card demo-card">
+								<div class="demo-top">
+									<p class="demo-name">Bariis iskukaris</p>
+									<span class="money">$9.00</span>
+								</div>
+								<p class="t-caption">Mains · tax 5% · recipe 4 items</p>
+								<div class="demo-foot">
+									<span class="pill pill-sent"><span aria-hidden="true">▲</span> SENT</span>
+									<button class="btn btn-primary" type="button">Add</button>
+								</div>
+							</article>
+						</div>
+					</div>
+
+					<div class="surf state-dark">
+						<div class="surf-cap">
+							<span class="surf-sel">:root[data-theme="dark"]</span>
+							<span class="mark idle if-light"
+								><span class="glyph" aria-hidden="true">○</span> idle</span
+							>
+							<span class="mark live if-dark"
+								><span class="glyph" aria-hidden="true">●</span> live</span
+							>
+						</div>
+						<div class="surf-body">
+							<p class="t-caption">
+								<strong>Dark</strong> — overrides only, guarded so an explicit light choice still
+								wins
+							</p>
+							<article class="card demo-card">
+								<div class="demo-top">
+									<p class="demo-name">Bariis iskukaris</p>
+									<span class="money">$9.00</span>
+								</div>
+								<p class="t-caption">Mains · tax 5% · recipe 4 items</p>
+								<div class="demo-foot">
+									<span class="pill pill-sent"><span aria-hidden="true">▲</span> SENT</span>
+									<button class="btn btn-primary" type="button">Add</button>
+								</div>
+							</article>
+						</div>
+					</div>
+
+					<div class="surf" data-surface="pos">
+						<div class="surf-cap">
+							<span class="surf-sel">[data-surface="pos"]</span>
+							<span class="mark live"><span class="glyph" aria-hidden="true">●</span> live</span>
+						</div>
+						<div class="surf-body">
+							<p class="t-caption">
+								<strong>POS</strong> — a device surface. Dark in <em>both</em> themes; never themed.
+							</p>
+							<article class="card demo-card">
+								<div class="demo-top">
+									<p class="demo-name">Bariis iskukaris</p>
+									<span class="money">$9.00</span>
+								</div>
+								<p class="t-caption">Mains · tax 5% · recipe 4 items</p>
+								<div class="demo-foot">
+									<span class="pill pill-sent"><span aria-hidden="true">▲</span> SENT</span>
+									<button class="btn btn-primary" type="button">Add</button>
+								</div>
+							</article>
+						</div>
+					</div>
+				</div>
+
+				<!-- GAP worth recording: tokens.css scopes the two page states at :root only
+       (:root[data-theme="dark"] and the guarded media query), so a light card
+       cannot be previewed inside a dark page. [data-surface="pos"] has no such
+       limit because its selector is element-scoped. If a nested theme preview is
+       ever wanted, the fix is a [data-theme="dark"] block alongside the :root one.
+       Until then the inactive page state is shown greyed with a dashed edge,
+       which is the honest rendering: only one of the two can be live at a time. -->
+				<p class="note-inline" style="margin-top: 1rem">
+					Only one page state can be live at a time, so the other is shown greyed with a dashed edge
+					— press <strong>Toggle theme</strong> and the two swap. The POS card never swaps: the
+					shell is a piece of equipment read under counter glare, and the key faces must stay the
+					brightest thing on the screen.
+				</p>
+			</section>
+
+			<!-- ────────────────────────────────────────────────────────────────── 2 -->
+			<section aria-labelledby="s-palette">
+				<div class="sec-head">
+					<div class="t-eyebrow">02 · palette</div>
+					<h2 class="t-title" id="s-palette">Four grounds, seven inks</h2>
+					<p class="lede">
+						The grounds sit deliberately close together — a till screen read at arm's length does
+						not want contrast fighting the money for attention. Which means the <em>border</em>, not
+						the fill, is what separates a control from its surroundings.
+					</p>
+				</div>
+
+				<div class="stack">
+					<h3 class="sub">Grounds</h3>
+					<div class="swatches">
+						<div class="sw g-bg">
+							<span class="aa">Aa</span><span class="nm">--c-bg</span>
+							<span class="role">page ground</span>
+						</div>
+						<div class="sw g-bg2">
+							<span class="aa">Aa</span><span class="nm">--c-bg-2</span>
+							<span class="role">recessed wells, table heads</span>
+						</div>
+						<div class="sw g-raise">
+							<span class="aa">Aa</span><span class="nm">--c-raise</span>
+							<span class="role">cards, controls, the check</span>
+						</div>
+						<div class="sw g-raise2">
+							<span class="aa">Aa</span><span class="nm">--c-raise-2</span
+							><span class="role">inside a card: totals, headers</span>
+						</div>
+					</div>
+				</div>
+
+				<div class="stack" style="margin-top: 1.75rem">
+					<h3 class="sub">Inks</h3>
+					<p class="note-inline">
+						Each rendered on <code>--c-raise</code>, the ground they are specified against. Every
+						pair here clears 4.5:1 in all three states.
+					</p>
+					<div class="swatches">
+						<div class="sw ink-sw">
+							<span class="aa i-ink">Aa</span> <span class="nm">--c-ink</span>
+							<span class="role">primary text</span>
+						</div>
+						<div class="sw ink-sw">
+							<span class="aa i-ink2">Aa</span> <span class="nm">--c-ink-2</span>
+							<span class="role">secondary, labels</span>
+						</div>
+						<div class="sw ink-sw">
+							<span class="aa i-ink3">Aa</span> <span class="nm">--c-ink-3</span>
+							<span class="role">tertiary + control borders</span>
+						</div>
+						<div class="sw ink-sw">
+							<span class="aa i-accent">Aa</span><span class="nm">--c-accent</span>
+							<span class="role">links, focus ring, occupied</span>
+						</div>
+						<div class="sw ink-sw">
+							<span class="aa i-ok">Aa</span> <span class="nm">--c-ok</span>
+							<span class="role">online, sent, paid</span>
+						</div>
+						<div class="sw ink-sw">
+							<span class="aa i-warn">Aa</span> <span class="nm">--c-warn</span>
+							<span class="role">offline, billed, needs review</span>
+						</div>
+						<div class="sw ink-sw">
+							<span class="aa i-danger">Aa</span><span class="nm">--c-danger</span>
+							<span class="role">void, refund, negative money</span>
+						</div>
+					</div>
+				</div>
+
+				<div class="panel stack" style="margin-top: 1.75rem">
+					<h3 class="sub">The four re-tuned values</h3>
+					<p class="note-inline">
+						Four inks were moved after every pair was recomputed by WCAG relative luminance. They
+						are listed because a designer looking at the palette will otherwise assume they drifted
+						by accident.
+					</p>
+					<ul class="retunes">
+						<li>
+							<b class="mono">--c-ink-3</b>
+							<span
+								>Light. The previous value measured 4.35:1 on <code>--c-bg</code> and 4.03:1 on
+								<code>--c-bg-2</code> — it failed on both grounds. Darkened until the tighter of the
+								two clears; that pair, at 4.55:1, is now the tightest in the whole light
+								state.</span
+							>
+						</li>
+						<li>
+							<b class="mono">--c-ink-3</b>
+							<span
+								>Dark. Lightened for the same reason in the other direction — tertiary text sat
+								under the floor on the two darkest grounds.</span
+							>
+						</li>
+						<li>
+							<b class="mono">--c-ok</b>
+							<span
+								>Dark. Lightened so that "sent" and "paid" green clears 4.5:1 against every status
+								ground it is ever painted on, not just the card ground.</span
+							>
+						</li>
+						<li>
+							<b class="mono">--c-danger</b>
+							<span
+								>Dark. Lightened so a void, a refund and a negative amount stay legible on
+								<code>--c-danger-bg</code> — the one colour on the screen a cashier must never
+								misread.</span
+							>
+						</li>
+					</ul>
+				</div>
+			</section>
+
+			<!-- ────────────────────────────────────────────────────────────────── 3 -->
+			<section aria-labelledby="s-type">
+				<div class="sec-head">
+					<div class="t-eyebrow">03 · type</div>
+					<h2 class="t-title" id="s-type">Six roles, each one complete</h2>
+					<p class="lede">
+						One name carries size, line-height, tracking and weight <em>together</em>. You never set
+						a font-size next to a line-height by hand; you pick the role, and the role is already
+						tuned.
+					</p>
+				</div>
+
+				<div class="typerows">
+					<div class="typerow">
+						<span class="key"
+							>.t-display<small>Archivo 700 · clamp 30–46px · lh 1.08 · −.022em</small></span
+						>
+						<span><span class="t-display">Xawaash Kitchen</span></span>
+					</div>
+					<div class="typerow">
+						<span class="key"
+							>.t-title<small>Archivo 600 · clamp 21–27px · lh 1.18 · −.014em</small></span
+						>
+						<span><span class="t-title">Tonight's service</span></span>
+					</div>
+					<div class="typerow">
+						<span class="key">.t-section<small>Archivo 600 · 16px · lh 1.4 · −.006em</small></span>
+						<span><span class="t-section">Guest check · table 4</span></span>
+					</div>
+					<div class="typerow">
+						<span class="key">.t-body<small>Plex Sans 400 · 15px · lh 1.6 · max 68ch</small></span>
+						<span
+							><p class="t-body">
+								Adding an item to a billed order re-opens it. Re-opening one that has already been
+								paid needs the owner's PIN, and writes new records rather than rewinding the posted
+								ones.
+							</p></span
+						>
+					</div>
+					<div class="typerow">
+						<span class="key"
+							>.t-caption<small>Plex Sans 400 · 13px · lh 1.45 · --c-ink-2</small></span
+						>
+						<span><span class="t-caption">Business day 14 Sep · POS1 · cashier Amina</span></span>
+					</div>
+					<div class="typerow">
+						<span class="key"
+							>.t-eyebrow<small>Plex Mono 500 · 11px · .16em · uppercase</small></span
+						>
+						<span><span class="t-eyebrow">Session open</span></span>
+					</div>
+				</div>
+
+				<p class="note-inline" style="margin-top: 1rem">
+					Archivo for display, IBM Plex Sans for body — drawn for an equipment maker, which is the
+					right provenance for a till. IBM Plex Mono carries <em>all</em> money, quantities, account
+					codes, invoice numbers and receipt previews.
+				</p>
+			</section>
+
+			<!-- ────────────────────────────────────────────────────────────────── 4 -->
+			<section aria-labelledby="s-money">
+				<div class="sec-head">
+					<div class="t-eyebrow">04 · money</div>
+					<h2 class="t-title" id="s-money">Money is the most important thing on screen</h2>
+					<p class="lede">
+						Mono, tabular figures, right-aligned, so a column of prices can be scanned without being
+						read. A price set in the body face is a bug.
+					</p>
+				</div>
+
+				<div class="tblwrap">
+					<table class="tbl">
+						<caption class="sr-only">
+							Order 1042, table 4 — lines, the tax rate stored on each line, and the amount.
+						</caption>
+						<thead>
+							<tr>
+								<th scope="col">Line</th>
+								<th scope="col">Qty</th>
+								<th scope="col">Rate</th>
+								<th scope="col" class="ta-r">Amount</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td>Bariis iskukaris</td>
+								<td class="money">2</td>
+								<td class="money">5%</td>
+								<td class="money">$18.00</td>
+							</tr>
+							<tr>
+								<td>Digaag qumbe<span class="mod">+ Basbaas</span></td>
+								<td class="money">1</td>
+								<td class="money">5%</td>
+								<td class="money">$11.00<span class="mod money">$0.50</span></td>
+							</tr>
+							<tr>
+								<td>Shaah cadeys</td>
+								<td class="money">3</td>
+								<td class="money">5%</td>
+								<td class="money">$4.50</td>
+							</tr>
+							<tr>
+								<td class="sub-td">Subtotal</td>
+								<td></td>
+								<td></td>
+								<td class="money sub-td">$34.00</td>
+							</tr>
+							<tr>
+								<td class="sub-td">Discount 10% <span class="by">· appr. Owner</span></td>
+								<td></td>
+								<td></td>
+								<td class="money money-neg">−$3.40</td>
+							</tr>
+							<tr>
+								<td class="sub-td">Tax 5% on <span class="money">$30.60</span></td>
+								<td></td>
+								<td></td>
+								<td class="money sub-td">$1.53</td>
+							</tr>
+						</tbody>
+					</table>
+					<div class="totalblock">
+						<span class="lbl">Total due</span>
+						<span class="money money-total">$32.13</span>
+					</div>
+				</div>
+
+				<div class="tblwrap" style="margin-top: 1rem">
+					<table class="tbl">
+						<caption class="sr-only">
+							A refund, shown as a negative amount.
+						</caption>
+						<thead>
+							<tr>
+								<th scope="col">Negative amounts</th>
+								<th scope="col" class="ta-r">Amount</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td>Refund · Hilib ari · invoice <span class="mono">POS1-000318</span></td>
+								<td class="money money-neg">−$14.50</td>
+							</tr>
+							<tr>
+								<td>Pay-out · gas cylinder <span class="by">· appr. Owner</span></td>
+								<td class="money money-neg">−$6.00</td>
+							</tr>
+						</tbody>
+					</table>
+				</div>
+
+				<p class="note-inline" style="margin-top: 1rem">
+					A negative carries a leading <span class="mono">−</span> (U+2212, not a hyphen)
+					<strong>and</strong> <code>--c-danger</code> — never colour alone. Every string above is
+					<em>display only</em>: the UI does no money arithmetic and does no rounding. Cents are
+					integers, one rounding rule lives in one server function, and each line renders the price
+					and the tax rate <strong>stored on that line</strong>, so a later menu change cannot move
+					a past sale.
+				</p>
+			</section>
+
+			<!-- ────────────────────────────────────────────────────────────────── 5 -->
+			<section aria-labelledby="s-status">
+				<div class="sec-head">
+					<div class="t-eyebrow">05 · status</div>
+					<h2 class="t-title" id="s-status">Colour never carries meaning alone</h2>
+					<p class="lede">
+						Roughly one man in twelve has red-green colour vision deficiency, and a counter screen
+						is read under glare. Every state below pairs its colour with a glyph, and most also
+						carry a second signal — a strike-through, a count, an amount.
+					</p>
+				</div>
+
+				<div class="statusgrid">
+					<div class="statuscell">
+						<h3 class="sub">Item</h3>
+						<div class="statusrow">
+							<span class="pill pill-new"><span aria-hidden="true">◇</span> NEW</span>
+							<span class="side"
+								><span class="mark mark-new"
+									><span class="glyph" aria-hidden="true">◇</span> New</span
+								><span class="why">change or delete freely</span></span
+							>
+						</div>
+						<div class="statusrow">
+							<span class="pill pill-sent"><span aria-hidden="true">▲</span> SENT</span>
+							<span class="side"
+								><span class="mark mark-sent"
+									><span class="glyph" aria-hidden="true">▲</span> Sent</span
+								><span class="why">removal is a void, not a delete</span></span
+							>
+						</div>
+						<div class="statusrow">
+							<span class="pill pill-voided"><span aria-hidden="true">✕</span> VOIDED</span>
+							<span class="side"
+								><span class="mark mark-voided"
+									><span class="glyph" aria-hidden="true">✕</span> Voided</span
+								><span class="why">struck through</span></span
+							>
+						</div>
+						<hr class="rule" />
+						<div class="voidline">
+							<span class="mark mark-voided"
+								><span class="glyph" aria-hidden="true">✕</span> Hilib ari</span
+							>
+							<span class="rsn">kitchen error · appr. Owner</span>
+							<span class="money money-neg mono" style="margin-left: auto">−$14.50</span>
+						</div>
+					</div>
+
+					<div class="statuscell">
+						<h3 class="sub">Order</h3>
+						<div class="statusrow">
+							<span class="pill pill-open"><span aria-hidden="true">○</span> OPEN</span>
+							<span class="side"
+								><span class="mark mark-open"
+									><span class="glyph" aria-hidden="true">○</span> Open</span
+								><span class="why">taking items</span></span
+							>
+						</div>
+						<div class="statusrow">
+							<span class="pill pill-billed"><span aria-hidden="true">◐</span> BILLED</span>
+							<span class="side"
+								><span class="mark mark-billed"
+									><span class="glyph" aria-hidden="true">◐</span> Billed</span
+								><span class="why">adding an item re-opens it</span></span
+							>
+						</div>
+						<div class="statusrow">
+							<span class="pill pill-paid"><span aria-hidden="true">●</span> PAID</span>
+							<span class="side"
+								><span class="mark mark-paid"
+									><span class="glyph" aria-hidden="true">●</span> Paid</span
+								><span class="why">re-open needs owner PIN</span></span
+							>
+						</div>
+						<div class="statusrow">
+							<span class="pill pill-voided"><span aria-hidden="true">✕</span> VOIDED</span>
+							<span class="side"
+								><span class="mark mark-voided"
+									><span class="glyph" aria-hidden="true">✕</span> Voided</span
+								><span class="why">before payment</span></span
+							>
+						</div>
+						<div class="statusrow">
+							<span class="pill pill-refunded"><span aria-hidden="true">↩</span> REFUNDED</span>
+							<span class="side"
+								><span class="mark mark-refunded"
+									><span class="glyph" aria-hidden="true">↩</span> Refunded</span
+								><span class="why">after payment — not struck</span></span
+							>
+						</div>
+					</div>
+
+					<div class="statuscell">
+						<h3 class="sub">Table</h3>
+						<div class="statusrow">
+							<span class="pill pill-free"><span aria-hidden="true">○</span> FREE</span>
+							<span class="side"
+								><span class="mark mark-free"
+									><span class="glyph" aria-hidden="true">○</span> Table 2</span
+								><span class="why">outline only</span></span
+							>
+						</div>
+						<div class="statusrow">
+							<span class="pill pill-occupied"><span aria-hidden="true">●</span> OCCUPIED</span>
+							<span class="side"
+								><span class="mark mark-occupied"
+									><span class="glyph" aria-hidden="true">●</span> Table 4</span
+								><span class="money mono">$32.13</span></span
+							>
+						</div>
+						<hr class="rule" />
+						<p class="note-inline">
+							An occupied table always carries the open amount. The filled disc alone is not enough
+							to tell a waiter which table to walk to.
+						</p>
+					</div>
+
+					<div class="statuscell">
+						<h3 class="sub">Sync</h3>
+						<div class="statusrow">
+							<span class="pill pill-online"><span aria-hidden="true">●</span> ONLINE</span>
+							<span class="side"
+								><span class="mark mark-online"
+									><span class="glyph" aria-hidden="true">●</span> Online</span
+								><span class="why">queue empty</span></span
+							>
+						</div>
+						<div class="statusrow">
+							<span class="pill pill-offline"><span aria-hidden="true">◆</span> OFFLINE</span>
+							<span class="side"
+								><span class="mark mark-offline"
+									><span class="glyph" aria-hidden="true">◆</span> Offline</span
+								><span class="why">3 unsynced</span></span
+							>
+						</div>
+						<hr class="rule" />
+						<p class="note-inline">
+							Degraded state is permanent chrome carrying the unsynced count, never a toast — a
+							toast that was missed is indistinguishable from one that never fired.
+						</p>
+					</div>
+				</div>
+
+				<p class="note-inline" style="margin-top: 1rem">
+					<strong>Noted while building this sheet:</strong> <code>tokens.css</code> ships
+					<code>.mark-*</code> and <code>.pill-*</code> for new, sent, voided, billed, paid and
+					offline. Order <em>open</em>, order <em>refunded</em>, table free/occupied and sync
+					<em>online</em> have tokens but no class, so they are composed here from
+					<code>--c-ink-2</code>, <code>--c-st-voided</code>, <code>--c-ink-3</code>,
+					<code>--c-accent</code> and <code>--c-ok</code>. Four classes worth adding upstream.
+				</p>
+			</section>
+
+			<!-- ────────────────────────────────────────────────────────────────── 6 -->
+			<section aria-labelledby="s-controls">
+				<div class="sec-head">
+					<div class="t-eyebrow">06 · controls</div>
+					<h2 class="t-title" id="s-controls">Buttons, fields, and the border that matters</h2>
+					<p class="lede">
+						Press <kbd class="mono">Tab</kbd> to walk this section — every interactive element takes
+						a 2px <code>--c-ring</code> outline at a 2px offset. Removing a focus outline without
+						replacing it is an accessibility regression, not a style choice.
+					</p>
+				</div>
+
+				<div class="panel stack">
+					<h3 class="sub">Buttons</h3>
+					<div class="controls">
+						<button class="btn" type="button">Default</button>
+						<button class="btn btn-primary" type="button">Send to kitchen</button>
+						<button class="btn btn-danger" type="button">Void item</button>
+						<button class="btn" type="button" disabled>Close session</button>
+					</div>
+					<p class="note-inline">
+						A control disabled by a non-empty sync queue must <em>say why</em> rather than sit dead
+						— “Close session” above would read “blocked · 3 unsynced” in place of its label on the
+						real screen.
+					</p>
+				</div>
+
+				<div class="panel stack" style="margin-top: 1.25rem">
+					<h3 class="sub">Fields</h3>
+					<div class="formrow">
+						<div class="field">
+							<label for="f-dish">Dish name</label>
+							<input id="f-dish" type="text" value="Digaag qumbe" autocomplete="off" />
+							<span class="hint">Shown on the kitchen ticket exactly as typed.</span>
+						</div>
+						<div class="field">
+							<label for="f-cat">Category</label>
+							<select id="f-cat">
+								<option>Mains</option>
+								<option>Sides</option>
+								<option>Drinks</option>
+								<option>Desserts</option>
+							</select>
+							<span class="hint">Becomes a tab on the POS grid.</span>
+						</div>
+					</div>
+				</div>
+
+				<div class="stack" style="margin-top: 1.25rem">
+					<h3 class="sub">Two borders, one of which is not a border</h3>
+					<div class="borderdemo">
+						<div class="bd bd-control">
+							<span class="lbl-mono">--c-control-line</span>
+							<span class="r">5.78:1 on --c-raise</span>
+							<span class="note-inline"
+								>The boundary of anything you can touch, type into or press. WCAG 1.4.11 wants 3:1;
+								this clears it comfortably.</span
+							>
+						</div>
+						<div class="bd bd-decor">
+							<span class="lbl-mono">--c-line</span>
+							<span class="r">1.58:1 on --c-raise</span>
+							<span class="note-inline"
+								>Decorative only — a divider, a card edge. Legal there, and
+								<strong>never</strong> legal around an input. Using it on controls is the single
+								biggest reason a screen reads as washed out.</span
+							>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<!-- ────────────────────────────────────────────────────────────────── 7 -->
+			<section aria-labelledby="s-elevation">
+				<div class="sec-head">
+					<div class="t-eyebrow">07 · elevation &amp; radius</div>
+					<h2 class="t-title" id="s-elevation">Three rungs, three radii</h2>
+					<p class="lede">
+						The ladder is declared per theme, because the light rungs carry a white top highlight
+						that is simply wrong on a dark ground. Radius is how a thing behaves, not how big it is:
+						a control, a card, a sheet.
+					</p>
+				</div>
+
+				<div class="stack">
+					<h3 class="sub">Elevation</h3>
+					<div class="rungs">
+						<div class="rung rung-flat">
+							<span class="lbl-mono">--c-shadow-flat</span>
+							<span class="lbl-sub">rows, inputs, anything resting on the page</span>
+						</div>
+						<div class="rung rung-raised">
+							<span class="lbl-mono">--c-shadow-raised</span>
+							<span class="lbl-sub">cards, the guest check, popovers</span>
+						</div>
+						<div class="rung rung-floating">
+							<span class="lbl-mono">--c-shadow-floating</span>
+							<span class="lbl-sub">approval dialogs, reason-code sheets</span>
+						</div>
+					</div>
+				</div>
+
+				<div class="stack" style="margin-top: 1.75rem">
+					<h3 class="sub">Radius</h3>
+					<div class="radii">
+						<div class="rad rad-control">
+							<span class="lbl-mono">--radius-control</span>
+							<span class="lbl-sub">0.5rem · buttons, inputs, keys</span>
+						</div>
+						<div class="rad rad-card">
+							<span class="lbl-mono">--radius-card</span>
+							<span class="lbl-sub">0.75rem · cards, panels, tables</span>
+						</div>
+						<div class="rad rad-sheet">
+							<span class="lbl-mono">--radius-sheet</span>
+							<span class="lbl-sub">1rem · modals and sheets</span>
+						</div>
+					</div>
+				</div>
+			</section>
+
+			<!-- ────────────────────────────────────────────────────────────────── 8 -->
+			<section aria-labelledby="s-touch">
+				<div class="sec-head">
+					<div class="t-eyebrow">08 · touch</div>
+					<h2 class="t-title" id="s-touch">Sized for someone standing up</h2>
+					<p class="lede">
+						Shown on the POS surface, because that is the only place this scale applies — the
+						dashboard is seated, mouse-driven work and uses Tailwind's default density. Press one:
+						the targets are real, not pictures of targets.
+					</p>
+				</div>
+
+				<div class="posframe" data-surface="pos">
+					<div class="touchstack">
+						<button class="tkey t-56" type="button">
+							<span class="what">Modifier · Basbaas</span>
+							<span class="spec">--touch-min · 56px<br />the absolute floor, ≈10mm</span>
+						</button>
+						<button class="tkey t-64" type="button">
+							<span class="what">Table 4</span>
+							<span class="spec">--touch · 64px<br />standard POS target</span>
+						</button>
+						<button class="tkey t-72" type="button">
+							<span class="what">Bariis iskukaris <span class="money mono">$9.00</span></span>
+							<span class="spec">--touch-lg · 72px<br />menu keys, function rail</span>
+						</button>
+						<button class="tkey t-96" type="button">
+							<span class="what">Pay <span class="money mono">$32.13</span></span>
+							<span class="spec">--touch-xl · 96px<br />the one-touch closers</span>
+						</button>
+					</div>
+
+					<div class="refbars">
+						<div class="refbar ref-44">
+							<span>Apple — 44pt minimum</span><span class="spec">44px · too small here</span>
+						</div>
+						<div class="refbar ref-48">
+							<span>Material — 48dp minimum</span><span class="spec">48px · too small here</span>
+						</div>
+					</div>
+				</div>
+
+				<p class="note-inline" style="margin-top: 1rem">
+					Apple's 44pt and Material's 48dp <strong>assume a seated user holding the device</strong>.
+					Touch-accuracy research puts the floor near 9.2mm with the error rate flattening around
+					10mm, and standing-kiosk guidance goes to 20mm — so both platform minimums sit below
+					matcami's floor, drawn dashed above for comparison. Keep at least
+					<code>gap-2</code> between keys as well: spacing reduces mis-taps independently of size.
+					And verify in <em>millimetres on the real hardware</em>, never in pixels in a browser.
+				</p>
+			</section>
+
+			<footer>
+				matcami · design sample 01 of 6 · every colour on this page is a
+				<span class="mono">var(--c-*)</span> from <span class="mono">tokens.css</span>. Reference:
+				<span class="mono">docs/design-system.md</span> ·
+				<span class="mono">docs/pos-layout-grammar.html</span>
+			</footer>
+		</main>
+	</body>
+</html>
