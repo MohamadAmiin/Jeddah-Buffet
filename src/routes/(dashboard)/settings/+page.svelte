@@ -116,6 +116,44 @@
 				hint={`The one currency this restaurant uses. Supported: ${data.supportedCurrencies.join(', ')}.`}
 			/>
 
+			<!--
+				T-29: accepted tenders. Cash is always on. Each of card and mobile
+				money is a tri-state: Not chosen (null on the wire — the till
+				disables the key with the reason), Accepted, or Not accepted. No
+				default anywhere.
+			-->
+			<div class="flex flex-col gap-2">
+				<label for="acceptsCard" class="text-ink font-semibold">Card terminal</label>
+				<select
+					id="acceptsCard"
+					name="acceptsCard"
+					class="border-control-line rounded-md border p-2"
+				>
+					<option value="unset" selected={data.acceptsCard === null}>Not chosen</option>
+					<option value="yes" selected={data.acceptsCard === true}>Accepted</option>
+					<option value="no" selected={data.acceptsCard === false}>Not accepted</option>
+				</select>
+				<span class="text-caption text-ink-2"
+					>Accepted: the till offers a Card key and the cashier records what the terminal approved.</span
+				>
+			</div>
+
+			<div class="flex flex-col gap-2">
+				<label for="acceptsMobile" class="text-ink font-semibold">Mobile money</label>
+				<select
+					id="acceptsMobile"
+					name="acceptsMobile"
+					class="border-control-line rounded-md border p-2"
+				>
+					<option value="unset" selected={data.acceptsMobile === null}>Not chosen</option>
+					<option value="yes" selected={data.acceptsMobile === true}>Accepted</option>
+					<option value="no" selected={data.acceptsMobile === false}>Not accepted</option>
+				</select>
+				<span class="text-caption text-ink-2"
+					>Accepted: the till offers a Mobile key and the cashier records the confirmed transfer.</span
+				>
+			</div>
+
 			<div class="flex flex-wrap items-center gap-3">
 				<!-- The label says WHY it is disabled while a save is in flight: "Saving…"
 				     is the reason, in the one place the owner is already looking. -->

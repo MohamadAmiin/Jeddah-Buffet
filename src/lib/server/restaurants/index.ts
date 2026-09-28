@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { Executor } from '../auth/session';
 import type { DbTx } from '../db/client';
 import { restaurants } from '../db/schema/restaurants';
@@ -92,6 +92,8 @@ export type SettingsChanges = {
 	taxMode?: string;
 	taxRateBp?: number;
 	currencyCode?: string;
+	acceptsCard?: boolean;
+	acceptsMobile?: boolean;
 };
 
 export type UpdateSettingsContext = {
@@ -111,7 +113,8 @@ export type UpdateSettingsResult =
 				| 'invalid_idle_lock'
 				| 'invalid_tax_mode'
 				| 'invalid_tax_rate'
-				| 'invalid_currency';
+				| 'invalid_currency'
+				| 'invalid_tender';
 	  };
 
 // The POS idle lock's SANITY BOUND — not a default (CLAUDE.md, "Decisions already
@@ -212,6 +215,17 @@ export async function updateSettings(
 		}
 	}
 
+	// T-29: accepted tenders. `false` is a chosen answer ("not accepted") and
+	// diffs against null ("not chosen"); undefined means "not submitted, leave
+	// it alone", like every other optional field here. NO default anywhere:
+	// nothing in this module, the schema or the page turns null into false.
+	for (const key of ['acceptsCard', 'acceptsMobile'] as const) {
+		const value = changes[key];
+		if (value === undefined) continue;
+		if (typeof value !== 'boolean') return { ok: false, reason: 'invalid_tender' };
+		if (value !== current[key]) diff[key] = { old: current[key], new: value };
+	}
+
 	// A no-op submission must not produce a meaningless audit row.
 	if (Object.keys(diff).length === 0) return { ok: true, changed: false };
 
@@ -229,12 +243,15 @@ export async function updateSettings(
 	// 11). Adding the column to the payload without widening the condition would
 	// write the audit row and nothing else — and the owner could then never satisfy
 	// settingsComplete().
+	const bumpMenuVersion = Boolean(diff.taxMode || diff.taxRateBp || diff.currencyCode);
 	if (
 		diff.timeZone ||
 		diff.posIdleLockSeconds ||
 		diff.taxMode ||
 		diff.taxRateBp ||
-		diff.currencyCode
+		diff.currencyCode ||
+		diff.acceptsCard ||
+		diff.acceptsMobile
 	) {
 		await tx
 			.update(restaurantSettings)
@@ -244,6 +261,14 @@ export async function updateSettings(
 				...(diff.taxMode ? { taxMode: changes.taxMode! } : {}),
 				...(diff.taxRateBp ? { taxRateBp: changes.taxRateBp! } : {}),
 				...(diff.currencyCode ? { currencyCode: changes.currencyCode! } : {}),
+				...(diff.acceptsCard ? { acceptsCard: changes.acceptsCard! } : {}),
+				...(diff.acceptsMobile ? { acceptsMobile: changes.acceptsMobile! } : {}),
+				// T-29: the ONE menu-version bump on the server side. Inline SQL so
+				// two concurrent saves cannot both read 7 and both write 8. The
+				// convention amendment (CLAUDE.md, 2026-09-28, T-02): restaurants/
+				// may bump menu_version by an inline SQL increment rather than
+				// calling menu/, which it may not import.
+				...(bumpMenuVersion ? { menuVersion: sql`${restaurantSettings.menuVersion} + 1` } : {}),
 				updatedAt: now
 			})
 			.where(eq(restaurantSettings.restaurantId, restaurantId));
