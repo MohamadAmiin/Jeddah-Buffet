@@ -7,7 +7,8 @@ import {
 	pickEmployee,
 	registerDevice,
 	registerRestaurant,
-	signIn
+	signIn,
+	storeRows
 } from './fixtures';
 
 // THE OFFLINE PIN LOGIN (spec 6 and 7; invariants 5, 10 and 12).
@@ -48,27 +49,6 @@ declare global {
 	interface Window {
 		__persistCalls: number;
 	}
-}
-
-/** Every row of one store in the till's IndexedDB, read inside the page. */
-function storeRows<T>(tillPage: Page, store: string): Promise<T[]> {
-	return tillPage.evaluate(
-		(name) =>
-			new Promise<T[]>((resolve, reject) => {
-				const open = indexedDB.open('matcami-pos');
-				open.onerror = () => reject(open.error);
-				open.onsuccess = () => {
-					const db = open.result;
-					const request = db.transaction(name).objectStore(name).getAll();
-					request.onsuccess = () => {
-						db.close();
-						resolve(request.result as T[]);
-					};
-					request.onerror = () => reject(request.error);
-				};
-			}),
-		store
-	);
 }
 
 test.beforeAll(async () => {

@@ -9,6 +9,7 @@
 // `exact: true` because the onboarding checklist carries links whose names contain
 // the same words ("Open the POS page", "Add employees", "Open menu").
 import { expect, type Page } from '@playwright/test';
+import pg from 'pg';
 
 /**
  * The till's landing screen (T-25). `/pos`, with NO trailing slash: it is the
@@ -106,4 +107,161 @@ export async function enterPin(tillPage: Page, pin: string): Promise<void> {
 export async function pickEmployee(tillPage: Page, displayName: string): Promise<void> {
 	await tillPage.getByRole('button', { name: new RegExp(displayName) }).click();
 	await expect(tillPage.getByRole('heading', { name: 'Enter your PIN' })).toBeVisible();
+}
+
+/** Every row of one store in the till's IndexedDB, read inside the page. */
+export function storeRows<T>(tillPage: Page, store: string): Promise<T[]> {
+	return tillPage.evaluate(
+		(name) =>
+			new Promise<T[]>((resolve, reject) => {
+				const open = indexedDB.open('matcami-pos');
+				open.onerror = () => reject(open.error);
+				open.onsuccess = () => {
+					const db = open.result;
+					const request = db.transaction(name).objectStore(name).getAll();
+					request.onsuccess = () => {
+						db.close();
+						resolve(request.result as T[]);
+					};
+					request.onerror = () => reject(request.error);
+				};
+			}),
+		store
+	);
+}
+
+// A READ-ONLY query against the TEST database, mirroring getPool() in
+// src/lib/server/db/test/reset.ts — including the guard, because a query helper
+// that could reach development data is exactly the bug that guard prevents.
+let pool: pg.Pool | undefined;
+
+function testPool(): pg.Pool {
+	if (!pool) {
+		const url = process.env.TEST_DATABASE_URL;
+		if (!url) throw new Error('TEST_DATABASE_URL is not set — refusing to query any database.');
+		const dbName = new URL(url).pathname.replace(/^\//, '');
+		if (!dbName.endsWith('_test')) {
+			throw new Error(`Refusing to query "${dbName}": the database name must end in "_test".`);
+		}
+		pool = new pg.Pool({ connectionString: url, options: '-c timezone=UTC' });
+	}
+	return pool;
+}
+
+export async function dbRows<T>(text: string, params: unknown[] = []): Promise<T[]> {
+	return (await testPool().query(text, params)).rows as T[];
+}
+
+export async function closeDbRows(): Promise<void> {
+	if (pool) {
+		await pool.end();
+		pool = undefined;
+	}
+}
+
+/** Tax, currency and the idle lock: /settings, then /device, each by its rail link. */
+export async function completeSettings(
+	page: Page,
+	s: { taxMode: 'exclusive' | 'inclusive'; taxRateBp: number; currency: string; idleSeconds: number }
+): Promise<void> {
+	await page.getByRole('link', { name: 'Settings', exact: true }).click();
+	await expect(page).toHaveURL(/\/settings$/);
+	await page.getByLabel('Tax mode').fill(s.taxMode);
+	await page.getByLabel('Tax rate (basis points)').fill(String(s.taxRateBp));
+	await page.getByLabel('Currency code').fill(s.currency);
+	await page.getByRole('button', { name: 'Save settings' }).click();
+	await expect(page.getByRole('alert')).toContainText('Settings saved.');
+
+	await page.getByRole('link', { name: 'POS', exact: true }).click();
+	await expect(page).toHaveURL(/\/device$/);
+	await page.getByLabel('Auto-lock after (seconds)').fill(String(s.idleSeconds));
+	await page.getByRole('button', { name: 'Save auto-lock' }).click();
+	await expect(page.getByRole('alert')).toContainText('Auto-lock saved.');
+}
+
+export async function createCategory(page: Page, name: string): Promise<void> {
+	await page.getByRole('link', { name: 'Menu', exact: true }).click();
+	await expect(page).toHaveURL(/\/menu$/);
+	await page.getByLabel('Category name').fill(name);
+	await page.getByRole('button', { name: 'Add category' }).click();
+	await expect(page.getByRole('alert')).toContainText(`${name} added.`);
+}
+
+/** The Price field takes MAJOR units as text, built from the digits — never by division. */
+export async function createMenuItem(
+	page: Page,
+	item: { category: string; name: string; priceMinor: bigint }
+): Promise<void> {
+	await page.getByRole('link', { name: 'Menu', exact: true }).click();
+	await expect(page).toHaveURL(/\/menu$/);
+	await page.getByLabel('Category', { exact: true }).selectOption({ label: item.category });
+	await page.getByLabel('Item name').fill(item.name);
+	const d = String(item.priceMinor).padStart(3, '0');
+	await page.getByLabel('Price', { exact: true }).fill(d.slice(0, -2) + '.' + d.slice(-2));
+	await page.getByRole('button', { name: 'Add item' }).click();
+	await expect(page.getByRole('alert')).toContainText(`${item.name} added.`);
+}
+
+/** The till's keypads take MINOR units as digits: 50000n is five presses and reads 500.00. */
+async function typeMinor(tillPage: Page, amount: bigint): Promise<void> {
+	for (const digit of String(amount)) {
+		await tillPage.getByRole('button', { name: digit, exact: true }).click();
+	}
+}
+
+export async function openSession(tillPage: Page, openingCashMinor: bigint): Promise<void> {
+	await expect(tillPage).toHaveURL(/\/pos\/session$/);
+	await expect(tillPage.getByRole('heading', { name: 'Open a session' })).toBeVisible();
+	await typeMinor(tillPage, openingCashMinor);
+	await tillPage.getByRole('button', { name: 'Open session' }).click();
+	await expect(tillPage).toHaveURL(/\/pos\/order$/);
+}
+
+export async function addItem(tillPage: Page, name: string): Promise<void> {
+	await tillPage
+		.getByRole('tabpanel')
+		.getByRole('button', { name: new RegExp(name) })
+		.click();
+	await expect(tillPage.getByRole('table')).toContainText(name);
+}
+
+export async function chooseOrderType(
+	tillPage: Page,
+	type: 'Sit now' | 'Waiting for a table' | 'Takeaway',
+	options: { tableLabel?: string } = {}
+): Promise<void> {
+	await tillPage.getByRole('button', { name: type, exact: true }).click();
+	if (options.tableLabel !== undefined) {
+		await tillPage.getByLabel('Table', { exact: true }).fill(options.tableLabel);
+		await tillPage.keyboard.press('Tab');
+	}
+	const expected =
+		type === 'Sit now' && options.tableLabel ? `Sit now · Table ${options.tableLabel}` : type;
+	await expect(tillPage.getByRole('heading', { level: 2 })).toHaveText(expected);
+}
+
+export async function payCash(tillPage: Page, tenderedMinor: bigint): Promise<void> {
+	await tillPage.getByRole('button', { name: /^Pay\b/ }).click();
+	await expect(tillPage).toHaveURL(/\/pos\/pay$/);
+	await expect(tillPage.getByRole('heading', { name: 'Amount due' })).toBeVisible();
+	await tillPage
+		.getByRole('group', { name: 'Tender' })
+		.getByRole('button', { name: 'Cash', exact: true })
+		.click();
+	await typeMinor(tillPage, tenderedMinor);
+	await expect(tillPage.getByText('Change due')).toBeVisible();
+	await tillPage.getByRole('button', { name: /^Pay · Cash/ }).click();
+	await expect(tillPage.getByText('● Paid')).toBeVisible();
+}
+
+export async function closeSession(tillPage: Page, countedCashMinor: bigint): Promise<void> {
+	await tillPage.getByRole('link', { name: /Session · business date/ }).click();
+	await expect(tillPage).toHaveURL(/\/pos\/session$/);
+	await expect(tillPage.getByRole('heading', { name: 'Close this session' })).toBeVisible();
+	await expect(tillPage.getByText('◆ Offline — closing needs a connection')).toHaveCount(0);
+	await expect(tillPage.getByText(/operations still syncing/)).toHaveCount(0);
+	await expect(tillPage.getByText(/from a previous registration/)).toHaveCount(0);
+	await typeMinor(tillPage, countedCashMinor);
+	await tillPage.getByRole('button', { name: 'Close session' }).click();
+	await expect(tillPage.getByText('Expected', { exact: true })).toBeVisible();
 }
