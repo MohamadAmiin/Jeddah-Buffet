@@ -68,7 +68,8 @@ export type OfflineLogin = {
 	event: string;
 	occurredAt: string;
 	outcome: 'success' | 'failed';
-	synced: false;
+	synced: boolean;
+	parked?: true;
 };
 
 /** One order on this till. `cart` is T-24's Cart; typed as a parameter so this
@@ -507,8 +508,11 @@ export function countUnsynced(): Promise<number> {
 				let queued = 0;
 				const loginsRequest = tx.objectStore('offline_logins').getAll();
 				loginsRequest.onsuccess = () => {
-					const rows = loginsRequest.result as Array<{ synced?: unknown }>;
-					logins = rows.filter((row) => row.synced === false).length;
+					const rows = loginsRequest.result as Array<{
+						synced?: unknown;
+						parked?: unknown;
+					}>;
+					logins = rows.filter((row) => row.synced === false && row.parked !== true).length;
 				};
 				const queueRequest = tx.objectStore('sync_queue').getAll();
 				queueRequest.onsuccess = () => {
@@ -522,14 +526,62 @@ export function countUnsynced(): Promise<number> {
 	);
 }
 
-/** Sync_queue rows in state `'parked'`. Their own chrome. */
+/** Sync_queue rows in state `'parked'` PLUS offline_logins with parked=true. */
 export function countParked(): Promise<number> {
 	return withDb(
 		(db) =>
 			new Promise<number>((resolve, reject) => {
-				const tx = db.transaction('sync_queue', 'readonly');
-				const request = tx.objectStore('sync_queue').index('state').count('parked');
-				request.onsuccess = () => resolve(request.result);
+				const tx = db.transaction(['sync_queue', 'offline_logins'], 'readonly');
+				let queued = 0;
+				let logins = 0;
+				const queueRequest = tx.objectStore('sync_queue').index('state').count('parked');
+				queueRequest.onsuccess = () => {
+					queued = queueRequest.result;
+				};
+				const loginsRequest = tx.objectStore('offline_logins').getAll();
+				loginsRequest.onsuccess = () => {
+					const rows = loginsRequest.result as Array<{ parked?: unknown }>;
+					logins = rows.filter((row) => row.parked === true).length;
+				};
+				tx.oncomplete = () => resolve(queued + logins);
+				tx.onerror = () => reject(tx.error);
+				tx.onabort = () => reject(tx.error ?? new Error('transaction aborted'));
+			})
+	);
+}
+
+/** T-25: mark an offline_logins row synced after a successful POST. */
+export function markOfflineLoginSynced(clientOpId: string): Promise<void> {
+	return withDb(
+		(db) =>
+			new Promise<void>((resolve, reject) => {
+				const tx = db.transaction('offline_logins', 'readwrite');
+				const store = tx.objectStore('offline_logins');
+				const request = store.get(clientOpId);
+				request.onsuccess = () => {
+					const row = request.result as OfflineLogin | undefined;
+					if (row) store.put({ ...row, synced: true });
+				};
+				tx.oncomplete = () => resolve();
+				tx.onerror = () => reject(tx.error);
+				tx.onabort = () => reject(tx.error ?? new Error('transaction aborted'));
+			})
+	);
+}
+
+/** T-25: park an offline_logins row when the server refuses it out of contract. */
+export function markOfflineLoginParked(clientOpId: string): Promise<void> {
+	return withDb(
+		(db) =>
+			new Promise<void>((resolve, reject) => {
+				const tx = db.transaction('offline_logins', 'readwrite');
+				const store = tx.objectStore('offline_logins');
+				const request = store.get(clientOpId);
+				request.onsuccess = () => {
+					const row = request.result as OfflineLogin | undefined;
+					if (row) store.put({ ...row, parked: true });
+				};
+				tx.oncomplete = () => resolve();
 				tx.onerror = () => reject(tx.error);
 				tx.onabort = () => reject(tx.error ?? new Error('transaction aborted'));
 			})
