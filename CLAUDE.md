@@ -24,11 +24,11 @@ If a change breaks one, stop and say so.
 ## Tests that are mandatory, not optional (spec 29)
 
 A change in these areas without its test is not done.
-- Money arithmetic and rounding; tax calculated in **both** modes.
-- Journal entries always balance — property test over generated events, plus the DB rejecting an unbalanced entry.
-- One posting-rule test per business event in the spec 24 table.
-- Offline sync: retries never create duplicates.
-- A permission check test on every POS API route.
+- Money arithmetic and rounding; tax calculated in **both** modes. — held by: `src/lib/money/index.test.ts`, `src/lib/money/tax.test.ts`, `src/lib/money/format.test.ts`, `src/lib/pos/menu-view.test.ts` (the source tripwire), `src/lib/pos/orders.test.ts`, `src/lib/server/db/schema-guards/schema.test.ts`, `src/lib/server/db/schema-guards/constraints.integration.test.ts`, `src/lib/server/restaurants/settings.integration.test.ts`, `src/lib/server/reports/sales.integration.test.ts`, `src/routes/(dashboard)/menu/helpers.test.ts`, `src/routes/api/menu/menu-api.integration.test.ts`
+- Journal entries always balance — property test over generated events, plus the DB rejecting an unbalanced entry. — held by: `src/lib/server/accounting/journal.integration.test.ts` (property test), `src/lib/server/accounting/journal-guards.integration.test.ts` (COMMIT-time rejection, append-only)
+- One posting-rule test per business event in the spec 24 table. — held by: `src/lib/server/accounting/posting-rules.test.ts`, `src/lib/server/orders/pay.integration.test.ts`, `src/lib/server/pos-sessions/sessions.integration.test.ts`
+- Offline sync: retries never create duplicates. — held by: `src/lib/server/orders/sync.integration.test.ts`, `src/lib/pos/queue.test.ts`, `src/lib/pos/store.test.ts`, `src/lib/server/db/schema-guards/constraints.integration.test.ts`, `src/routes/api/pos/pin/pin.integration.test.ts`, `src/routes/(dashboard)/reports/flagged/flagged.integration.test.ts`, `e2e/pos-sale.spec.ts`, `e2e/pos-offline.spec.ts`
+- A permission check test on every POS API route. — held by: `src/routes/api/pos/permissions.integration.test.ts`, `src/routes/route-guards.test.ts`, `src/routes/route-guards.integration.test.ts`, `src/lib/server/permissions/guards.test.ts`, `src/routes/api/pos/employees/employees.integration.test.ts`, `src/routes/api/pos/pin/pin.integration.test.ts`, `src/routes/api/pos/register/register.integration.test.ts`, `src/routes/api/menu/version/version.integration.test.ts`, `src/routes/api/menu/menu-api.integration.test.ts`, `src/routes/(dashboard)/device/revoke.integration.test.ts`, `src/routes/(dashboard)/reports/reports.integration.test.ts`, `src/routes/(dashboard)/reports/flagged/flagged.integration.test.ts`
 
 ## Where code lives
 
@@ -40,27 +40,27 @@ src/
     server/
       db/           Drizzle schema (one file per aggregate), generated migrations, client — the ONLY place tables are defined
       money/        ONLY money helpers that touch the DB — the arithmetic is src/lib/money/
-      accounting/   chart of accounts, posting rules (one per business event), journal writer
-      inventory/    stock movements, recipes + unit conversion, weighted-average costing
-      orders/       order/item lifecycle, split & merge bills, THE payment transaction
+      accounting/   chart of accounts (chart.ts: the 23 spec 23 codes verbatim, ensureChart), posting rules (posting-rules.ts: one rule per business event, nobody types a debit), journal writer (journal.ts: drops zero lines, never opens its own transaction; migration 0012's deferred trigger enforces the balance at COMMIT)
+      inventory/    consume.ts — consumeForSale, the payment transaction's inventory step; a documented NO-OP (no movements, zero cost, no COGS entry) until the inventory plan lands recipes and stock movements
+      orders/       validate.ts (the sale payload: hard failures and soft flags), pay.ts (THE payment transaction — recordSale), sync.ts (handleOp: dispatch, replay by op key, unrecorded storage, retry and dismiss); reached only through /api/pos/sync, invoice-hint.ts (lastInvoiceSeqForDevice — the resume hint GET /api/pos/employees returns)
       auth/         cookie sessions, PIN hash + lockout, POS device registration
-      permissions/  RBAC checks + owner-PIN approval gates; roles.ts holds the owner-editable roles and the permissionsForUser resolver (calls audit/ only)
+      permissions/  RBAC checks + owner-PIN approval gates; roles.ts holds the owner-editable roles and the permissionsForUser resolver (calls audit/ only); employee.ts — checkEmployee for device-sourced ops
       audit/        audit log writer
       restaurants/  restaurant record, settings, and the onRestaurantCreated initializer list
-      pos-sessions/ POS shift open (attach) and close (expected cash, over/short to 6800), business date in SQL — called by orders/sync.ts; calls accounting/, permissions/, audit/
-      reports/      read-only report queries over STORED columns (sales by business date, sessions, flagged ops) — called by (dashboard) routes; never recomputes money
+      pos-sessions/ index.ts: POS shift open (attach) and close (expected cash, over/short to 6800), business date in SQL — called by orders/sync.ts; calls accounting/, permissions/, audit/
+      reports/      sales.ts (salesReport, defaultReportDate) and flagged.ts (listUnresolvedOps, countUnresolvedOps, summarizeOp): read-only report queries over STORED columns (sales by business date, sessions, flagged ops) — called by (dashboard) routes; never recomputes money
     money/          ISOMORPHIC: integer minor units, allocation, THE rounding rule, tax in both modes — imported by lib/server/** AND by (pos)
-    sync-ops/       ISOMORPHIC: op kinds, payloads, status and flag lists, invoice-number format — imported by lib/server/**, lib/pos/ and (pos); imports nothing
-    pos/            IndexedDB, sync queue, service worker, device invoice sequence, print-agent client
+    sync-ops/       index.ts — ISOMORPHIC: op kinds, payloads, status and flag lists, invoice-number format (formatInvoiceNumber, parseInvoiceNumber) — imported by lib/server/**, lib/pos/ and (pos); imports nothing
+    pos/            store.ts (IndexedDB version 3), queue.ts (the flush), invoice-sequence.ts, orders.ts, session.ts, employee.svelte.ts, menu-view.ts, idle.ts, menu-snapshot.ts — and, in a later plan, the print-agent client
     components/ui/  shared dashboard primitives — Button, Field, CheckField, SelectField, PinField, Table, Card, PageHeader, Alert, StatusMark, ThemeToggle; they implement `docs/design-system.md` §7b
     styles/         tokens.css — THE design tokens; no colour, size or type literal lives anywhere else
   routes/
     login/          email + password sign-in — OUTSIDE the route groups: reachable without a session
     register/       PUBLIC sign-up: anyone creates a company (throttle, 3/address/day, SIGNUP switch) — likewise outside the groups
     logout/         form action only; its load returns 405 so a GET cannot sign anyone out — likewise outside the groups
-    (dashboard)/    owner/admin: menu, purchases, expenses, reports — online only
-    (pos)/pos/      POS shell at the REAL /pos/... URL prefix: PIN login, orders, payment, session open/close — MUST work offline. The group name is not a URL segment; the inner pos/ directory is what creates the path
-    api/            JSON endpoints: POS sync, menu version/snapshot — no printing endpoint, printing is local
+    (dashboard)/    owner/admin: menu, purchases, expenses, reports (/reports, /reports/flagged) — online only
+    (pos)/pos/      POS shell at the REAL /pos/... URL prefix: PIN login, orders, payment, session open/close — MUST work offline. The group name is not a URL segment; the inner pos/ directory is what creates the path. Client-rendered (+layout.ts: ssr = false) so the ONE cached shell routes by URL on an offline reload
+    api/            JSON endpoints: POS sync (/api/pos/sync, one op per request, device + employee checked), menu version/snapshot — no printing endpoint, printing is local
 ```
 
 Migrations live in `src/lib/server/db/migrations` (point `drizzle.config.ts` there), are COMMITTED, and are NEVER hand-edited once they have run — add a new one instead. A GENERATED migration may be reordered by hand BEFORE its first run, only when drizzle-kit cannot express the change and only with the reason written at the top of the file; the one precedent is 0010's enum rebuild, which must drop and recreate the three users constraints drizzle-kit does not know depend on the type. generate --custom is for DATA (seeds, backfills): its snapshot is a copy of the previous one, so a schema change written that way leaves a drift the next db:generate re-emits.
@@ -125,6 +125,9 @@ Three pins look wrong and are not: **Node 24.21.0** (`vitest@5` excludes Node 25
 - **Pay-out** — cash out of the drawer at the POS; it becomes an expense entry automatically.
 - **Print agent** — local ESC/POS service owning the printers and drawer; the browser NEVER talks to hardware. Queues jobs while a printer is down; reprints are marked COPY.
 - **Menu version** — integer the POS compares against `/api/menu/version`; on a mismatch it downloads the FULL snapshot and replaces its local copy. No change-only sync.
+- **Sync op** — one queued operation from the till (`session.open`, `session.close`, `sale.complete`, `sale.abandoned`, `pin.login`) in an `OpEnvelope` with a device-generated `clientOpId`; the server keys it on `(device_id, client_op_id)` in `pos_sync_ops` and replays the stored result on a retry. A sync op is a log row, not a posted record: its `status` may move on owner retry or dismiss; the records it produced never do.
+- **Flagged sale (recorded / unrecorded)** — a synced `sale.complete` that failed a check. RECORDED (`recorded_flagged`): a SOFT failure — employee inactive, unknown or not permitted, totals mismatch, stale-menu price, closed session, clock ahead — the sale is stored in full from the device's numbers, posted and invoiced, and the op row carries the flag and the `order_id`. UNRECORDED (`unrecorded`): a HARD failure — invalid payload, price tamper, unknown session, item or modifier, invoice collision, database error — nothing is posted; the payload stays on the op row for the owner's retry or dismiss on `/reports/flagged`, and session close is refused with 409 while one references the session. Never discarded (spec 6).
+- **Abandoned sale** — a card or mobile tender the server rejected (403 or 422) or the cashier cancelled while pending. The till sends `sale.abandoned` carrying the burned invoice number so the device sequence stays gap-free and the hole is explained; no order, invoice, payment or journal entry exists for it.
 
 ## Open decisions — UNRESOLVED (spec 33)
 

@@ -14,6 +14,23 @@
 - Every write takes a transaction handle. The payment transaction is
   all-or-nothing and it owns the boundary (invariant 4).
 
+## Files
+
+- `chart.ts` — `CHART` (spec 23's 23 rows), `ensureChart` (idempotent, `ON CONFLICT DO NOTHING`),
+  `accountIdByCode`.
+- `posting-rules.ts` — `saleLines` → `Dr 1000|1020|1030 total / Dr 4100 discount / Cr 4000
+subtotal / Cr 2100 tax`; `cogsLines` → `Dr 5000 / Cr 1200`; `overShortLines` → `Dr 6800 /
+Cr 1000` for a shortage, `Dr 1000 / Cr 6800` for an overage, nothing for zero.
+- `journal.ts` — `postEntry`: drops `0n` lines, returns `null` when none remain, resolves
+  accounts by code within the restaurant; the deferred trigger of migration 0012 is what
+  enforces the balance at COMMIT.
+- `index.ts` — the module's public exports.
+- `chart.integration.test.ts` — the seed is complete, verbatim and idempotent.
+- `posting-rules.test.ts` — one case per spec 24 event, and generated orders that all balance.
+- `journal.integration.test.ts` — generated events all balance at COMMIT; an unbalanced entry
+  is rejected there.
+- `journal-guards.integration.test.ts` — the COMMIT-time rejection and the append-only triggers.
+
 Called by `orders/` and, for the chart seed only, by `restaurants/` (amendment recorded by T-02 of tasks/pos-sales, 2026-09-28). Never calls either back.
 
 **Must never be imported by** client-side code or `src/lib/pos/`.

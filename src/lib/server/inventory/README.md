@@ -21,6 +21,13 @@ Stock movements, recipes + unit conversion, weighted-average costing.
 
 No inventory tables exist yet. `consumeForSale` in `consume.ts` is the seam the payment transaction (`orders/pay.ts`, T-19) calls in spec 13's "Deduct Inventory" slot; today it takes the caller's `tx` and returns `{ movements: [], cogsMinor: 0n }`. The inventory plan will replace its body with recipe × quantity deductions (modifiers included) costed at the weighted average and return the movements and their total cost. Until then no stock movement is written and no COGS entry is posted, so gross profit equals revenue in the books, and sales recorded before recipes exist will never carry COGS (invariant 2 — posted records are permanent, so no back-fill).
 
+## Files
+
+- `consume.ts` — `consumeForSale` returns `[]` movements and `0n` cost: the seam the inventory
+  plan fills. The rules above about movements and weighted average describe that plan, not this
+  file.
+- `consume.test.ts` — the no-op's contract: no movements, zero cost.
+
 Called by `orders/`. Never calls `orders/` back.
 
 **Must never be imported by** client-side code or `src/lib/pos/`.
