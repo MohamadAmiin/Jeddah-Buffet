@@ -34,5 +34,18 @@ export const EVENT_TEXT: Record<AuditEventName, string> = {
 	'sync.op_retried': 'Flagged operation retried',
 	'sync.op_dismissed': 'Flagged operation dismissed',
 	'pos.pin.offline_success': 'Signed in at the POS while offline',
-	'pos.pin.offline_failed': 'Failed POS sign-in attempt while offline'
+	'pos.pin.offline_failed': 'Failed POS sign-in attempt while offline',
+	'ingredient.created': 'Ingredient added',
+	'ingredient.updated': 'Ingredient changed',
+	'ingredient.archived': 'Ingredient archived',
+	'purchase_unit.added': 'Purchase unit added to an ingredient',
+	'purchase_unit.archived': 'Purchase unit archived',
+	'recipe.changed': 'Recipe changed',
+	'purchase.recorded': 'Recorded a delivery',
+	'purchase.reversed': 'Reversed a delivery',
+	'supplier.paid': 'Paid a supplier',
+	'supplier.payment_reversed': 'Reversed a supplier payment',
+	'waste.recorded': 'Recorded waste',
+	'stock.counted': 'Posted a stock count',
+	'opening_stock.recorded': 'Recorded opening stock'
 };
