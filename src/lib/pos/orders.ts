@@ -9,7 +9,7 @@
 import { withDb, valueOf, signalUnsyncedChange, type LocalOrder } from './store';
 import { computeOrderTotals, type OrderTotals } from '../money/order-totals';
 import { changeDue } from '../money/change';
-import { minor, ROUNDING_RULE, type Minor } from '../money';
+import { add, minor, multiplyByInteger, ROUNDING_RULE, sum, type Minor } from '../money';
 import type { TaxMode } from '../money/tax';
 import {
 	PAYMENT_METHODS,
@@ -206,6 +206,34 @@ function toTotalsLine(l: CartLine) {
 
 export function cartTotals(cart: Cart, taxMode: TaxMode): OrderTotals {
 	return computeOrderTotals({ taxMode, lines: cart.lines.map(toTotalsLine) }, ROUNDING_RULE);
+}
+
+/** A new cart with the order type and table replaced; lines untouched.
+ * Takeaway always drops the table. */
+export function setOrderType(
+	cart: Cart,
+	orderType: Cart['orderType'],
+	tableLabel: string | null
+): Cart {
+	let label: string | null = null;
+	if (orderType === 'dine_in' && typeof tableLabel === 'string') {
+		const trimmed = tableLabel.trim();
+		if (trimmed.length > 32) throw new Error('table label is at most 32 characters');
+		label = trimmed.length === 0 ? null : trimmed;
+	}
+	return { ...cart, orderType, tableLabel: label };
+}
+
+/** Each line's (unit price + Σ modifier deltas) × quantity, exact, unrounded.
+ * computeOrderTotals derives the same integer internally but returns only
+ * Exact tax figures, so the till recomputes it with the same three calls. */
+export function lineAmounts(cart: Cart): Minor[] {
+	return cart.lines.map((line) =>
+		multiplyByInteger(
+			add(minor(line.unitPriceMinor), sum(line.modifiers.map((m) => minor(m.priceDeltaMinor)))),
+			BigInt(line.quantity)
+		)
+	);
 }
 
 export type CompleteSaleArgs = {

@@ -10,8 +10,10 @@ import {
 	cartTotals,
 	changeQuantity,
 	completeSale,
+	lineAmounts,
 	newCart,
 	removeLine,
+	setOrderType,
 	type Cart,
 	type MenuItemForCart,
 	type MenuModifierForCart
@@ -369,5 +371,78 @@ describe('unsynced count follows the queue', () => {
 			})
 		);
 		expect(await countUnsynced()).toBe(2);
+	});
+});
+
+describe('T-33 cart helpers', () => {
+	const tea33: MenuItemForCart = { id: 'item-tea', name: 'Tea', priceMinor: 850n, taxRateBp: null };
+	const coffee33: MenuItemForCart = {
+		id: 'item-coffee',
+		name: 'Coffee',
+		priceMinor: 1000n,
+		taxRateBp: null
+	};
+	const oat: MenuModifierForCart = { id: 'mod-oat', name: 'Oat', priceDeltaMinor: 50n };
+
+	function doneWhenCart(): Cart {
+		let cart = newCart('device-A', 'dine_in', null, NOW);
+		cart = addLine(cart, tea33, 825);
+		cart = addLine(cart, coffee33, 825, [oat]);
+		return cart;
+	}
+
+	it('MANDATORY (spec 29): line amounts and totals in both tax modes agree', () => {
+		const cart = doneWhenCart();
+		expect(lineAmounts(cart)).toEqual([850n, 1050n]);
+		expect(cart.lines.map((l) => l.taxRateBp)).toEqual([825, 825]);
+
+		const exclusive = cartTotals(cart, 'exclusive');
+		expect([exclusive.subtotal, exclusive.discount, exclusive.tax, exclusive.total]).toEqual([
+			1900n,
+			0n,
+			157n,
+			2057n
+		]);
+		const inclusive = cartTotals(cart, 'inclusive');
+		expect([inclusive.subtotal, inclusive.discount, inclusive.tax, inclusive.total]).toEqual([
+			1755n,
+			0n,
+			145n,
+			1900n
+		]);
+
+		const summed = lineAmounts(cart).reduce((acc, v) => acc + v, 0n);
+		expect(summed).toBe(exclusive.subtotal);
+		expect(summed).toBe(inclusive.total);
+	});
+
+	it('two taps are two lines; quantity is absolute; removal renumbers', () => {
+		let cart = newCart('device-A', 'dine_in', null, NOW);
+		cart = addLine(cart, tea33, 825);
+		cart = addLine(cart, tea33, 825);
+		expect(cart.lines.map((l) => l.lineNo)).toEqual([1, 2]);
+
+		cart = doneWhenCart();
+		const teaLineId = cart.lines[0].lineId;
+		cart = changeQuantity(cart, teaLineId, 3);
+		expect(cart.lines[0].quantity).toBe(3);
+		expect(lineAmounts(cart)).toEqual([2550n, 1050n]);
+		expect(() => changeQuantity(cart, teaLineId, 0)).toThrow();
+
+		cart = addLine(cart, tea33, 825);
+		cart = removeLine(cart, cart.lines[0].lineId);
+		expect(cart.lines.map((l) => l.lineNo)).toEqual([1, 2]);
+	});
+
+	it('setOrderType trims, drops the table for takeaway, and leaves lines alone', () => {
+		const cart = doneWhenCart();
+		const seated = setOrderType(cart, 'dine_in', ' 12 ');
+		expect(seated.orderType).toBe('dine_in');
+		expect(seated.tableLabel).toBe('12');
+		expect(seated.orderId).toBe(cart.orderId);
+		expect(seated.lines.map((l) => l.lineId)).toEqual(cart.lines.map((l) => l.lineId));
+		expect(setOrderType(cart, 'dine_in', '').tableLabel).toBeNull();
+		expect(setOrderType(cart, 'takeaway', '12').tableLabel).toBeNull();
+		expect(() => setOrderType(cart, 'dine_in', 'x'.repeat(33))).toThrow();
 	});
 });
