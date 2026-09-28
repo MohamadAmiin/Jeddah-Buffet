@@ -210,7 +210,10 @@ describe('the movement rules — MANDATORY property test (spec 29)', () => {
 		}
 		// Every kind was exercised many times, so the property is not vacuous.
 		for (const count of Object.values(kinds)) expect(count).toBeGreaterThan(10000);
-	});
+		// ~100,000 steps with seven assertions each: about 4 s alone and nearly 7 s
+		// under the full suite's load, so the 5 s default made this mandatory gate
+		// flaky. The count is not lowered; the time budget is raised.
+	}, 30_000);
 });
 
 describe('costing source tripwire', () => {
