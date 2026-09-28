@@ -550,7 +550,7 @@ export function flush(
 						continue;
 					}
 					if (body.error === 'session_has_unrecorded_ops') {
-						const count = Number(body.count ?? 0);
+						const count = typeof body.count === 'number' ? body.count : 0;
 						await markEntry(entry.clientOpId, (row) => ({
 							...row,
 							state: 'pending',
