@@ -22,7 +22,7 @@ import {
 	type RuleLine
 } from './posting-rules';
 import type { JournalSourceType } from './journal';
-import { postEntry, entryLines } from './journal';
+import { postEntry, postReversal, entryLines } from './journal';
 import { db } from '../db/client';
 import { onRestaurantCreated } from '../restaurants';
 import { restaurants } from '../db/schema/restaurants';
@@ -167,6 +167,7 @@ describe('MANDATORY (spec 29) — 300 generated events all balance at COMMIT', (
 		const next = generator(20260929n);
 		const kept: string[] = [];
 		const posted = new Set<PostingEvent>();
+		let reversed = 0;
 		await db.transaction(async (tx) => {
 			for (let i = 0; i < 300; i++) {
 				const kind = POSTING_EVENTS[i % POSTING_EVENTS.length];
@@ -185,8 +186,22 @@ describe('MANDATORY (spec 29) — 300 generated events all balance at COMMIT', (
 					posted.add(kind);
 				}
 			}
+			// tasks/inventory-cogs T-14: reverse a seeded half of them in the same
+			// transaction; every mirror must balance at COMMIT too.
+			for (const entryId of [...kept]) {
+				if ((next() >> 16n) % 2n === 0n) continue;
+				const reversal = await postReversal(tx, {
+					restaurantId,
+					entryId,
+					businessDate: '2026-09-28',
+					memo: `reverse ${entryId}`
+				});
+				kept.push(reversal.entryId);
+				reversed++;
+			}
 		});
 		expect(posted.size).toBe(POSTING_EVENTS.length);
+		expect(reversed).toBeGreaterThan(50);
 
 		const summary = await testDb().execute(sql`
 			select entry_id::text as entry_id,
@@ -444,5 +459,181 @@ describe('trigger-message tripwire', () => {
 		} catch (err) {
 			expect(underlyingMessage(err)).toMatch(/is not balanced|has no lines/);
 		}
+	});
+});
+
+describe('postReversal (tasks/inventory-cogs T-14)', () => {
+	/** Drizzle wraps the pg error; find the one carrying a SQLSTATE. */
+	function pgError(err: unknown): { code?: string; constraint?: string } {
+		let cur: unknown = err;
+		const seen = new Set<unknown>();
+		while (cur && !seen.has(cur)) {
+			seen.add(cur);
+			if ((cur as { code?: unknown }).code) return cur as { code: string; constraint?: string };
+			cur = (cur as { cause?: unknown }).cause;
+		}
+		return {};
+	}
+
+	async function counts(): Promise<{ entries: string; lines: string }> {
+		const [e] = await testDb()
+			.select({ c: sql<string>`count(*)::text` })
+			.from(journalEntries);
+		const [l] = await testDb()
+			.select({ c: sql<string>`count(*)::text` })
+			.from(journalEntryLines);
+		return { entries: e.c, lines: l.c };
+	}
+
+	async function postCreditPurchase(): Promise<string> {
+		let entryId = '';
+		await db.transaction(async (tx) => {
+			const result = await postEntry(tx, {
+				restaurantId,
+				businessDate: '2026-09-27',
+				event: 'purchase_on_credit',
+				sourceType: 'purchase',
+				sourceId: randomUUID(),
+				memo: 'delivery',
+				lines: purchaseLines('credit', minor(11000n))
+			});
+			entryId = result!.entryId;
+		});
+		return entryId;
+	}
+
+	it('mirrors a purchase on credit: Dr 2000 / Cr 1200 on the given date; the original is unchanged', async () => {
+		const originalId = await postCreditPurchase();
+		const [before] = await testDb()
+			.select()
+			.from(journalEntries)
+			.where(eq(journalEntries.id, originalId));
+		const beforeLines = await entryLines(testDb(), originalId);
+
+		let reversalId = '';
+		await db.transaction(async (tx) => {
+			reversalId = (
+				await postReversal(tx, {
+					restaurantId,
+					entryId: originalId,
+					businessDate: '2026-09-28',
+					memo: 'wrong delivery'
+				})
+			).entryId;
+		});
+
+		expect(await entryLines(testDb(), reversalId)).toEqual([
+			{ lineNo: 1, code: '1200', name: 'Inventory', debit: 0n, credit: 11000n },
+			{ lineNo: 2, code: '2000', name: 'Accounts Payable', debit: 11000n, credit: 0n }
+		]);
+		const [reversal] = await testDb()
+			.select()
+			.from(journalEntries)
+			.where(eq(journalEntries.id, reversalId));
+		expect(reversal.event).toBe('purchase_on_credit');
+		expect(reversal.sourceType).toBe(before.sourceType);
+		expect(reversal.sourceId).toBe(before.sourceId);
+		expect(reversal.reversesEntryId).toBe(originalId);
+		expect(reversal.businessDate).toBe('2026-09-28');
+		expect(reversal.memo).toBe('wrong delivery');
+
+		const [after] = await testDb()
+			.select()
+			.from(journalEntries)
+			.where(eq(journalEntries.id, originalId));
+		expect(after).toEqual(before);
+		expect(await entryLines(testDb(), originalId)).toEqual(beforeLines);
+	});
+
+	it('a second reversal of the same entry fails with 23505 and writes nothing', async () => {
+		const originalId = await postCreditPurchase();
+		await db.transaction(async (tx) => {
+			await postReversal(tx, {
+				restaurantId,
+				entryId: originalId,
+				businessDate: '2026-09-28',
+				memo: 'first'
+			});
+		});
+		const before = await counts();
+		let caught: unknown;
+		try {
+			await db.transaction(async (tx) => {
+				await postReversal(tx, {
+					restaurantId,
+					entryId: originalId,
+					businessDate: '2026-09-28',
+					memo: 'second'
+				});
+			});
+		} catch (err) {
+			caught = err;
+		}
+		expect(pgError(caught)).toMatchObject({
+			code: '23505',
+			constraint: 'journal_entries_reverses_entry_unique'
+		});
+		expect(await counts()).toEqual(before);
+	});
+
+	it('a reversal cannot be reversed', async () => {
+		const originalId = await postCreditPurchase();
+		let reversalId = '';
+		await db.transaction(async (tx) => {
+			reversalId = (
+				await postReversal(tx, {
+					restaurantId,
+					entryId: originalId,
+					businessDate: '2026-09-28',
+					memo: 'first'
+				})
+			).entryId;
+		});
+		await expect(
+			db.transaction(async (tx) => {
+				await postReversal(tx, {
+					restaurantId,
+					entryId: reversalId,
+					businessDate: '2026-09-28',
+					memo: 'undo the undo'
+				});
+			})
+		).rejects.toThrow('a reversal cannot be reversed');
+	});
+
+	it("another restaurant's entry is not found and nothing is written", async () => {
+		const originalId = await postCreditPurchase();
+		const otherRestaurant = await makeRestaurant('Other Cafe');
+		const before = await counts();
+		await expect(
+			db.transaction(async (tx) => {
+				await postReversal(tx, {
+					restaurantId: otherRestaurant,
+					entryId: originalId,
+					businessDate: '2026-09-28',
+					memo: 'cross-tenant'
+				});
+			})
+		).rejects.toThrow('journal entry not found');
+		expect(await counts()).toEqual(before);
+	});
+
+	it('a bad business date throws TypeError before any query', async () => {
+		const originalId = await postCreditPurchase();
+		let caught: unknown;
+		try {
+			await db.transaction(async (tx) => {
+				await postReversal(tx, {
+					restaurantId,
+					entryId: originalId,
+					businessDate: '2026-9-28',
+					memo: 'bad date'
+				});
+			});
+		} catch (err) {
+			caught = err;
+		}
+		expect(caught).toBeInstanceOf(TypeError);
+		expect((caught as Error).message).toMatch(/YYYY-MM-DD/);
 	});
 });
