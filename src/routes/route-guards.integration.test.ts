@@ -1,4 +1,4 @@
-// MANDATORY (spec 29 — "Permission checks on every POS API")
+﻿// MANDATORY (spec 29 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â "Permission checks on every POS API")
 //
 // The behavioural half. route-guards.test.ts is a source-text tripwire and can be
 // satisfied by a guard call sitting in a comment; THIS file drives the real hook
@@ -9,6 +9,7 @@ import type { RequestEvent } from '@sveltejs/kit';
 import { testDb, closeTestDb } from '$lib/server/db/test/db';
 import { restaurants } from '$lib/server/db/schema/restaurants';
 import { users } from '$lib/server/db/schema/users';
+import { seedStaff } from '$lib/server/db/test/seed';
 import { hashPassword } from '$lib/server/auth/password';
 import { createSession, SESSION_COOKIE } from '$lib/server/auth/session';
 import { handleSession, handleGuard } from '../hooks.server';
@@ -26,30 +27,34 @@ const DASHBOARD_ROUTE_IDS = [
 	'/(dashboard)/settings',
 	'/(dashboard)/device',
 	'/(dashboard)/employees',
+	'/(dashboard)/employees/[id]',
+	'/(dashboard)/employees/roles',
 	'/(dashboard)/menu'
 ];
 const NON_PUBLIC_ROUTE_IDS = [...DASHBOARD_ROUTE_IDS, '/logout'];
 
-async function makeUser(role: 'owner' | 'cashier' | 'waiter') {
+async function makeUser(role: 'owner' | 'staff') {
 	const [restaurant] = await db.insert(restaurants).values({ name: 'Cafe One' }).returning();
+
+	if (role === 'staff') {
+		const { id: userId } = await seedStaff(db, restaurant.id, {
+			displayName: 'Staff'
+		});
+		const { token } = await createSession(db, userId);
+		return { token, restaurantId: restaurant.id, userId };
+	}
+
 	const [user] = await db
 		.insert(users)
-		.values(
-			role === 'owner'
-				? {
-						restaurantId: restaurant.id,
-						role,
-						displayName: 'The Owner',
-						email: `owner-${Date.now()}-${Math.round(performance.now())}@cafe.com`,
-						passwordHash: await hashPassword('a correct password')
-					}
-				: // A cashier or waiter CANNOT be given credentials — the CHECK constraint
-					// forbids it — so the row is inserted directly. That is the point: the
-					// only way such a session could exist is a later plan creating one, and
-					// these assertions prove the dashboard is closed to it in advance.
-					{ restaurantId: restaurant.id, role, displayName: 'Staff' }
-		)
+		.values({
+			restaurantId: restaurant.id,
+			role,
+			displayName: 'The Owner',
+			email: `owner-${Date.now()}-${Math.round(performance.now())}@cafe.com`,
+			passwordHash: await hashPassword('a correct password')
+		})
 		.returning();
+
 	const { token } = await createSession(db, user.id);
 	return { token, restaurantId: restaurant.id, userId: user.id };
 }
@@ -108,7 +113,7 @@ async function runHook(
 	} catch (thrown) {
 		const e = thrown as { status?: number; location?: string; body?: { message?: string } };
 		if (e.status === undefined) {
-			// Not a SvelteKit redirect/error — surface it rather than reporting 500.
+			// Not a SvelteKit redirect/error ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â surface it rather than reporting 500.
 			throw thrown;
 		}
 		return { status: e.status, location: e.location };
@@ -131,7 +136,7 @@ describe('MANDATORY (spec 29): every non-public route refuses an anonymous reque
 describe('MANDATORY (spec 29): every (dashboard) route returns 403 for a non-owner', () => {
 	it.each(
 		DASHBOARD_ROUTE_IDS.flatMap((routeId) =>
-			(['cashier', 'waiter'] as const).map((role) => [routeId, role] as const)
+			(['staff'] as const).map((role) => [routeId, role] as const)
 		)
 	)('%s returns 403 for a %s, not 404 and not a redirect', async (routeId, role) => {
 		const { token } = await makeUser(role);
@@ -144,10 +149,10 @@ describe('MANDATORY (spec 29): every (dashboard) route returns 403 for a non-own
 	});
 
 	// T-23's Done-when names "a direct POST to the action". A form action is a
-	// separately reachable POST endpoint, so assert the METHOD too — the makeEvent
+	// separately reachable POST endpoint, so assert the METHOD too ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the makeEvent
 	// helper already took a method parameter that nothing passed.
 	it.each(DASHBOARD_ROUTE_IDS)('%s returns 403 for a cashier POSTing directly', async (routeId) => {
-		const { token } = await makeUser('cashier');
+		const { token } = await makeUser('staff');
 		const event = makeEvent(routeId, token, 'POST');
 		let status: number | undefined;
 		try {
@@ -213,7 +218,7 @@ describe('GET /logout is not a thing', () => {
 	//
 	// Assert the STATUS the load actually produces, not the module's shape. The
 	// earlier version of this test checked that no `load` was exported, on the
-	// premise that SvelteKit then answers 405 — which is false for a GET
+	// premise that SvelteKit then answers 405 ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â which is false for a GET
 	// (page_methods includes GET, so it renders the page and throws
 	// "Missing +page.svelte component"). That premise made the test pass while the
 	// real response was a 500.
@@ -233,9 +238,9 @@ describe('GET /logout is not a thing', () => {
 });
 
 // T-17: /pos and /api/pos, opened DELIBERATELY. "Public" means "no dashboard
-// session required" — the till's credential is the device cookie plus a PIN.
+// session required" ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â the till's credential is the device cookie plus a PIN.
 describe('MANDATORY (spec 29): the POS surfaces in the hook', () => {
-	it('/(pos)/pos answers without a session — not a 303 to /login', async () => {
+	it('/(pos)/pos answers without a session ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â not a 303 to /login', async () => {
 		expect(await runHook('/(pos)/pos')).toEqual({ status: 200 });
 	});
 

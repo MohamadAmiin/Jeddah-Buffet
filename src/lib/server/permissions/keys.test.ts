@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { CASHIER_KEYS, WAITER_KEYS, ADMIN_KEYS, ALL_KEYS, ROLE_KEYS } from './keys';
+import {
+	CASHIER_KEYS,
+	WAITER_KEYS,
+	ALL_KEYS,
+	POS_KEYS,
+	OWNER_KEYS,
+	DEFAULT_ROLES,
+	PERMISSION_LABELS,
+	isPosPermissionKey
+} from './keys';
 import { hasPermission } from './index';
 import type { Principal } from '../auth/session';
 
@@ -43,47 +52,66 @@ describe('spec 8 key lists, copied verbatim', () => {
 	});
 });
 
-describe('role grants', () => {
+describe('POS keys and default roles', () => {
+	it('POS_KEYS has exactly ten entries and none starts with admin.', () => {
+		expect(POS_KEYS).toHaveLength(10);
+		expect(POS_KEYS.every((k) => k.startsWith('pos.'))).toBe(true);
+		expect(POS_KEYS.some((k) => k.startsWith('admin.'))).toBe(false);
+		expect([...POS_KEYS]).toEqual([...CASHIER_KEYS, ...WAITER_KEYS]);
+	});
+
+	it('DEFAULT_ROLES seeds Cashier and Waiter with their exact keys', () => {
+		expect(DEFAULT_ROLES[0].name).toBe('Cashier');
+		expect(DEFAULT_ROLES[0].permissionKeys).toEqual(CASHIER_KEYS);
+		expect(DEFAULT_ROLES[1].name).toBe('Waiter');
+		expect(DEFAULT_ROLES[1].permissionKeys).toEqual(WAITER_KEYS);
+	});
+
+	it('PERMISSION_LABELS has a non-empty label for every POS_KEYS entry', () => {
+		for (const key of POS_KEYS) {
+			expect(PERMISSION_LABELS[key], `missing label for ${key}`).toBeDefined();
+			expect(PERMISSION_LABELS[key].trim().length).toBeGreaterThan(0);
+		}
+	});
+
+	it('isPosPermissionKey accepts valid POS keys and rejects non-POS keys or non-strings', () => {
+		expect(isPosPermissionKey('pos.sell')).toBe(true);
+		expect(isPosPermissionKey('pos.transfer_table')).toBe(true);
+		expect(isPosPermissionKey('admin.settings')).toBe(false);
+		expect(isPosPermissionKey('pos.sel')).toBe(false);
+		expect(isPosPermissionKey('')).toBe(false);
+		expect(isPosPermissionKey(null)).toBe(false);
+		expect(isPosPermissionKey(undefined)).toBe(false);
+		expect(isPosPermissionKey(123)).toBe(false);
+		expect(isPosPermissionKey({})).toBe(false);
+	});
+});
+
+describe('owner grant and permissions', () => {
 	it('the owner holds every key defined anywhere, including all ten POS keys', () => {
 		for (const key of ALL_KEYS) {
 			expect(hasPermission(principal('owner'), key), `owner is missing ${key}`).toBe(true);
 		}
-		expect(ROLE_KEYS.owner.length).toBe(ALL_KEYS.length);
+		expect(OWNER_KEYS.length).toBe(ALL_KEYS.length);
 	});
 
-	it('the owner grant is enumerated, not a wildcard', () => {
-		// A wildcard would make adding a key an accident rather than a decision.
-		expect(Array.isArray(ROLE_KEYS.owner)).toBe(true);
-		expect(ROLE_KEYS.owner).toContain('pos.sell');
-		expect(ROLE_KEYS.owner).toContain('admin.settings');
+	it('the owner grant is an array, not a wildcard', () => {
+		expect(Array.isArray(OWNER_KEYS)).toBe(true);
+		expect(OWNER_KEYS).toContain('pos.sell');
+		expect(OWNER_KEYS).toContain('admin.settings');
 	});
 
-	it('a waiter does not hold pos.payment', () => {
-		expect(hasPermission(principal('waiter'), 'pos.payment')).toBe(false);
-	});
-
-	it('a cashier does not hold pos.transfer_table', () => {
-		expect(hasPermission(principal('cashier'), 'pos.transfer_table')).toBe(false);
-	});
-
-	it('no role other than owner holds any admin.* key', () => {
-		for (const key of ADMIN_KEYS) {
-			expect(hasPermission(principal('cashier'), key), `cashier holds ${key}`).toBe(false);
-			expect(hasPermission(principal('waiter'), key), `waiter holds ${key}`).toBe(false);
-			expect(hasPermission(principal('owner'), key)).toBe(true);
+	it('a non-owner principal holds no key at all synchronously', () => {
+		for (const role of ['staff'] as const) {
+			for (const key of ALL_KEYS) {
+				expect(hasPermission(principal(role), key), `${role} should hold no key`).toBe(false);
+			}
 		}
 	});
 
 	it('an anonymous caller holds nothing', () => {
 		for (const key of ALL_KEYS) {
 			expect(hasPermission(null, key)).toBe(false);
-		}
-	});
-
-	it('every key belongs to at least one role', () => {
-		const granted = new Set(Object.values(ROLE_KEYS).flat());
-		for (const key of ALL_KEYS) {
-			expect(granted.has(key), `${key} is granted to nobody`).toBe(true);
 		}
 	});
 });

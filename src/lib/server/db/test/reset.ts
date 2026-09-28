@@ -7,8 +7,9 @@ import pg from 'pg';
 // Current tables, child-first for readability (the single statement below makes
 // the order irrelevant):
 //   audit_log, sessions, pos_devices, menu_item_modifier_groups, modifiers,
-//   menu_items, modifier_groups, menu_categories, users, restaurant_settings,
-//   restaurants
+//   menu_items, modifier_groups, menu_categories, users, role_permissions,
+//   roles, restaurant_settings, restaurants
+// users before roles in the comment order: users.role_id references roles.
 export const TABLES = [
 	'audit_log',
 	'sessions',
@@ -19,6 +20,8 @@ export const TABLES = [
 	'modifier_groups',
 	'menu_categories',
 	'users',
+	'role_permissions',
+	'roles',
 	'restaurant_settings',
 	'restaurants'
 ] as const;

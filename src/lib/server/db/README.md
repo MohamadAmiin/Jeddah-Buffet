@@ -8,6 +8,13 @@ Drizzle schema (one file per aggregate), generated migrations, client. The
   `client.ts` and open a database connection just by running drizzle-kit.
 - Migrations live in `migrations/`, are committed, and are NEVER hand-edited or
   deleted once they have run. Add a new migration instead.
+- A GENERATED migration may be reordered by hand BEFORE its first run, only when
+  drizzle-kit cannot express the change and only with the reason written at the
+  top of the file; the one precedent is 0010's enum rebuild, which must drop and
+  recreate the three users constraints drizzle-kit does not know depend on the
+  type. Never edit an applied migration. `generate --custom` is for DATA (seeds,
+  backfills): its snapshot is a copy of the previous one, so a schema change
+  written that way leaves a drift the next `db:generate` re-emits.
 - Hand-written SQL only ever via `drizzle-kit generate --custom`, which
   registers the file in `migrations/meta/_journal.json`. A `.sql` file dropped
   into the folder by hand is not registered and is silently never applied.

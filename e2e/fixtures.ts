@@ -57,8 +57,8 @@ export async function createEmployee(
 	await expect(page).toHaveURL(/\/employees$/);
 	await page.getByLabel('Name', { exact: true }).fill(employee.displayName);
 	await page
-		.getByLabel(employee.role === 'cashier' ? 'Cashier' : 'Waiter', { exact: true })
-		.check();
+		.getByLabel('Role', { exact: true })
+		.selectOption({ label: employee.role === 'cashier' ? 'Cashier' : 'Waiter' });
 	// `exact`: every staff row also carries a "New PIN" field.
 	await page.getByLabel('PIN', { exact: true }).fill(employee.pin);
 	await page.getByRole('button', { name: 'Create employee' }).click();

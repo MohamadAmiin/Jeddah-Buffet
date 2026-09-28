@@ -3,7 +3,8 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, type DbTx } from '$lib/server/db/client';
 import { auditLog } from '$lib/server/db/schema/audit';
-import { users, type UserRole } from '$lib/server/db/schema/users';
+import { roles } from '$lib/server/db/schema/roles';
+import { users } from '$lib/server/db/schema/users';
 import { requestContext } from '$lib/server/audit';
 import type { Executor } from '$lib/server/auth/session';
 import { requireDevice, type PosDeviceContext } from '$lib/server/auth/pos-context';
@@ -17,7 +18,7 @@ import { verifyEmployeePin, type PinAttemptResult } from '$lib/server/auth/pin';
 //
 // This route opens the ONE transaction and WRITES NO AUDIT ROW of its own. The
 // PIN verifier writes every pos.pin.* row inside it, because only the verifier
-// knows whether an attempt was the fifth; a second writer would mean two rows per
+// knows whether the attempt was the fifth; a second writer would mean two rows per
 // attempt and would break the idempotency lookup below.
 
 const pinSchema = z.object({
@@ -32,7 +33,13 @@ const pinSchema = z.object({
 });
 
 type Outcome =
-	| { kind: 'success'; employeeId: string; displayName: string; role: UserRole }
+	| {
+			kind: 'success';
+			employeeId: string;
+			displayName: string;
+			isOwner: boolean;
+			roleName: string;
+	  }
 	| { kind: 'invalid' }
 	| { kind: 'locked'; retryAfterMs: number };
 
@@ -74,11 +81,13 @@ async function replayFor(
 	if (!row) return null;
 
 	if (!row.subjectUserId) return { kind: 'invalid' };
+
 	const [employee] = await database
 		.select({
 			id: users.id,
 			displayName: users.displayName,
 			role: users.role,
+			roleId: users.roleId,
 			pinLockedUntil: users.pinLockedUntil
 		})
 		.from(users)
@@ -87,14 +96,33 @@ async function replayFor(
 	if (!employee) return { kind: 'invalid' };
 
 	const reason = (row.details as { reason?: unknown }).reason;
+
 	if (row.event === 'pos.pin.success') {
+		const isOwner = employee.role === 'owner';
+
+		const [roleRow] = isOwner
+			? []
+			: await database
+					.select({ name: roles.name })
+					.from(roles)
+					.where(and(eq(roles.id, employee.roleId!), eq(roles.restaurantId, device.restaurantId)))
+					.limit(1);
+
+		const roleName = isOwner ? 'Owner' : roleRow?.name;
+
+		if (!roleName) {
+			throw new Error('Active staff member has no live role');
+		}
+
 		return {
 			kind: 'success',
 			employeeId: employee.id,
 			displayName: employee.displayName,
-			role: employee.role
+			isOwner,
+			roleName
 		};
 	}
+
 	if (
 		row.event === 'pos.pin.locked_out' ||
 		(row.event === 'pos.pin.failed' && reason === 'rejected_locked')
@@ -102,6 +130,7 @@ async function replayFor(
 		const lockedUntil = employee.pinLockedUntil?.getTime() ?? 0;
 		return { kind: 'locked', retryAfterMs: Math.max(0, lockedUntil - Date.now()) };
 	}
+
 	if (row.event === 'pos.pin.failed') return { kind: 'invalid' };
 
 	// Only pos.pin.* rows carry a client op id in this plan; anything else under
@@ -115,9 +144,11 @@ function toOutcome(result: PinAttemptResult): Outcome {
 			kind: 'success',
 			employeeId: result.employee.id,
 			displayName: result.employee.displayName,
-			role: result.employee.role
+			isOwner: result.employee.isOwner,
+			roleName: result.employee.roleName
 		};
 	}
+
 	return result.reason === 'locked'
 		? { kind: 'locked', retryAfterMs: result.retryAfterMs }
 		: { kind: 'invalid' };
@@ -127,11 +158,17 @@ function toOutcome(result: PinAttemptResult): Outcome {
 function isDuplicateOpKey(thrown: unknown): boolean {
 	// Drizzle wraps the driver's error; walk the cause chain to the pg error.
 	let current: unknown = thrown;
+
 	for (let depth = 0; depth < 5 && current; depth++) {
 		const e = current as { code?: string; constraint?: string; cause?: unknown };
-		if (e.code === '23505' && e.constraint === 'audit_log_device_client_op_unique') return true;
+
+		if (e.code === '23505' && e.constraint === 'audit_log_device_client_op_unique') {
+			return true;
+		}
+
 		current = e.cause;
 	}
+
 	return false;
 }
 
@@ -145,11 +182,18 @@ function respond(outcome: Outcome): Response {
 	switch (outcome.kind) {
 		case 'success':
 			return json(
-				{ employeeId: outcome.employeeId, displayName: outcome.displayName, role: outcome.role },
+				{
+					employeeId: outcome.employeeId,
+					displayName: outcome.displayName,
+					isOwner: outcome.isOwner,
+					roleName: outcome.roleName
+				},
 				{ status: 200 }
 			);
+
 		case 'locked':
 			return json({ error: 'locked_out', retryAfterMs: outcome.retryAfterMs }, { status: 423 });
+
 		case 'invalid':
 			return json({ error: 'invalid_pin' }, { status: 401 });
 	}
@@ -160,17 +204,25 @@ export const POST: RequestHandler = async (event) => {
 	const device = await requireDevice(event);
 
 	const contentType = event.request.headers.get('content-type') ?? '';
+
 	if (!contentType.toLowerCase().startsWith('application/json')) {
 		return json({ error: 'unsupported_media_type' }, { status: 415 });
 	}
+
 	let body: unknown;
+
 	try {
 		body = await event.request.json();
 	} catch {
 		return json({ error: 'invalid_request' }, { status: 400 });
 	}
+
 	const parsed = pinSchema.safeParse(body);
-	if (!parsed.success) return json({ error: 'invalid_request' }, { status: 400 });
+
+	if (!parsed.success) {
+		return json({ error: 'invalid_request' }, { status: 400 });
+	}
+
 	const { employeeId, pin, clientOpId } = parsed.data;
 
 	const { ip, userAgent } = requestContext(event);
@@ -178,8 +230,10 @@ export const POST: RequestHandler = async (event) => {
 	const attempt = async (tx: DbTx): Promise<Outcome> => {
 		if (clientOpId) {
 			const replay = await replayFor(tx, device, clientOpId);
+
 			if (replay) return replay;
 		}
+
 		const result = await verifyEmployeePin(
 			tx,
 			{ restaurantId: device.restaurantId, employeeId, pin },
@@ -191,17 +245,22 @@ export const POST: RequestHandler = async (event) => {
 				userAgent
 			}
 		);
+
 		return toOutcome(result);
 	};
 
 	let outcome: Outcome;
+
 	try {
 		outcome = await db.transaction(attempt);
 	} catch (thrown) {
 		if (!clientOpId || !isDuplicateOpKey(thrown)) throw thrown;
+
 		// A racing retry committed first: answer from the row it wrote.
 		const replay = await replayFor(db, device, clientOpId);
+
 		if (!replay) throw thrown;
+
 		outcome = replay;
 	}
 

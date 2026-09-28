@@ -52,7 +52,15 @@ async function offlineLogins(): Promise<OfflineLogin[]> {
 }
 
 function employee(id: string, pinPhc: string | null = null): CachedEmployee {
-	return { id, displayName: `Employee ${id}`, role: 'cashier', isActive: true, pinPhc };
+	return {
+		id,
+		displayName: `Employee ${id}`,
+		isOwner: false,
+		roleName: 'Cashier',
+		permissions: [],
+		isActive: true,
+		pinPhc
+	};
 }
 
 const login = (clientOpId: string, occurredAt: string): OfflineLogin => ({
@@ -84,12 +92,62 @@ describe('the POS store', () => {
 	// clear-and-replace, never a merge: a removed employee is GONE.
 	it('replaces the employee list rather than merging into it', async () => {
 		await cacheEmployees([employee('a'), employee('b'), employee('c')]);
+
+		const [cached] = await readCachedEmployees();
+		expect(Object.keys(cached).sort()).toEqual([
+			'displayName',
+			'id',
+			'isActive',
+			'isOwner',
+			'permissions',
+			'pinPhc',
+			'roleName'
+		]);
+		expect(cached.roleName).toBe('Cashier');
+		expect(cached.isOwner).toBe(false);
+		expect(cached.permissions).toEqual([]);
+
 		await cacheEmployees([employee('a'), employee('b'), employee('c')]);
 		expect(await readCachedEmployees()).toHaveLength(3);
 
 		await cacheEmployees([employee('a'), employee('b')]);
 		const ids = (await readCachedEmployees()).map((e) => e.id).sort();
 		expect(ids).toEqual(['a', 'b']);
+	});
+
+	it('normalizes an old employee cache row without throwing', async () => {
+		const db = await openPosDb();
+
+		try {
+			await new Promise<void>((resolve, reject) => {
+				const transaction = db.transaction('employees', 'readwrite');
+				transaction.objectStore('employees').put({
+					id: 'legacy-owner',
+					displayName: 'Legacy Owner',
+					role: 'owner',
+					isActive: true,
+					pinPhc: null
+				});
+
+				transaction.oncomplete = () => resolve();
+				transaction.onerror = () => reject(transaction.error);
+				transaction.onabort = () => reject(transaction.error);
+			});
+		} finally {
+			db.close();
+		}
+
+		await expect(readCachedEmployees()).resolves.toEqual([
+			{
+				id: 'legacy-owner',
+				displayName: 'Legacy Owner',
+				isOwner: true,
+				roleName: 'Owner',
+				permissions: [],
+				isActive: true,
+				pinPhc: null
+			}
+		]);
 	});
 
 	it('survives a reopen, and upgrades only on the first open', async () => {

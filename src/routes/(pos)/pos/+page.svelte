@@ -21,21 +21,24 @@
 		syncMenu
 	} from '$lib/pos/store';
 
-	type Role = 'owner' | 'cashier' | 'waiter';
 	type DirectoryEntry = {
 		id: string;
 		displayName: string;
-		role: Role;
+		isOwner: boolean;
+		roleName: string;
+		permissions: string[];
 		isActive: boolean;
 		pinPhc: string | null;
 	};
-	/** What the markup may see — the hash is dropped the moment the response is read. */
-	type Choice = { id: string; displayName: string; role: Role; hasPin: boolean };
 
-	const ROLE_LABEL: Record<Role, string> = {
-		owner: 'Owner',
-		cashier: 'Cashier',
-		waiter: 'Waiter'
+	/** What the markup may see — the hash is dropped the moment the response is read. */
+	type Choice = {
+		id: string;
+		displayName: string;
+		isOwner: boolean;
+		roleName: string;
+		permissions: string[];
+		hasPin: boolean;
 	};
 
 	let status = $state<'loading' | 'ready' | 'cached' | 'not-registered' | 'offline' | 'error'>(
@@ -48,7 +51,9 @@
 		entries.map((entry) => ({
 			id: entry.id,
 			displayName: entry.displayName,
-			role: entry.role,
+			isOwner: entry.isOwner,
+			roleName: entry.roleName,
+			permissions: entry.permissions,
 			hasPin: entry.pinPhc !== null
 		}));
 
@@ -75,6 +80,7 @@
 			}
 			return;
 		}
+
 		// 403 is the ONE device-related status the endpoint returns, and it covers all
 		// three device states — no cookie, an unknown cookie, a revoked device — so
 		// there is deliberately no 401 branch.
@@ -90,17 +96,21 @@
 			status = 'not-registered';
 			return;
 		}
+
 		if (!response.ok) {
 			status = 'error';
 			return;
 		}
+
 		const body = (await response.json()) as {
 			device: { id: string };
 			employees: DirectoryEntry[];
 			settings: { posIdleLockSeconds: number | null };
 		};
+
 		employees = toChoices(body.employees);
 		status = 'ready';
+
 		// Write BOTH halves of this one response through to the device, so the till can
 		// switch employees offline (spec 6) and the PIN screen can arm its idle watch.
 		// The rows go in exactly as they arrived, and the idle lock is cached AS IT
@@ -114,8 +124,8 @@
 			await cacheEmployees(body.employees);
 			await cacheSettings([{ key: 'posIdleLockSeconds', value: body.settings.posIdleLockSeconds }]);
 		} catch {
-			// The live list still works; what fails is starting offline later, and a
-			// till that silently forgets is worse than one that says so.
+			// The live list still works; what fails is starting offline later, and
+			// a till that silently forgets is worse than one that says so.
 			cacheWarning = true;
 		}
 	}
@@ -129,6 +139,7 @@
 		void loadDirectory()
 			.then(() => syncMenu())
 			.catch(() => {});
+
 		const refreshMenu = () => void syncMenu().catch(() => {});
 		addEventListener('online', refreshMenu);
 		return () => removeEventListener('online', refreshMenu);
@@ -210,17 +221,20 @@
 				No connection — this is the staff list saved on this device.
 			</p>
 		{/if}
+
 		{#if cacheWarning}
 			<p role="alert" class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">
 				<span aria-hidden="true" class="font-mono">◆</span>
 				This device could not save the staff list, so it cannot sign anyone in offline.
 			</p>
 		{/if}
+
 		{#if employees.length === 0}
 			<p class="text-ink-2">
 				No active staff yet. The owner adds staff on the dashboard’s Employees page.
 			</p>
 		{/if}
+
 		<ul class="grid grid-cols-2 gap-2 sm:grid-cols-3">
 			{#each employees as employee (employee.id)}
 				<li>
@@ -239,7 +253,7 @@
 							{employee.displayName}
 						</span>
 						<span class={employee.hasPin ? 'text-ink-2' : 'text-disabled-ink'}>
-							{ROLE_LABEL[employee.role]}{employee.hasPin ? '' : ' — no PIN set yet'}
+							{employee.roleName}{employee.hasPin ? '' : ' — no PIN set yet'}
 						</span>
 					</button>
 				</li>

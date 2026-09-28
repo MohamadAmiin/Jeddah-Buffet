@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import { testDb, closeTestDb } from '$lib/server/db/test/db';
 import { restaurants } from '$lib/server/db/schema/restaurants';
 import { users } from '$lib/server/db/schema/users';
+import { seedStaff } from '$lib/server/db/test/seed';
 import { posDevices } from '$lib/server/db/schema/pos-devices';
 import { auditLog } from '$lib/server/db/schema/audit';
 import type { Principal } from '$lib/server/auth/session';
@@ -17,7 +18,7 @@ afterAll(async () => {
 	await closeTestDb();
 });
 
-/** A restaurant as registration leaves it — settings row, time zone, no idle lock — plus its owner and one device. */
+/** A restaurant as registration leaves it ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â settings row, time zone, no idle lock ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â plus its owner and one device. */
 async function makeRestaurant() {
 	const [restaurant] = await db.insert(restaurants).values({ name: 'Cafe One' }).returning();
 	await db.transaction((tx) =>
@@ -118,18 +119,15 @@ const NOTHING_SET = {
 };
 
 describe('the /device page', () => {
-	// MANDATORY (spec 29 — permission checks; this repository applies the rule to
-	// every route). 403 exactly — never a 404, never a 303 — from the load AND from
+	// MANDATORY (spec 29 ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â permission checks; this repository applies the rule to
+	// every route). 403 exactly ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â never a 404, never a 303 ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â from the load AND from
 	// both actions, each a separately reachable endpoint.
-	it.each(['cashier', 'waiter'] as const)(
+	it.each(['staff'] as const)(
 		'refuses a %s with 403 on the load and on both actions, and changes nothing',
-		async (role) => {
+		async () => {
 			const a = await makeRestaurant();
-			const [staff] = await db
-				.insert(users)
-				.values({ restaurantId: a.restaurantId, role, displayName: 'Staff' })
-				.returning();
-			const asStaff = principal(staff.id, a.restaurantId, role);
+			const staff = await seedStaff(db, a.restaurantId, { displayName: 'Staff' });
+			const asStaff = principal(staff.id, a.restaurantId, 'staff');
 
 			expect(await statusOf(() => load(makeEvent(asStaff) as never))).toBe(403);
 			expect(await statusOf(() => revoke(makeEvent(asStaff, { deviceId: a.deviceId })))).toBe(403);
@@ -152,7 +150,7 @@ describe('the /device page', () => {
 		expect(result.device?.revokedAt).toBeNull();
 		expect(result.device?.lastSeenAt).toBeNull();
 		expect(result.settings).toEqual(NOTHING_SET);
-		// Null, exactly as stored — no number the owner never chose.
+		// Null, exactly as stored ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â no number the owner never chose.
 		expect(result.idleLockSeconds).toBeNull();
 	});
 

@@ -57,6 +57,27 @@
       "when": 1789498089983,
       "tag": "0007_same_firebird",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789643989864,
+      "tag": "0008_roles_and_role_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789653082875,
+      "tag": "0009_seed_default_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789682390695,
+      "tag": "0010_user_role_owner_staff",
+      "breakpoints": true
     }
   ]
 }

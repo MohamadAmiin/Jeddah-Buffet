@@ -157,7 +157,9 @@ describe('the menu in IndexedDB', () => {
 		const sam: CachedEmployee = {
 			id: 'e1',
 			displayName: 'Sam',
-			role: 'cashier',
+			isOwner: false,
+			roleName: 'Cashier',
+			permissions: [],
 			isActive: true,
 			pinPhc: null
 		};

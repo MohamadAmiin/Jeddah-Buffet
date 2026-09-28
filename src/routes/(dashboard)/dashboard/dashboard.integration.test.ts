@@ -3,7 +3,9 @@ import type { RequestEvent } from '@sveltejs/kit';
 import { eq } from 'drizzle-orm';
 import { testDb, closeTestDb } from '$lib/server/db/test/db';
 import { restaurants } from '$lib/server/db/schema/restaurants';
+import { roles } from '$lib/server/db/schema/roles';
 import { users } from '$lib/server/db/schema/users';
+import { seedStaff } from '$lib/server/db/test/seed';
 import type { Principal } from '$lib/server/auth/session';
 import { registerDevice, revokeDevice } from '$lib/server/auth/pos-device';
 import { createEmployee } from '$lib/server/auth/employees';
@@ -24,15 +26,17 @@ type Overview = {
 	menuReady: boolean;
 };
 
-/** A restaurant exactly as registration leaves it: settings row, time zone, one owner, nothing else. */
+/** A restaurant exactly as registration leaves it: settings, default roles, and one owner. */
 async function freshRestaurant() {
 	const [restaurant] = await db.insert(restaurants).values({ name: 'Cafe One' }).returning();
+
 	await db.transaction((tx) =>
 		onRestaurantCreated(tx, restaurant.id, {
 			restaurantName: 'Cafe One',
 			timeZone: 'Africa/Mogadishu'
 		})
 	);
+
 	const [owner] = await db
 		.insert(users)
 		.values({
@@ -43,7 +47,23 @@ async function freshRestaurant() {
 			passwordHash: 'not-a-real-hash'
 		})
 		.returning();
+
 	return { restaurantId: restaurant.id, ownerId: owner.id };
+}
+
+async function namedRoleId(restaurantId: string, name: string): Promise<string> {
+	const rows = await db
+		.select({ id: roles.id, roleName: roles.name })
+		.from(roles)
+		.where(eq(roles.restaurantId, restaurantId));
+
+	const role = rows.find((row) => row.roleName === name);
+
+	if (!role) {
+		throw new Error(`Missing role ${name}.`);
+	}
+
+	return role.id;
 }
 
 function eventFor(userId: string, restaurantId: string, role: Principal['role']): RequestEvent {
@@ -56,7 +76,9 @@ function eventFor(userId: string, restaurantId: string, role: Principal['role'])
 		sessionId: 's-1',
 		expiresAt: new Date(Date.now() + 60_000)
 	};
+
 	const url = new URL('http://localhost/dashboard');
+
 	return {
 		cookies: { get: () => undefined, getAll: () => [], set: () => {}, delete: () => {} },
 		getClientAddress: () => '203.0.113.5',
@@ -87,6 +109,7 @@ describe('the overview checklist', () => {
 
 	it('counts the till registered only while its device is not revoked', async () => {
 		const a = await freshRestaurant();
+
 		const device = await db.transaction((tx) =>
 			registerDevice(tx, {
 				restaurantId: a.restaurantId,
@@ -94,6 +117,7 @@ describe('the overview checklist', () => {
 				label: 'Counter tablet'
 			})
 		);
+
 		expect((await overview(a)).deviceRegistered).toBe(true);
 
 		await db.transaction((tx) =>
@@ -103,39 +127,58 @@ describe('the overview checklist', () => {
 				actorUserId: a.ownerId
 			})
 		);
+
 		expect((await overview(a)).deviceRegistered).toBe(false);
 	});
 
-	it('counts the employees ready only when a cashier AND a waiter each have a PIN', async () => {
+	it('sets employeesReady when any active staff member has a PIN', async () => {
 		const a = await freshRestaurant();
+		const cashierId = await namedRoleId(a.restaurantId, 'Cashier');
 
-		await db.transaction((tx) =>
+		const result = await db.transaction((tx) =>
 			createEmployee(
 				tx,
 				a.restaurantId,
-				{ role: 'cashier', displayName: 'Sam', pin: '1234' },
+				{ roleId: cashierId, displayName: 'Sam', pin: '1234' },
 				ctx(a.ownerId)
 			)
 		);
-		expect((await overview(a)).employeesReady).toBe(false);
 
-		await db.transaction((tx) =>
-			createEmployee(
-				tx,
-				a.restaurantId,
-				{ role: 'waiter', displayName: 'Robin', pin: '5678' },
-				ctx(a.ownerId)
-			)
-		);
+		expect(result.ok).toBe(true);
 		expect((await overview(a)).employeesReady).toBe(true);
 
-		// And back again when the data goes away: a cashier without a PIN.
-		await db.update(users).set({ pinHash: null }).where(eq(users.displayName, 'Sam'));
+		if (!result.ok) throw new Error('Expected employee creation to succeed.');
+
+		await db.update(users).set({ pinHash: null }).where(eq(users.id, result.id));
+
+		expect((await overview(a)).employeesReady).toBe(false);
+	});
+
+	it("does not count the owner's PIN as employee readiness", async () => {
+		const a = await freshRestaurant();
+
+		await db.update(users).set({ pinHash: 'not-a-real-pin-hash' }).where(eq(users.id, a.ownerId));
+
+		expect((await overview(a)).employeesReady).toBe(false);
+	});
+
+	it('does not count an inactive staff member with a PIN', async () => {
+		const a = await freshRestaurant();
+
+		const staff = await seedStaff(db, a.restaurantId, {
+			roleName: 'Cashier',
+			displayName: 'Staff',
+			pinHash: 'not-a-real-pin-hash'
+		});
+
+		await db.update(users).set({ isActive: false }).where(eq(users.id, staff.id));
+
 		expect((await overview(a)).employeesReady).toBe(false);
 	});
 
 	it('returns no hash and no device token', async () => {
 		const a = await freshRestaurant();
+
 		const device = await db.transaction((tx) =>
 			registerDevice(tx, {
 				restaurantId: a.restaurantId,
@@ -143,32 +186,42 @@ describe('the overview checklist', () => {
 				label: 'Counter tablet'
 			})
 		);
+
+		const cashierId = await namedRoleId(a.restaurantId, 'Cashier');
+
 		await db.transaction((tx) =>
 			createEmployee(
 				tx,
 				a.restaurantId,
-				{ role: 'cashier', displayName: 'Sam', pin: '1234' },
+				{ roleId: cashierId, displayName: 'Sam', pin: '1234' },
 				ctx(a.ownerId)
 			)
 		);
 
-		// Exactly what SvelteKit serialises into the page HTML and __data.json.
 		const serialised = JSON.stringify(await overview(a));
 
-		for (const needle of ['pinHash', 'pin_hash', 'passwordHash', 'token', device.token]) {
+		for (const needle of [
+			'pinHash',
+			'pin_hash',
+			'passwordHash',
+			'password_hash',
+			'token',
+			device.token
+		]) {
 			expect(serialised).not.toContain(needle);
 		}
 	});
 
 	it('keeps its own guard: a cashier gets 403', async () => {
 		const a = await freshRestaurant();
-		const [cashier] = await db
-			.insert(users)
-			.values({ restaurantId: a.restaurantId, role: 'cashier', displayName: 'Staff' })
-			.returning();
+
+		const staff = await seedStaff(db, a.restaurantId, {
+			roleName: 'Cashier',
+			displayName: 'Staff'
+		});
 
 		const status = await Promise.resolve(
-			load(eventFor(cashier.id, a.restaurantId, 'cashier') as never)
+			load(eventFor(staff.id, a.restaurantId, 'staff') as never)
 		).then(
 			() => undefined,
 			(thrown: { status?: number }) => thrown.status
@@ -180,17 +233,24 @@ describe('the overview checklist', () => {
 	// T-43: the menu step is computed from the menu itself.
 	it('reads the menu step as done only once the restaurant has an item', async () => {
 		const a = await freshRestaurant();
+
 		expect((await overview(a)).menuReady).toBe(false);
 
 		const category = await db.transaction((tx) =>
 			createCategory(tx, a.restaurantId, { name: 'Drinks' })
 		);
+
 		// A category alone is not a menu.
 		expect((await overview(a)).menuReady).toBe(false);
 
 		await db.transaction((tx) =>
-			createItem(tx, a.restaurantId, { categoryId: category.id, name: 'Tea', priceMinor: 850n })
+			createItem(tx, a.restaurantId, {
+				categoryId: category.id,
+				name: 'Tea',
+				priceMinor: 850n
+			})
 		);
+
 		expect((await overview(a)).menuReady).toBe(true);
 	});
 });

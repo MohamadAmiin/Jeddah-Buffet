@@ -2,19 +2,18 @@
 	// A status rendered as a GLYPH plus a colour plus caller-supplied text — never
 	// colour alone (CLAUDE.md "Design & UI"; WCAG 1.4.1).
 	//
-	// DELIBERATELY NOT SUPPORTED — spec 13's item and order statuses (NEW ◇, SENT ▲,
-	// VOIDED ✕, OPEN ○, BILLED ◐, PAID ●, REFUNDED ↩) and the table and sync states.
-	// They are documented in docs/design-system.md section 3 and their tokens exist
-	// (--c-st-*), but no order, item, table or sync row exists in this repository —
-	// the orders module is a README with no code yet. Adding them now would coin a
-	// client-side status vocabulary before the columns that define it exist. Extend
-	// this component deliberately, in the plan that adds those columns.
+	// Dashboard vocabulary:
+	// ● done/active
+	// ○ not started/inactive
+	// ✕ blocked (locked, archived)
+	//
+	// Spec 13's item and order statuses still arrive with the orders plan.
 
 	let {
 		status,
 		label = ''
 	}: {
-		status: 'done' | 'not-started';
+		status: 'done' | 'not-started' | 'blocked';
 		label?: string;
 	} = $props();
 
@@ -23,7 +22,8 @@
 	// 4.5:1 floor is CLAUDE.md's non-negotiable.
 	const marks = {
 		done: { glyph: '●', tone: 'text-ok' },
-		'not-started': { glyph: '○', tone: 'text-ink-3' }
+		'not-started': { glyph: '○', tone: 'text-ink-3' },
+		blocked: { glyph: '✕', tone: 'text-danger' }
 	};
 
 	const mark = $derived(marks[status]);

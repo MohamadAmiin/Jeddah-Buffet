@@ -121,13 +121,42 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	});
 
 	// ── 3. the bundle landed, and holds no plaintext PIN ───────────────────────
-	const bundle = await storeRows<{ id: string; displayName: string; pinPhc: string | null }>(
-		tillPage,
-		'employees'
-	);
+	const bundle = await storeRows<{
+		id: string;
+		displayName: string;
+		isOwner: boolean;
+		roleName: string;
+		permissions: string[];
+		isActive: boolean;
+		pinPhc: string | null;
+	}>(tillPage, 'employees');
 	const byName = new Map(bundle.map((e) => [e.displayName, e]));
 	// The owner is on the till's list too (T-15), so the bundle is four long.
 	expect(bundle).toHaveLength(4);
+
+	for (const name of ['The Cashier', 'The Waiter', 'The Runner']) {
+		const employee = byName.get(name);
+		expect(employee?.roleName).toBe(name === 'The Cashier' ? 'Cashier' : 'Waiter');
+		expect(employee?.isOwner).toBe(false);
+		expect(employee?.permissions).toEqual(
+			name === 'The Cashier'
+				? [
+						'pos.sell',
+						'pos.payment',
+						'pos.print_receipt',
+						'pos.void_unsent_item',
+						'pos.cash_payout'
+					]
+				: [
+						'pos.create_order',
+						'pos.view_menu',
+						'pos.modify_order',
+						'pos.send_to_kitchen',
+						'pos.transfer_table'
+					]
+		);
+	}
+
 	for (const name of ['The Cashier', 'The Waiter', 'The Runner']) {
 		expect(typeof byName.get(name)?.pinPhc).toBe('string');
 	}
@@ -160,7 +189,7 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	// Online attempts are the server's to record: nothing is waiting on the till.
 	await expect(tillPage.getByRole('status')).toContainText('0 unsynced');
 
-	// ── 6. OFFLINE: the fallback fires, and the failed request is the proof ────
+	// ── 6. OFFLINE: the fallback fires, and the failed request is the proof ─────
 	const failedPinRequests: string[] = [];
 	tillPage.on('requestfailed', (request) => {
 		if (request.url().includes('/api/pos/pin')) failedPinRequests.push(request.url());

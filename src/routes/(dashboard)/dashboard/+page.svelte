@@ -24,7 +24,7 @@
 			done: data.employeesReady,
 			href: '/employees',
 			cta: 'Add employees',
-			detail: 'Add the cashier and waiter, each with a PIN for the POS.'
+			detail: 'Add at least one staff member with a PIN for the POS.'
 		},
 		{
 			label: 'Menu, categories and modifiers',

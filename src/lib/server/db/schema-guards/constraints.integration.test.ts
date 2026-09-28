@@ -50,6 +50,24 @@ async function makeOwner(restaurantId: string, email: string): Promise<string> {
 	return rows[0].id;
 }
 
+async function makeStaff(restaurantId: string, displayName = 'Staff'): Promise<string> {
+	const { rows: roleRows } = await pool.query<{ id: string }>(
+		`insert into roles (restaurant_id, name)
+		 values ($1, 'Cashier')
+		 returning id`,
+		[restaurantId]
+	);
+	const roleId = roleRows[0].id;
+
+	const { rows } = await pool.query<{ id: string }>(
+		`insert into users (restaurant_id, role, display_name, role_id)
+		 values ($1, 'staff', $2, $3)
+		 returning id`,
+		[restaurantId, displayName, roleId]
+	);
+	return rows[0].id;
+}
+
 async function makeDevice(
 	restaurantId: string,
 	ownerId: string,
@@ -110,51 +128,68 @@ describe('users constraints', () => {
 		expect(error.constraint).toBe('users_owner_has_credentials');
 	});
 
-	// This is the constraint that stops a later Employees plan quietly giving a
-	// cashier a password, which any route guarded only by "is there a session"
-	// would then accept.
-	it('rejects a cashier that has an email', async () => {
+	it('rejects a staff member that has an email', async () => {
 		const restaurantId = await makeRestaurant();
+		const staffId = await makeStaff(restaurantId);
 		const error = await expectError(
-			`insert into users (restaurant_id, role, display_name, email, password_hash)
-			 values ($1, 'cashier', 'Cashier', 'cashier@cafe.com', null)`,
-			[restaurantId]
+			`update users
+			 set email = 'staff@cafe.com'
+			 where id = $1`,
+			[staffId]
 		);
 		expect(error.constraint).toBe('users_non_owner_has_no_credentials');
 	});
 
-	it('rejects a waiter that has a password hash', async () => {
+	it('rejects a staff member that has a password hash', async () => {
 		const restaurantId = await makeRestaurant();
+		const staffId = await makeStaff(restaurantId);
 		const error = await expectError(
-			`insert into users (restaurant_id, role, display_name, email, password_hash)
-			 values ($1, 'waiter', 'Waiter', null, 'not-a-real-hash')`,
-			[restaurantId]
+			`update users
+			 set password_hash = 'not-a-real-hash'
+			 where id = $1`,
+			[staffId]
 		);
 		expect(error.constraint).toBe('users_non_owner_has_no_credentials');
 	});
 
-	it('accepts a cashier with neither email nor password hash', async () => {
+	it('accepts a staff member with neither email nor password hash', async () => {
 		const restaurantId = await makeRestaurant();
+		const staffId = await makeStaff(restaurantId);
 		const { rowCount } = await pool.query(
-			`insert into users (restaurant_id, role, display_name) values ($1, 'cashier', 'Cashier')`,
-			[restaurantId]
+			`select id from users
+			 where id = $1
+			   and role = 'staff'
+			   and role_id is not null
+			   and email is null
+			   and password_hash is null`,
+			[staffId]
 		);
 		expect(rowCount).toBe(1);
 	});
 
-	// users_non_owner_has_no_credentials is about email and password ONLY: a
-	// cashier's credential is a PIN, and a pin_hash must not trip it.
-	it('accepts a cashier with a pin_hash and neither email nor password hash', async () => {
+	it('accepts a staff member with a pin_hash and neither email nor password hash', async () => {
 		const restaurantId = await makeRestaurant();
+		const staffId = await makeStaff(restaurantId);
+		await pool.query(
+			`update users
+			 set pin_hash = 'not-a-real-pin-hash'
+			 where id = $1`,
+			[staffId]
+		);
+
 		const { rowCount } = await pool.query(
-			`insert into users (restaurant_id, role, display_name, pin_hash)
-			 values ($1, 'cashier', 'Cashier', 'not-a-real-pin-hash')`,
-			[restaurantId]
+			`select id from users
+			 where id = $1
+			   and role = 'staff'
+			   and role_id is not null
+			   and email is null
+			   and password_hash is null
+			   and pin_hash = 'not-a-real-pin-hash'`,
+			[staffId]
 		);
 		expect(rowCount).toBe(1);
 	});
 
-	// Spec 7: "The owner also has a POS PIN, used to approve sensitive actions."
 	it('accepts an owner with both a password hash and a pin_hash', async () => {
 		const restaurantId = await makeRestaurant();
 		const { rowCount } = await pool.query(
@@ -163,6 +198,32 @@ describe('users constraints', () => {
 			[restaurantId]
 		);
 		expect(rowCount).toBe(1);
+	});
+
+	it('enforces owner has no role_id and staff has a role_id', async () => {
+		const restaurantId = await makeRestaurant();
+
+		const { rows } = await pool.query<{ id: string }>(
+			`insert into roles (restaurant_id, name)
+			 values ($1, 'Cashier')
+			 returning id`,
+			[restaurantId]
+		);
+		const roleId = rows[0].id;
+
+		const staffError = await expectError(
+			`insert into users (restaurant_id, role, display_name)
+			 values ($1, 'staff', 'Staff')`,
+			[restaurantId]
+		);
+		expect(staffError.constraint).toBe('users_owner_has_no_role_staff_has_one');
+
+		const ownerError = await expectError(
+			`insert into users (restaurant_id, role, display_name, email, password_hash, role_id)
+			 values ($1, 'owner', 'Owner', 'owner@cafe.com', 'not-a-real-hash', $2)`,
+			[restaurantId, roleId]
+		);
+		expect(ownerError.constraint).toBe('users_owner_has_no_role_staff_has_one');
 	});
 });
 
@@ -224,8 +285,6 @@ describe('restaurant_settings constraints', () => {
 		expect(rows[0]).toEqual({ tax_mode: 'inclusive', tax_rate_bp: 10000, currency_code: 'USD' });
 	});
 
-	// TAX_MODES and the CHECK's two literals are connected by no type system, so
-	// they are pinned together here, against the real database.
 	it('allows exactly the tax modes the money module knows', async () => {
 		expect(TAX_MODES).toEqual(['exclusive', 'inclusive']);
 		const id = await makeSettings();
@@ -355,7 +414,6 @@ describe('menu constraints (T-37)', () => {
 		);
 	});
 
-	// Money comes back as a JavaScript bigint, never a number (invariant 1).
 	it('returns price_minor through Drizzle as a bigint', async () => {
 		const r = await makeRestaurant();
 		const id = await makeItem(r, await makeCategory(r));
@@ -374,7 +432,7 @@ describe('referential integrity', () => {
 		const restaurantId = await makeRestaurant();
 		await makeOwner(restaurantId, 'owner@cafe.com');
 		const error = await expectError('delete from restaurants where id = $1', [restaurantId]);
-		expect(error.code).toBe('23503'); // foreign_key_violation
+		expect(error.code).toBe('23503');
 		expect(error.constraint).toBe('users_restaurant_id_restaurants_id_fk');
 	});
 
@@ -412,8 +470,6 @@ describe('referential integrity', () => {
 		expect(rows[0].n).toBe(0);
 	});
 
-	// An employee who has done anything cannot be deleted, only deactivated: the
-	// audit row's actor_user_id is RESTRICT, so the delete is refused outright.
 	it('refuses to delete a user who has audit rows, leaving the audit intact', async () => {
 		const restaurantId = await makeRestaurant();
 		const userId = await makeOwner(restaurantId, 'owner@cafe.com');
@@ -442,8 +498,6 @@ describe('audit_log is append-only (invariant 2)', () => {
 		);
 	}
 
-	// MANDATORY — both operations must be exercised. The trigger covers UPDATE and
-	// DELETE, and a test of only one would pass with a half-written trigger.
 	it('rejects UPDATE', async () => {
 		await seedAuditRow();
 		const error = await expectError(`update audit_log set event = 'tampered'`);
@@ -484,10 +538,6 @@ describe('pos_devices and the device idempotency key', () => {
 		);
 	}
 
-	// MANDATORY (spec 29 — offline sync: retries never create duplicates). The
-	// database half of the rule: the same device replaying the same client op id is
-	// refused, so a retried sync can never leave a second — and, because audit_log
-	// is append-only, permanent — row behind.
 	it('rejects a second audit row with the same device and client op id', async () => {
 		const restaurantId = await makeRestaurant();
 		const ownerId = await makeOwner(restaurantId, 'owner@cafe.com');
@@ -499,16 +549,13 @@ describe('pos_devices and the device idempotency key', () => {
 			 values ($1, 'test.device_event', '{}'::jsonb, now(), $2, $3)`,
 			[restaurantId, deviceId, OP_ID]
 		);
-		expect(error.code).toBe('23505'); // unique_violation
+		expect(error.code).toBe('23505');
 		expect(error.constraint).toBe('audit_log_device_client_op_unique');
 
 		const { rows } = await pool.query('select count(*)::int as n from audit_log');
 		expect(rows[0].n).toBe(1);
 	});
 
-	// MANDATORY (spec 29 — the same rule, the other direction). Rows with no key —
-	// every dashboard and server-originated row — must keep being written, and a key
-	// is unique PER DEVICE, not globally.
 	it('accepts key-less rows from one device, and the same key from another device', async () => {
 		const restaurantId = await makeRestaurant();
 		const ownerId = await makeOwner(restaurantId, 'owner@cafe.com');
@@ -542,8 +589,6 @@ describe('pos_devices and the device idempotency key', () => {
 		expect(error.constraint).toBe('pos_devices_token_hash_unique');
 	});
 
-	// Pins T-05's decision that an invoice prefix is BURNED once used: reusing POS1
-	// after a revoke would let POS1-000001 name two different sales.
 	it('rejects a second POS1 in the same restaurant even after the first is revoked', async () => {
 		const restaurantId = await makeRestaurant();
 		const ownerId = await makeOwner(restaurantId, 'owner@cafe.com');
@@ -574,8 +619,6 @@ describe('pos_devices and the device idempotency key', () => {
 		expect(error.constraint).toBe('pos_devices_device_code_format');
 	});
 
-	// Revocation is a stamp, never a delete: a device that produced an audit row can
-	// never be removed, and the trail keeps its subject.
 	it('refuses to delete a device that has an audit row, leaving the audit row intact', async () => {
 		const restaurantId = await makeRestaurant();
 		const ownerId = await makeOwner(restaurantId, 'owner@cafe.com');
@@ -583,10 +626,222 @@ describe('pos_devices and the device idempotency key', () => {
 		await insertDeviceAudit(restaurantId, deviceId, null);
 
 		const error = await expectError('delete from pos_devices where id = $1', [deviceId]);
-		expect(error.code).toBe('23503'); // foreign_key_violation
+		expect(error.code).toBe('23503');
 		expect(error.constraint).toBe('audit_log_device_id_pos_devices_id_fk');
 
 		const { rows } = await pool.query('select count(*)::int as n from audit_log');
 		expect(rows[0].n).toBe(1);
+	});
+});
+
+describe('roles constraints', () => {
+	async function makeRole(restaurantId: string, name: string): Promise<string> {
+		const { rows } = await pool.query<{ id: string }>(
+			`insert into roles (restaurant_id, name) values ($1, $2) returning id`,
+			[restaurantId, name]
+		);
+		return rows[0].id;
+	}
+
+	it.each(['Owner', 'OWNER', ' owner ', 'OwNeR'])(
+		'rejects a role named %j (roles_name_not_owner)',
+		async (name) => {
+			const restaurantId = await makeRestaurant();
+			const error = await expectError(`insert into roles (restaurant_id, name) values ($1, $2)`, [
+				restaurantId,
+				name
+			]);
+			expect(error.constraint).toBe('roles_name_not_owner');
+		}
+	);
+
+	it.each(['', '   '])('rejects a blank role name %j (roles_name_length)', async (name) => {
+		const restaurantId = await makeRestaurant();
+		const error = await expectError(`insert into roles (restaurant_id, name) values ($1, $2)`, [
+			restaurantId,
+			name
+		]);
+		expect(error.constraint).toBe('roles_name_length');
+	});
+
+	it('rejects two LIVE roles that differ only in case (roles_name_unique)', async () => {
+		const restaurantId = await makeRestaurant();
+		await makeRole(restaurantId, 'Cashier');
+		const error = await expectError(`insert into roles (restaurant_id, name) values ($1, $2)`, [
+			restaurantId,
+			'cashier'
+		]);
+		expect(error.constraint).toBe('roles_name_unique');
+	});
+
+	it('frees the name once the live role is archived', async () => {
+		const restaurantId = await makeRestaurant();
+		const roleId = await makeRole(restaurantId, 'Cashier');
+		await pool.query(`update roles set archived_at = now() where id = $1`, [roleId]);
+		const { rowCount } = await pool.query(
+			`insert into roles (restaurant_id, name) values ($1, 'Cashier')`,
+			[restaurantId]
+		);
+		expect(rowCount).toBe(1);
+	});
+
+	it('rejects an admin.* permission key (role_permissions_key_pos_only)', async () => {
+		const restaurantId = await makeRestaurant();
+		const roleId = await makeRole(restaurantId, 'Cashier');
+		const error = await expectError(
+			`insert into role_permissions (restaurant_id, role_id, permission_key)
+			 values ($1, $2, 'admin.settings')`,
+			[restaurantId, roleId]
+		);
+		expect(error.constraint).toBe('role_permissions_key_pos_only');
+	});
+
+	it('refuses a user in restaurant B holding a role from restaurant A (users_role_fk)', async () => {
+		const a = await makeRestaurant('Cafe A');
+		const b = await makeRestaurant('Cafe B');
+		const roleId = await makeRole(a, 'Cashier');
+		const error = await expectError(
+			`insert into users (restaurant_id, role, display_name, role_id)
+			 values ($1, 'staff', 'Bob', $2)`,
+			[b, roleId]
+		);
+		expect(error.code).toBe('23503');
+		expect(error.constraint).toBe('users_role_fk');
+	});
+
+	it('refuses to delete a role a user still holds (users_role_fk)', async () => {
+		const restaurantId = await makeRestaurant();
+		const roleId = await makeRole(restaurantId, 'Cashier');
+		await pool.query(
+			`insert into users (restaurant_id, role, display_name, role_id)
+			 values ($1, 'staff', 'Bob', $2)`,
+			[restaurantId, roleId]
+		);
+		const error = await expectError(`delete from roles where id = $1`, [roleId]);
+		expect(error.code).toBe('23503');
+		expect(error.constraint).toBe('users_role_fk');
+	});
+
+	const SEED_DEFAULT_ROLES = `
+		INSERT INTO "roles" ("restaurant_id", "name")
+		SELECT r."id", v."name"
+		FROM "restaurants" r CROSS JOIN (VALUES ('Cashier'), ('Waiter')) AS v("name")
+		ON CONFLICT ("restaurant_id", lower("name")) WHERE "archived_at" IS NULL DO NOTHING`;
+
+	const SEED_DEFAULT_ROLE_PERMISSIONS = `
+		INSERT INTO "role_permissions" ("restaurant_id", "role_id", "permission_key")
+		SELECT ro."restaurant_id", ro."id", k."key"
+		FROM "roles" ro
+		JOIN (VALUES
+		  ('cashier', 'pos.sell'), ('cashier', 'pos.payment'), ('cashier', 'pos.print_receipt'),
+		  ('cashier', 'pos.void_unsent_item'), ('cashier', 'pos.cash_payout'),
+		  ('waiter', 'pos.create_order'), ('waiter', 'pos.view_menu'), ('waiter', 'pos.modify_order'),
+		  ('waiter', 'pos.send_to_kitchen'), ('waiter','pos.transfer_table')
+		) AS k("role_name", "key") ON lower(ro."name") = k."role_name"
+		WHERE ro."archived_at" IS NULL
+		ON CONFLICT ("role_id", "permission_key") DO NOTHING`;
+
+	async function assertSeededRoles(restaurantId: string): Promise<void> {
+		const { rows: roles } = await pool.query<{ id: string; name: string }>(
+			`select id, name from roles
+			 where restaurant_id = $1 and archived_at is null
+			 order by name`,
+			[restaurantId]
+		);
+		expect(roles.map((r) => r.name)).toEqual(['Cashier', 'Waiter']);
+
+		const { rows: perms } = await pool.query<{ name: string; permission_key: string }>(
+			`select ro.name, p.permission_key
+			 from role_permissions p
+			 join roles ro on ro.id = p.role_id
+			 where ro.restaurant_id = $1 and ro.archived_at is null
+			 order by ro.name, p.permission_key`,
+			[restaurantId]
+		);
+		expect(perms).toHaveLength(10);
+		expect(perms.every((p) => p.permission_key.startsWith('pos.'))).toBe(true);
+		expect(perms.some((p) => p.permission_key.startsWith('admin.'))).toBe(false);
+		expect(perms.filter((p) => p.name === 'Cashier').map((p) => p.permission_key)).toEqual([
+			'pos.cash_payout',
+			'pos.payment',
+			'pos.print_receipt',
+			'pos.sell',
+			'pos.void_unsent_item'
+		]);
+		expect(perms.filter((p) => p.name === 'Waiter').map((p) => p.permission_key)).toEqual([
+			'pos.create_order',
+			'pos.modify_order',
+			'pos.send_to_kitchen',
+			'pos.transfer_table',
+			'pos.view_menu'
+		]);
+	}
+
+	it('seeds Cashier and Waiter with the ten POS keys, idempotently (migration 0009)', async () => {
+		const restaurantId = await makeRestaurant('Seed Cafe');
+		await pool.query(SEED_DEFAULT_ROLES);
+		await pool.query(SEED_DEFAULT_ROLE_PERMISSIONS);
+		await assertSeededRoles(restaurantId);
+
+		await pool.query(SEED_DEFAULT_ROLES);
+		await pool.query(SEED_DEFAULT_ROLE_PERMISSIONS);
+		await assertSeededRoles(restaurantId);
+
+		const { rows } = await pool.query<{ n: number }>(
+			`select count(*)::int as n from roles where restaurant_id = $1`,
+			[restaurantId]
+		);
+		expect(rows[0].n).toBe(2);
+	});
+
+	it('seeds each restaurant its own roles (tenant isolation)', async () => {
+		const a = await makeRestaurant('Tenant A');
+		const b = await makeRestaurant('Tenant B');
+		await pool.query(SEED_DEFAULT_ROLES);
+		await pool.query(SEED_DEFAULT_ROLE_PERMISSIONS);
+		await assertSeededRoles(a);
+		await assertSeededRoles(b);
+
+		const { rows } = await pool.query<{ n: number }>(
+			`select count(*)::int as n from roles r
+			 join role_permissions p on p.role_id = r.id
+			 where r.restaurant_id = $1 and p.restaurant_id <> $1`,
+			[a]
+		);
+		expect(rows[0].n).toBe(0);
+	});
+
+	it('does not overwrite an archived Cashier when the seed runs again', async () => {
+		const restaurantId = await makeRestaurant('Archive Cafe');
+		await pool.query(SEED_DEFAULT_ROLES);
+		await pool.query(SEED_DEFAULT_ROLE_PERMISSIONS);
+
+		const {
+			rows: [{ id: archivedId }]
+		} = await pool.query<{ id: string }>(
+			`select id from roles where restaurant_id = $1 and name = 'Cashier'`,
+			[restaurantId]
+		);
+
+		await pool.query(`update roles set archived_at = now() where id = $1`, [archivedId]);
+
+		await pool.query(SEED_DEFAULT_ROLES);
+		await pool.query(SEED_DEFAULT_ROLE_PERMISSIONS);
+
+		const { rows: archived } = await pool.query<{ name: string; archived_at: Date | null }>(
+			`select name, archived_at from roles where id = $1`,
+			[archivedId]
+		);
+		expect(archived[0].name).toBe('Cashier');
+		expect(archived[0].archived_at).not.toBeNull();
+
+		const { rows: live } = await pool.query<{ id: string }>(
+			`select id from roles
+			 where restaurant_id = $1 and name = 'Cashier' and archived_at is null`,
+			[restaurantId]
+		);
+
+		expect(live).toHaveLength(1);
+		expect(live[0].id).not.toBe(archivedId);
 	});
 });

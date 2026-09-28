@@ -36,7 +36,7 @@
 	let pending = $state(false);
 	let message = $state<string | null>(null);
 	let notRegistered = $state(false);
-	let signedIn = $state<{ displayName: string; role: string } | null>(null);
+	let signedIn = $state<{ displayName: string; roleName: string } | null>(null);
 
 	// The lockout countdown. The unlock moment is computed ONCE, when the 423
 	// arrives, and the remaining time is always derived from it, so the countdown
@@ -152,7 +152,7 @@
 			message = 'No connection, and this device could not record the sign-in.';
 			return;
 		}
-		signedIn = { displayName: cached.displayName, role: cached.role };
+		signedIn = { displayName: cached.displayName, roleName: cached.roleName };
 	}
 
 	async function submit() {
@@ -198,8 +198,11 @@
 			}
 
 			if (response.status === 200) {
-				const body = (await response.json()) as { displayName: string; role: string };
-				signedIn = { displayName: body.displayName, role: body.role };
+				const body = (await response.json()) as {
+					displayName: string;
+					roleName: string;
+				};
+				signedIn = { displayName: body.displayName, roleName: body.roleName };
 				return;
 			}
 			if (response.status === 423) {
@@ -297,7 +300,9 @@
 	{#if signedIn}
 		<!-- The order screen arrives with the sales plan. This plan's till can be
 		     registered and signed into; it cannot sell, and no /pos/order route exists. -->
-		<h1 class="text-title text-ink">Signed in as {signedIn.displayName} ({signedIn.role})</h1>
+		<h1 class="text-title text-ink">
+			Signed in as {signedIn.displayName} ({signedIn.roleName})
+		</h1>
 		<button
 			type="button"
 			onclick={() => goto(resolve('/pos'))}

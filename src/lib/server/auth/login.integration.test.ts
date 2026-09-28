@@ -9,6 +9,7 @@ import { hashPassword } from './password';
 import { loginWithPassword, MAX_FAILED_ATTEMPTS, LOCKOUT_MS } from './login';
 import { resetThrottle, DEFAULT_CAPACITY } from './throttle';
 import { validateSessionToken } from './session';
+import { seedStaff } from '../db/test/seed';
 
 const db = testDb();
 const PASSWORD = 'a correct password';
@@ -190,15 +191,17 @@ describe('loginWithPassword', () => {
 
 	// The database refuses to give a non-owner credentials at all, which is the
 	// stronger guarantee; loginWithPassword additionally refuses a non-owner.
-	it('the database forbids creating a cashier with an email and password', async () => {
+	it('the database forbids creating staff with an email and password', async () => {
 		const [restaurant] = await db.insert(restaurants).values({ name: 'Cafe Two' }).returning();
+		const { roleId } = await seedStaff(db, restaurant.id, { displayName: 'Seed Staff' });
 
 		let constraint: string | undefined;
 		try {
 			await db.insert(users).values({
 				restaurantId: restaurant.id,
-				role: 'cashier',
-				displayName: 'Cashier',
+				role: 'staff',
+				roleId,
+				displayName: 'Staff',
 				email: 'cashier@cafe.com',
 				passwordHash: await hashPassword(PASSWORD)
 			});

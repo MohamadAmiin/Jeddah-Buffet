@@ -4,6 +4,7 @@ import { testDb, closeTestDb } from '../db/test/db';
 import { restaurants } from '../db/schema/restaurants';
 import { users } from '../db/schema/users';
 import { auditLog } from '../db/schema/audit';
+import { seedStaff } from '../db/test/seed';
 import { hashPin } from '../../pin';
 import { registerDevice } from './pos-device';
 import {
@@ -38,7 +39,7 @@ type Fixture = {
 };
 
 /**
- * A restaurant, its owner, a cashier whose PIN is 1234, and a registered device —
+ * A restaurant, its owner, a staff member whose PIN is 1234, and a registered device —
  * the device is needed because ctx.deviceId lands in audit_log.device_id, whose
  * foreign key is RESTRICT.
  */
@@ -54,16 +55,22 @@ async function makeFixture(email = 'owner@cafe.com', failedPasswordCount = 0): P
 			passwordHash: 'not-a-real-hash'
 		})
 		.returning();
-	const [cashier] = await db
-		.insert(users)
-		.values({
-			restaurantId: restaurant.id,
-			role: 'cashier',
-			displayName: 'Sam',
-			pinHash: PIN_1234,
-			failedPasswordCount
-		})
-		.returning();
+	const { id: cashierId } = await seedStaff(db, restaurant.id, {
+		displayName: 'Sam',
+		pinHash: PIN_1234
+	});
+	const [staff] = await db
+		.select({ id: users.id })
+		.from(users)
+		.where(eq(users.id, cashierId))
+		.limit(1);
+
+	if (!staff) {
+		throw new Error('Failed to load seeded staff fixture.');
+	}
+
+	await db.update(users).set({ failedPasswordCount }).where(eq(users.id, cashierId));
+
 	const device = await db.transaction((tx) =>
 		registerDevice(tx, {
 			restaurantId: restaurant.id,
@@ -74,7 +81,7 @@ async function makeFixture(email = 'owner@cafe.com', failedPasswordCount = 0): P
 	return {
 		restaurantId: restaurant.id,
 		ownerId: owner.id,
-		cashierId: cashier.id,
+		cashierId,
 		deviceId: device.deviceId,
 		deviceCode: device.deviceCode
 	};
@@ -132,7 +139,12 @@ describe('verifyEmployeePin', () => {
 
 		expect(await attempt(f, '1234')).toEqual({
 			ok: true,
-			employee: { id: f.cashierId, displayName: 'Sam', role: 'cashier' }
+			employee: {
+				id: f.cashierId,
+				displayName: 'Sam',
+				isOwner: false,
+				roleName: 'Cashier'
+			}
 		});
 		const row = await userRow(f.cashierId);
 		expect(row.failedPinCount).toBe(0);
@@ -221,7 +233,10 @@ describe('verifyEmployeePin', () => {
 			{ event: 'pos.pin.success', deviceId: f.deviceId, clientOpId: opId },
 			{ event: 'pos.pin.success', deviceId: f.deviceId, clientOpId: null }
 		]);
-		expect(rows[0].details).toEqual({ deviceCode: f.deviceCode, role: 'cashier' });
+		expect(rows[0].details).toEqual({
+			deviceCode: f.deviceCode,
+			roleName: 'Cashier'
+		});
 		expect(rows[0].actorUserId).toBe(f.cashierId);
 	});
 
@@ -275,7 +290,7 @@ describe('verifyEmployeePin', () => {
 			ok: false,
 			reason: 'invalid'
 		});
-		// B's cashier really has PIN 1234 — and is still refused through A's device.
+		// B's staff member really has PIN 1234 — and is still refused through A's device.
 		expect(await attempt(a, '1234', {}, b.cashierId)).toEqual({ ok: false, reason: 'invalid' });
 
 		expect(await auditRows()).toHaveLength(0);
@@ -284,23 +299,19 @@ describe('verifyEmployeePin', () => {
 
 	it('refuses an inactive employee and one with no PIN set', async () => {
 		const f = await makeFixture();
-		const [inactive] = await db
-			.insert(users)
-			.values({
-				restaurantId: f.restaurantId,
-				role: 'waiter',
-				displayName: 'Gone',
-				pinHash: PIN_1234,
-				isActive: false
-			})
-			.returning();
-		const [noPin] = await db
-			.insert(users)
-			.values({ restaurantId: f.restaurantId, role: 'waiter', displayName: 'New' })
-			.returning();
+		const { id: inactiveId } = await seedStaff(db, f.restaurantId, {
+			displayName: 'Gone',
+			roleName: 'Cashier',
+			pinHash: PIN_1234,
+			isActive: false
+		});
+		const { id: noPinId } = await seedStaff(db, f.restaurantId, {
+			displayName: 'New',
+			roleName: 'Cashier'
+		});
 
-		expect(await attempt(f, '1234', {}, inactive.id)).toEqual({ ok: false, reason: 'invalid' });
-		expect(await attempt(f, '1234', {}, noPin.id)).toEqual({ ok: false, reason: 'invalid' });
+		expect(await attempt(f, '1234', {}, inactiveId)).toEqual({ ok: false, reason: 'invalid' });
+		expect(await attempt(f, '1234', {}, noPinId)).toEqual({ ok: false, reason: 'invalid' });
 		expect(await auditRows()).toHaveLength(0);
 	});
 });
