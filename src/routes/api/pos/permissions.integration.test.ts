@@ -9,7 +9,10 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import type { RequestEvent } from '@sveltejs/kit';
 import { eq, sql } from 'drizzle-orm';
 import { testDb, closeTestDb } from '$lib/server/db/test/db';
+import { randomUUID } from 'node:crypto';
 import { seedStaff } from '$lib/server/db/test/seed';
+import { POST as syncPost } from './sync/+server';
+import { onRestaurantCreated } from '$lib/server/restaurants';
 import { restaurants } from '$lib/server/db/schema/restaurants';
 import { users } from '$lib/server/db/schema/users';
 import { posDevices } from '$lib/server/db/schema/pos-devices';
@@ -45,6 +48,17 @@ type Seed = {
 /** One restaurant with an owner, a cashier, one ACTIVE device and one REVOKED device. */
 async function seed(): Promise<Seed> {
 	const [restaurant] = await db.insert(restaurants).values({ name: 'Cafe One' }).returning();
+	// The onRestaurantCreated initializers add the settings row (a session
+	// derives its business_date from the time zone), the two default roles
+	// (Cashier / Waiter — seedStaff below finds Cashier instead of creating
+	// one), and the 23 spec-23 accounts T-19's journal writer resolves codes
+	// against.
+	await db.transaction((tx) =>
+		onRestaurantCreated(tx, restaurant.id, {
+			restaurantName: 'Cafe One',
+			timeZone: 'UTC'
+		})
+	);
 	const [owner] = await db
 		.insert(users)
 		.values({
@@ -164,6 +178,20 @@ const DEVICE_GUARDED = [
 		method: 'GET',
 		body: () => undefined,
 		handler: menuGet
+	},
+	{
+		routeId: '/api/pos/sync',
+		method: 'POST',
+		body: (s: Seed) => ({
+			kind: 'session.open',
+			clientOpId: randomUUID(),
+			deviceId: s.activeDeviceId,
+			employeeId: s.cashierId,
+			occurredAt: new Date().toISOString(),
+			seq: 0,
+			payload: { posSessionId: randomUUID(), openingCashMinor: '0' }
+		}),
+		handler: syncPost
 	}
 ] as const;
 

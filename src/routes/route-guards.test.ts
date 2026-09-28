@@ -172,7 +172,8 @@ describe('every /api route is guarded', () => {
 			'/api/menu/version',
 			'/api/pos/employees',
 			'/api/pos/pin',
-			'/api/pos/register'
+			'/api/pos/register',
+			'/api/pos/sync'
 		]);
 	});
 
