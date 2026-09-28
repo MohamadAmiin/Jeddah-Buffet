@@ -39,6 +39,8 @@ export type SalesFixture = {
 	staffId: string;
 	deviceId: string;
 	deviceCode: string;
+	/** The device cookie's value, for driving the real /api/pos/* handlers. */
+	deviceToken: string;
 	menuVersion: number;
 	taxMode: TaxMode;
 	taxRateBp: number;
@@ -158,6 +160,7 @@ export async function seedSalesRestaurant(
 			staffId: staff.id,
 			deviceId: device.deviceId,
 			deviceCode: device.deviceCode,
+			deviceToken: device.token,
 			menuVersion,
 			taxMode,
 			taxRateBp,
@@ -178,7 +181,12 @@ export async function withSecondDevice(database: Db, f: SalesFixture): Promise<S
 			label: 'Second tablet'
 		})
 	);
-	return { ...f, deviceId: device.deviceId, deviceCode: device.deviceCode };
+	return {
+		...f,
+		deviceId: device.deviceId,
+		deviceCode: device.deviceCode,
+		deviceToken: device.token
+	};
 }
 
 export function syncContext(

@@ -26,6 +26,9 @@ import { POST as registerPost } from './register/+server';
 import { GET as menuVersionGet } from '../menu/version/+server';
 import { GET as menuGet } from '../menu/+server';
 import { actions as deviceActions } from '../../(dashboard)/device/+page.server';
+import { db as appDb } from '$lib/server/db/client';
+import { orders } from '$lib/server/db/schema/orders';
+import { openSessionAt, saleEnvelope, seedSalesRestaurant } from '$lib/server/db/test/sales';
 
 const db = testDb();
 
@@ -291,5 +294,63 @@ describe('MANDATORY (spec 29): insufficient role with a valid session', () => {
 		expect(status).toBe(403);
 		const [row] = await db.select().from(posDevices).where(eq(posDevices.id, s.activeDeviceId));
 		expect(row.revokedAt).toBeNull();
+	});
+});
+
+describe('MANDATORY (spec 29): /api/pos/sync checks the EMPLOYEE, and the tender decides the answer', () => {
+	// The sync route is the role-sensitive POS endpoint the block above anticipates.
+	// A card sale has not completed on the till yet, so an employee without
+	// pos.payment is refused outright; a cash sale has already happened, so it is
+	// recorded and flagged for the owner instead (CLAUDE.md decision (f)).
+	it('a card sale by a waiter answers 403 and records nothing; a cash one is recorded_flagged', async () => {
+		const f = await seedSalesRestaurant(appDb);
+		const waiter = await seedStaff(appDb, f.restaurantId, {
+			displayName: 'Robin',
+			roleName: 'Waiter'
+		});
+		const posSessionId = randomUUID();
+		await openSessionAt(appDb, f, {
+			posSessionId,
+			openedAt: new Date(Date.now() - 300_000),
+			openingCashMinor: 0n
+		});
+		const sale = (method: 'cash' | 'card', invoiceSeq: number) =>
+			saleEnvelope(f, {
+				posSessionId,
+				occurredAt: new Date(Date.now() - 60_000),
+				invoiceSeq,
+				method,
+				orderType: 'takeaway',
+				tableLabel: null,
+				employeeId: waiter.id,
+				lines: [
+					{
+						menuItemId: f.items.tea,
+						itemName: 'Tea',
+						quantity: 1,
+						unitPriceMinor: 200n,
+						taxRateBp: f.taxRateBp
+					}
+				]
+			});
+		const post = (body: unknown) =>
+			syncPost(
+				makeEvent('/api/pos/sync', 'POST', body, { [DEVICE_COOKIE]: f.deviceToken })
+			) as Promise<Response>;
+
+		const card = await post(sale('card', 1));
+		expect(card.status).toBe(403);
+		const [{ n: afterCard }] = await db
+			.select({ n: sql<number>`count(*)::int` })
+			.from(orders)
+			.where(eq(orders.restaurantId, f.restaurantId));
+		expect(afterCard).toBe(0);
+
+		const cash = await post(sale('cash', 2));
+		expect(cash.status).toBe(200);
+		expect(await cash.json()).toMatchObject({
+			status: 'recorded_flagged',
+			flag: 'employee_not_permitted'
+		});
 	});
 });
