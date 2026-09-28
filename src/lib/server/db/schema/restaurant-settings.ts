@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { pgTable, uuid, text, integer, timestamp, check } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, text, integer, boolean, timestamp, check } from 'drizzle-orm/pg-core';
 import { restaurants } from './restaurants';
 
 // One settings row per restaurant, so the foreign key IS the primary key.
@@ -64,6 +64,16 @@ export const restaurantSettings = pgTable(
 		taxRateBp: integer('tax_rate_bp'),
 		// Spec 33 open decision 4: an ISO 4217 code the money formatter can render.
 		currencyCode: text('currency_code'),
+		// Spec 33 open decision 4 (payment methods at launch), the part ASSUMED on
+		// 2026-09-28 (tasks/pos-sales Assumption 3, recorded in CLAUDE.md by T-02
+		// pending the user's confirmation): cash is always accepted; card and
+		// mobile are recorded external-terminal tenders the owner switches on
+		// here. NULLABLE with NO column DEFAULT, exactly like tax_mode above:
+		// null means the owner has not chosen, and the till treats it as OFF and
+		// shows the reason on the disabled key. Written only by updateSettings
+		// (T-29).
+		acceptsCard: boolean('accepts_card'),
+		acceptsMobile: boolean('accepts_mobile'),
 		// The menu snapshot's version (spec 5) — see the note above this table.
 		menuVersion: integer('menu_version').notNull().default(1),
 		updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
