@@ -130,15 +130,18 @@ describe("store.ts's menu path, as written", () => {
 	});
 
 	it('adds the menu store in a NEW case and leaves case 0 alone', () => {
-		expect(source).toContain('const DB_VERSION = 2');
-		// The case labels are searched for AFTER the switch: upgrade()'s own comment
-		// mentions `case 1:` above it, which a whole-file search would find first.
+		// T-22 (tasks/pos-sales) bumped DB_VERSION to 3 and added case 2; the menu
+		// case is still case 1 and case 0 stays as it was.
+		expect(source).toContain('const DB_VERSION = 3');
 		const switchAt = source.indexOf('switch (oldVersion)');
 		const case0At = source.indexOf('case 0:', switchAt);
 		const case1At = source.indexOf('case 1:', switchAt);
+		const case2At = source.indexOf('case 2:', switchAt);
 		expect(switchAt).toBeGreaterThan(-1);
 		expect(case1At).toBeGreaterThan(case0At);
-		expect(source.slice(case1At, source.indexOf('}', case1At))).toContain("'menu'");
+		expect(case2At).toBeGreaterThan(case1At);
+		const case1Body = source.slice(case1At, case2At);
+		expect(case1Body).toContain("'menu'");
 		const case0 = source.slice(case0At, case1At);
 		for (const store of ["'employees'", "'settings'", "'offline_logins'"]) {
 			expect(case0).toContain(store);
@@ -188,7 +191,17 @@ describe('the menu in IndexedDB', () => {
 		const stores = Array.from(db.objectStoreNames).sort();
 		db.close();
 
-		expect(stores).toEqual(['employees', 'menu', 'offline_logins', 'settings']);
+		// T-22 adds four more stores; the upgrade still preserves employees.
+		expect(stores).toEqual([
+			'employees',
+			'invoice_sequence',
+			'menu',
+			'offline_logins',
+			'orders',
+			'session',
+			'settings',
+			'sync_queue'
+		]);
 		expect(await readCachedEmployees()).toEqual([sam]);
 	});
 
