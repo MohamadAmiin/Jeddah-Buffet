@@ -5,6 +5,7 @@ import {
 	text,
 	bigint,
 	numeric,
+	date,
 	timestamp,
 	index,
 	uniqueIndex,
@@ -14,6 +15,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { restaurants } from './restaurants';
 import { menuItems, modifiers } from './menu';
+import { users } from './users';
 
 // INVENTORY (spec 15, 16, 3): ingredients, the units they are bought in, and the
 // recipes that say what each dish and each modifier uses.
@@ -174,5 +176,202 @@ export const recipeLines = pgTable(
 			.on(t.modifierId, t.ingredientId)
 			.where(sql`${t.modifierId} is not null`),
 		index('recipe_lines_ingredient_idx').on(t.ingredientId)
+	]
+);
+
+// THE STOCK LEDGER (spec 3, 15; invariant 6). Stock on hand IS the sum of these
+// rows; the ingredients caches are a copy. Every row is inserted by applyMovements
+// (T-16) and none is ever updated or deleted: stock_movements, waste_entries,
+// stock_count_lines and opening_stock_entries become append-only in custom
+// migration 0014 (T-08). A mistake is corrected by a new, opposite movement.
+//
+// SIGN BY TYPE (stock_movements_sign_by_type): purchase and opening_stock bring
+// goods in (qty > 0, cost >= 0); purchase_reversal, sale_consumption, waste and
+// comp take them out (qty < 0, cost <= 0); count_adjustment goes either way but is
+// never zero. A zero-quantity consumption is refused: callers skip it.
+//
+// A REVALUATION row carries qty = 0 and a non-zero cost: it moves VALUE, not goods
+// — the gap between the old average and a late delivery's price on goods already
+// sold (CLAUDE.md, "Inventory 2").
+//
+// source_id has NO foreign key: it points at a purchase, an order, a waste entry,
+// a count or an opening-stock entry depending on source_type, so the pair is
+// indexed instead.
+//
+// business_date is the business date of the event that caused the movement —
+// the POS session's for a sale, the chosen day for a dashboard write — and is
+// NEVER derived from created_at (invariant 11).
+export const stockMovements = pgTable(
+	'stock_movements',
+	{
+		id: bigint('id', { mode: 'bigint' }).generatedAlwaysAsIdentity().primaryKey(),
+		restaurantId: tenant(),
+		ingredientId: uuid('ingredient_id').notNull(),
+		movementType: text('movement_type').notNull(),
+		// Base units, signed by type.
+		qty: qtyColumn('qty').notNull(),
+		// The value that moved, signed like qty (a revaluation: either sign).
+		costMinor: bigint('cost_minor', { mode: 'bigint' }).notNull(),
+		sourceType: text('source_type').notNull(),
+		sourceId: uuid('source_id').notNull(),
+		businessDate: date('business_date', { mode: 'string' }).notNull(),
+		occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+		// NULL for a sale synced from the till (the actor is the employee on the order).
+		recordedByUserId: uuid('recorded_by_user_id').references(() => users.id, {
+			onDelete: 'restrict'
+		}),
+		createdAt: createdAt()
+	},
+	(t) => [
+		foreignKey({
+			columns: [t.restaurantId, t.ingredientId],
+			foreignColumns: [ingredients.restaurantId, ingredients.id],
+			name: 'stock_movements_ingredient_fk'
+		}).onDelete('restrict'),
+		// The literals are MOVEMENT_TYPES and MOVEMENT_SOURCES in
+		// src/lib/server/inventory/movements.ts (T-16); the constraints test pins them.
+		check(
+			'stock_movements_type_valid',
+			sql`${t.movementType} in ('purchase', 'purchase_reversal', 'opening_stock', 'sale_consumption', 'waste', 'count_adjustment', 'comp', 'revaluation')`
+		),
+		check(
+			'stock_movements_source_valid',
+			sql`${t.sourceType} in ('purchase', 'order', 'waste_entry', 'stock_count', 'opening_stock')`
+		),
+		check(
+			'stock_movements_sign_by_type',
+			sql`(${t.movementType} in ('purchase', 'opening_stock') and ${t.qty} > 0 and ${t.costMinor} >= 0) or (${t.movementType} in ('purchase_reversal', 'sale_consumption', 'waste', 'comp') and ${t.qty} < 0 and ${t.costMinor} <= 0) or (${t.movementType} = 'count_adjustment' and ${t.qty} <> 0) or (${t.movementType} = 'revaluation' and ${t.qty} = 0 and ${t.costMinor} <> 0)`
+		),
+		index('stock_movements_ingredient_time_idx').on(t.restaurantId, t.ingredientId, t.occurredAt),
+		index('stock_movements_restaurant_business_date_idx').on(t.restaurantId, t.businessDate),
+		index('stock_movements_source_idx').on(t.sourceType, t.sourceId)
+	]
+);
+
+// Stock already on the shelf at go-live (CLAUDE.md, "Inventory 1"): one entry per
+// ingredient, only while it has no movement at all; posts Dr 1200 / Cr 3000.
+// Append-only (T-08). The purchase-unit name and factor are snapshots.
+export const openingStockEntries = pgTable(
+	'opening_stock_entries',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		restaurantId: tenant(),
+		ingredientId: uuid('ingredient_id').notNull(),
+		purchaseUnitName: text('purchase_unit_name').notNull(),
+		unitQty: qtyColumn('unit_qty').notNull(),
+		baseQtyPerUnit: qtyColumn('base_qty_per_unit').notNull(),
+		baseQty: qtyColumn('base_qty').notNull(),
+		unitCostMinor: bigint('unit_cost_minor', { mode: 'bigint' }).notNull(),
+		valueMinor: bigint('value_minor', { mode: 'bigint' }).notNull(),
+		businessDate: date('business_date', { mode: 'string' }).notNull(),
+		recordedByUserId: uuid('recorded_by_user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'restrict' }),
+		createdAt: createdAt()
+	},
+	(t) => [
+		foreignKey({
+			columns: [t.restaurantId, t.ingredientId],
+			foreignColumns: [ingredients.restaurantId, ingredients.id],
+			name: 'opening_stock_entries_ingredient_fk'
+		}).onDelete('restrict'),
+		uniqueIndex('opening_stock_entries_ingredient_unique').on(t.ingredientId),
+		check(
+			'opening_stock_entries_amounts_valid',
+			sql`${t.unitQty} > 0 and ${t.baseQtyPerUnit} > 0 and ${t.baseQty} > 0 and ${t.unitCostMinor} >= 0 and ${t.valueMinor} >= 0`
+		)
+	]
+);
+
+// Waste (spec 15, 24): goods thrown away, costed at the average and posted
+// Dr 5100 / Cr 1200. Append-only (T-08).
+export const wasteEntries = pgTable(
+	'waste_entries',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		restaurantId: tenant(),
+		ingredientId: uuid('ingredient_id').notNull(),
+		qty: qtyColumn('qty').notNull(),
+		reason: text('reason').notNull(),
+		note: text('note'),
+		businessDate: date('business_date', { mode: 'string' }).notNull(),
+		recordedByUserId: uuid('recorded_by_user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'restrict' }),
+		createdAt: createdAt()
+	},
+	(t) => [
+		foreignKey({
+			columns: [t.restaurantId, t.ingredientId],
+			foreignColumns: [ingredients.restaurantId, ingredients.id],
+			name: 'waste_entries_ingredient_fk'
+		}).onDelete('restrict'),
+		index('waste_entries_restaurant_business_date_idx').on(t.restaurantId, t.businessDate),
+		check('waste_entries_qty_positive', sql`${t.qty} > 0`),
+		check(
+			'waste_entries_reason_valid',
+			sql`${t.reason} in ('spoilage', 'preparation_error', 'breakage', 'other')`
+		),
+		check(
+			'waste_entries_note_for_other',
+			sql`${t.reason} <> 'other' or (${t.note} is not null and char_length(btrim(${t.note})) between 3 and 200)`
+		)
+	]
+);
+
+// A stock count (spec 15): the header. Its lines carry the system quantity read
+// from the ledger under the ingredient locks at posting time.
+export const stockCounts = pgTable(
+	'stock_counts',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		restaurantId: tenant(),
+		businessDate: date('business_date', { mode: 'string' }).notNull(),
+		countedAt: timestamp('counted_at', { withTimezone: true }).notNull(),
+		note: text('note'),
+		recordedByUserId: uuid('recorded_by_user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'restrict' }),
+		createdAt: createdAt()
+	},
+	(t) => [
+		// Target of stock_count_lines_count_fk.
+		unique('stock_counts_id_restaurant_unique').on(t.id, t.restaurantId),
+		index('stock_counts_restaurant_business_date_idx').on(t.restaurantId, t.businessDate)
+	]
+);
+
+// One line per counted ingredient. Append-only (T-08).
+export const stockCountLines = pgTable(
+	'stock_count_lines',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		restaurantId: tenant(),
+		countId: uuid('count_id').notNull(),
+		ingredientId: uuid('ingredient_id').notNull(),
+		systemQty: qtyColumn('system_qty').notNull(),
+		countedQty: qtyColumn('counted_qty').notNull(),
+		differenceQty: qtyColumn('difference_qty').notNull(),
+		// Signed: the value of the adjustment, negative for a shortfall.
+		costMinor: bigint('cost_minor', { mode: 'bigint' }).notNull(),
+		createdAt: createdAt()
+	},
+	(t) => [
+		foreignKey({
+			columns: [t.restaurantId, t.countId],
+			foreignColumns: [stockCounts.restaurantId, stockCounts.id],
+			name: 'stock_count_lines_count_fk'
+		}).onDelete('restrict'),
+		foreignKey({
+			columns: [t.restaurantId, t.ingredientId],
+			foreignColumns: [ingredients.restaurantId, ingredients.id],
+			name: 'stock_count_lines_ingredient_fk'
+		}).onDelete('restrict'),
+		uniqueIndex('stock_count_lines_count_ingredient_unique').on(t.countId, t.ingredientId),
+		check('stock_count_lines_counted_non_negative', sql`${t.countedQty} >= 0`),
+		check(
+			'stock_count_lines_difference',
+			sql`${t.differenceQty} = ${t.countedQty} - ${t.systemQty}`
+		)
 	]
 );
