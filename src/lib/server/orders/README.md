@@ -19,6 +19,14 @@ Order/item lifecycle, split & merge bills, THE payment transaction.
 - Every line stores the unit price AND tax rate used, so later menu or rate
   changes cannot alter past sales (invariant 7).
 
+## Status
+
+`pay.ts` holds THE payment transaction (`recordSale`), run inside the caller's transaction in spec 13's order: insert `orders` + `order_lines` + `order_line_modifiers` → insert `payments` → finalize totals (no recomputation; validateSale already compared) → insert `invoices` (records the device-namespace number; a 23505 rolls the whole tx back and T-21 maps it to `invoice_collision`) → `consumeForSale` (T-17 no-op today) → post the sale entry, and the COGS entry only when `cogsMinor > 0n` → mark the order `paid` (the ONE status change; invariant 2 keeps every other row immutable) → write `sale.recorded` (with `clientOpId`) and `sale.flagged` (with `clientOpId: null`) when soft flags carried through.
+
+`sync.ts` (T-21) is its only caller and owns the `db.transaction` boundary. `validate.ts` (T-18) turns a queued `sale.complete` envelope into a `ParsedSale` and its soft flags.
+
+Not built here: the server-side OPEN/BILLED lifecycle, split and merge bills, voids of SENT items, refunds, comps, re-opening a paid order, and printing.
+
 This module calls `accounting/`, `inventory/`, `permissions/`, `audit/` and
 `money/`. **None of them call back.**
 
