@@ -19,14 +19,18 @@ Stock movements, recipes + unit conversion, weighted-average costing.
 
 ## Status
 
-No inventory tables exist yet. `consumeForSale` in `consume.ts` is the seam the payment transaction (`orders/pay.ts`, T-19) calls in spec 13's "Deduct Inventory" slot; today it takes the caller's `tx` and returns `{ movements: [], cogsMinor: 0n }`. The inventory plan will replace its body with recipe × quantity deductions (modifiers included) costed at the weighted average and return the movements and their total cost. Until then no stock movement is written and no COGS entry is posted, so gross profit equals revenue in the books, and sales recorded before recipes exist will never carry COGS (invariant 2 — posted records are permanent, so no back-fill).
+`consumeForSale` in `consume.ts` runs inside the payment transaction (`orders/pay.ts`) in spec 13's "Deduct Inventory" slot and first reads the order's `paid_at` and its POS session's business date, which every movement it writes carries. It aggregates the recipes of the sold items and chosen modifiers, with modifier deltas clamped at zero per line (`consumption.ts`). It writes one `sale_consumption` movement per ingredient through the one ledger writer, `applyMovements` in `movements.ts`, costed at the current weighted average, and returns the cost that `recordSale` posts as Dr 5000 / Cr 1200. A dish with no recipe consumes nothing and posts no COGS, and a sale recorded before its recipe existed never gains COGS later (invariant 2). It never throws for a business reason — an archived ingredient is consumed, stock may go negative, an ingredient with no average costs zero — so a completed cash sale is never rolled back by it (invariant 4).
 
 ## Files
 
-- `consume.ts` — `consumeForSale` returns `[]` movements and `0n` cost: the seam the inventory
-  plan fills. The rules above about movements and weighted average describe that plan, not this
-  file.
-- `consume.test.ts` — the no-op's contract: no movements, zero cost.
+- `movements.ts` — `applyMovements`, the ONE writer of `stock_movements` and the three cache
+  columns, under one ordered `FOR UPDATE`; `lockIngredients`.
+- `consumption.ts` — `aggregateConsumption`, pure recipe × quantity with clamped modifier deltas.
+- `consume.ts` — `consumeForSale`, the payment transaction's inventory step.
+- `ingredients.ts` — ingredients and purchase units; `recipes.ts` — recipes, `recipeIndexFor`,
+  `recipeCosts`; `business-date.ts` — `todayInZone`.
+- `*.integration.test.ts` — each against the real database; `consume.integration.test.ts`
+  drives the real `recordSale` and `handleOp`.
 
 Called by `orders/`. Never calls `orders/` back.
 
