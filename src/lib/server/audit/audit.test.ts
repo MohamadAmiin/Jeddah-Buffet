@@ -50,4 +50,71 @@ describe('assertNoSecrets', () => {
 		expect(() => assertNoSecrets('a string')).not.toThrow();
 		expect(() => assertNoSecrets(42)).not.toThrow();
 	});
+
+	// The T-15 details shapes. Every key uses deviceCode / opId / kind / reason
+	// (not pinLogin, deviceToken, or opToken), which is the reason writeAudit
+	// can be called from inside recordSale (T-19) without ever rolling back
+	// the sale it is recording.
+	it.each([
+		[
+			'pos.session.opened',
+			{
+				deviceCode: 'POS1',
+				businessDate: '2026-09-28',
+				openingCashMinor: '50000',
+				attached: false
+			}
+		],
+		[
+			'pos.session.closed',
+			{
+				deviceCode: 'POS1',
+				businessDate: '2026-09-28',
+				expectedCashMinor: '200000',
+				countedCashMinor: '199000',
+				differenceMinor: '-1000'
+			}
+		],
+		[
+			'sale.recorded',
+			{
+				deviceCode: 'POS1',
+				invoiceNumber: 'POS1-000001',
+				orderType: 'takeaway' as const,
+				method: 'cash' as const,
+				totalMinor: '1100'
+			}
+		],
+		[
+			'sale.flagged',
+			{
+				deviceCode: 'POS1',
+				invoiceNumber: 'POS1-000001',
+				flags: ['employee_not_permitted']
+			}
+		],
+		[
+			'sale.abandoned',
+			{
+				deviceCode: 'POS1',
+				invoiceNumber: 'POS1-000002',
+				reason: 'rejected' as const
+			}
+		],
+		[
+			'sync.op_unrecorded',
+			{
+				deviceCode: 'POS1',
+				kind: 'sale.complete',
+				flag: 'unknown_session',
+				detail: 'no session found'
+			}
+		],
+		['sync.op_retried', { opId: '42', outcome: 'accepted' as const }],
+		['sync.op_dismissed', { opId: '42', reason: 'Test sale during training' }],
+		['pos.pin.offline_success', { deviceCode: 'POS1' }],
+		['pos.pin.offline_failed', { deviceCode: 'POS1', reason: 'bad_pin' as const }]
+	])('passes for the T-15 shape %s', (_name, details) => {
+		expect(() => assertNoSecrets(details)).not.toThrow();
+	});
 });

@@ -61,7 +61,74 @@ export type AuditEvent =
 				oldPriceMinor: string;
 				newPriceMinor: string;
 			};
-	  };
+	  }
+	// ── POS sales (tasks/pos-sales T-15) ──
+	//
+	// writeAudit calls assertNoSecrets(details) inside the action's own
+	// transaction and throws on any KEY at any depth matching
+	// /pass|pin|token|hash|secret|cookie|authorization/i, so keys such as
+	// pinLogin, deviceToken or opToken would roll back the very sale being
+	// recorded. Every `details` shape below uses deviceCode (the printed
+	// POS1, never a token), opId (the pos_sync_ops.id bigint as a decimal
+	// string), kind (the op kind literal), or a reason enum — no key that
+	// matches the forbidden regex. The event NAME may contain 'pin'
+	// (pos.pin.offline_*): the guard reads DETAILS keys, not event names,
+	// and pos.pin.failed already exists.
+	//
+	// Amounts in details are decimal strings of the integer minor value
+	// (bigint cannot cross jsonb; invariant 1).
+	//
+	// pos.pin.offline_failed carries no failedCount: the offline path runs
+	// no lockout counter — spec 7's five-attempt lock lives in the server
+	// verifier; the device only records the attempt.
+	| {
+			event: 'pos.session.opened';
+			details: {
+				deviceCode: string;
+				businessDate: string;
+				openingCashMinor: string;
+				attached: boolean;
+			};
+	  }
+	| {
+			event: 'pos.session.closed';
+			details: {
+				deviceCode: string;
+				businessDate: string;
+				expectedCashMinor: string;
+				countedCashMinor: string;
+				differenceMinor: string;
+			};
+	  }
+	| {
+			event: 'sale.recorded';
+			details: {
+				deviceCode: string;
+				invoiceNumber: string;
+				orderType: 'dine_in' | 'takeaway';
+				method: 'cash' | 'card' | 'mobile';
+				totalMinor: string;
+			};
+	  }
+	| {
+			event: 'sale.flagged';
+			details: { deviceCode: string; invoiceNumber: string; flags: string[] };
+	  }
+	| {
+			event: 'sale.abandoned';
+			details: { deviceCode: string; invoiceNumber: string; reason: 'rejected' | 'cancelled' };
+	  }
+	| {
+			event: 'sync.op_unrecorded';
+			details: { deviceCode: string; kind: string; flag: string; detail: string };
+	  }
+	| {
+			event: 'sync.op_retried';
+			details: { opId: string; outcome: 'accepted' | 'recorded_flagged' | 'unrecorded' };
+	  }
+	| { event: 'sync.op_dismissed'; details: { opId: string; reason: string } }
+	| { event: 'pos.pin.offline_success'; details: { deviceCode: string } }
+	| { event: 'pos.pin.offline_failed'; details: { deviceCode: string; reason: 'bad_pin' } };
 
 export type AuditEventName = AuditEvent['event'];
 
@@ -89,7 +156,17 @@ export const AUDIT_EVENT_NAMES = [
 	'role.created',
 	'role.updated',
 	'role.archived',
-	'menu.price_changed'
+	'menu.price_changed',
+	'pos.session.opened',
+	'pos.session.closed',
+	'sale.recorded',
+	'sale.flagged',
+	'sale.abandoned',
+	'sync.op_unrecorded',
+	'sync.op_retried',
+	'sync.op_dismissed',
+	'pos.pin.offline_success',
+	'pos.pin.offline_failed'
 ] as const satisfies readonly AuditEventName[];
 
 type AssertTrue<T extends true> = T;
