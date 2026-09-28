@@ -28,6 +28,24 @@
 		recordOfflineLogin,
 		verifyCachedPin
 	} from '$lib/pos/store';
+	import { signIn, type SignedInEmployee } from '$lib/pos/employee.svelte';
+	import { readLocalSession } from '$lib/pos/session';
+
+	async function handOff(employee: SignedInEmployee) {
+		signIn(employee);
+		signedIn = { displayName: employee.displayName, roleName: employee.roleName };
+		let inSession = false;
+		try {
+			const deviceId = await readBoundDeviceId();
+			if (deviceId) {
+				const session = await readLocalSession(deviceId);
+				inSession = session !== null;
+			}
+		} catch {
+			inSession = false;
+		}
+		void goto(resolve(inSession ? '/pos/order' : '/pos/session'));
+	}
 
 	// An employee id is not a secret — it is already on the employee-select list.
 	const employeeId = $derived(page.url.searchParams.get('employee'));
@@ -152,7 +170,13 @@
 			message = 'No connection, and this device could not record the sign-in.';
 			return;
 		}
-		signedIn = { displayName: cached.displayName, roleName: cached.roleName };
+		await handOff({
+			id: cached.id,
+			displayName: cached.displayName,
+			isOwner: cached.isOwner,
+			roleName: cached.roleName,
+			permissions: cached.permissions
+		});
 	}
 
 	async function submit() {
@@ -199,10 +223,25 @@
 
 			if (response.status === 200) {
 				const body = (await response.json()) as {
+					employeeId: string;
 					displayName: string;
+					isOwner: boolean;
 					roleName: string;
 				};
-				signedIn = { displayName: body.displayName, roleName: body.roleName };
+				let permissions: string[] = [];
+				try {
+					const cached = (await readCachedEmployees()).find((e) => e.id === body.employeeId);
+					if (cached) permissions = cached.permissions;
+				} catch {
+					permissions = [];
+				}
+				await handOff({
+					id: body.employeeId,
+					displayName: body.displayName,
+					isOwner: body.isOwner,
+					roleName: body.roleName,
+					permissions
+				});
 				return;
 			}
 			if (response.status === 423) {
