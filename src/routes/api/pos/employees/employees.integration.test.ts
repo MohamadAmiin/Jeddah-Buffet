@@ -2,7 +2,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import type { RequestEvent } from '@sveltejs/kit';
 import { testDb, closeTestDb } from '$lib/server/db/test/db';
 import { seedStaff } from '$lib/server/db/test/seed';
+import { eq } from 'drizzle-orm';
 import { restaurants } from '$lib/server/db/schema/restaurants';
+import { restaurantSettings } from '$lib/server/db/schema/restaurant-settings';
 import { users } from '$lib/server/db/schema/users';
 import { hashPin } from '$lib/pin';
 import {
@@ -87,9 +89,22 @@ async function get(cookies: Record<string, string>) {
 		return {
 			status: response.status,
 			body: JSON.parse(await response.text()) as {
-				device: { id: string };
+				device: { id: string; code: string };
 				employees: Array<Record<string, unknown>>;
-				settings: { posIdleLockSeconds: number | null };
+				lastInvoiceSeq: number;
+				openSession: {
+					id: string;
+					openedByUserId: string;
+					businessDate: string;
+					openingCashMinor: string;
+					openedAt: string;
+				} | null;
+				settings: {
+					posIdleLockSeconds: number | null;
+					timeZone: string | null;
+					acceptsCard: boolean | null;
+					acceptsMobile: boolean | null;
+				};
 			},
 			headers: response.headers
 		};
@@ -141,14 +156,20 @@ describe('GET /api/pos/employees', () => {
 
 	// The leak this catches is a route that spreads a database row: asserted on the
 	// SERIALISED body, not on the read model's return value.
-	it('serialises exactly the seven keys of the read model, and exactly three top-level keys', async () => {
+	it('serialises exactly the seven keys of the read model, and exactly FIVE top-level keys', async () => {
 		const a = await makeRestaurant('Cafe A', 'a@cafe.com');
 
 		const { body } = await get({ [DEVICE_COOKIE]: a.token });
 
-		expect(Object.keys(body!).sort()).toEqual(['device', 'employees', 'settings']);
-		// The device's uuid — what the till binds its cache to — and nothing else.
-		expect(body!.device).toEqual({ id: a.deviceId });
+		expect(Object.keys(body!).sort()).toEqual([
+			'device',
+			'employees',
+			'lastInvoiceSeq',
+			'openSession',
+			'settings'
+		]);
+		// The device's uuid — what the till binds its cache to — and its printed code.
+		expect(body!.device).toEqual({ id: a.deviceId, code: 'POS1' });
 		for (const entry of body!.employees) {
 			expect(Object.keys(entry).sort()).toEqual([
 				'displayName',
@@ -185,8 +206,15 @@ describe('GET /api/pos/employees', () => {
 		const a = await makeRestaurant('Cafe A', 'a@cafe.com');
 
 		const before = await get({ [DEVICE_COOKIE]: a.token });
-		// null, not a substituted number.
-		expect(before.body!.settings).toEqual({ posIdleLockSeconds: null });
+		// null, not a substituted number. The tender flags are also null until
+		// the owner chooses; the time zone is set at registration and travels
+		// through so the till can render the business date.
+		expect(before.body!.settings).toEqual({
+			posIdleLockSeconds: null,
+			timeZone: 'UTC',
+			acceptsCard: null,
+			acceptsMobile: null
+		});
 
 		await db.transaction((tx) =>
 			updateSettings(
@@ -197,12 +225,37 @@ describe('GET /api/pos/employees', () => {
 			)
 		);
 		const after = await get({ [DEVICE_COOKIE]: a.token });
-		expect(after.body!.settings).toEqual({ posIdleLockSeconds: 120 });
+		expect(after.body!.settings).toEqual({
+			posIdleLockSeconds: 120,
+			timeZone: 'UTC',
+			acceptsCard: null,
+			acceptsMobile: null
+		});
 	});
 
 	it('tells every cache not to keep the response', async () => {
 		const a = await makeRestaurant('Cafe A', 'a@cafe.com');
 		const { headers } = await get({ [DEVICE_COOKIE]: a.token });
 		expect(headers!.get('cache-control')).toBe('no-store');
+	});
+});
+
+describe("the till's sale bootstrap (T-28)", () => {
+	it('reports lastInvoiceSeq 0 and openSession null for a device that has never sold', async () => {
+		const a = await makeRestaurant('Cafe Boot', 'boot@cafe.com');
+		const { body } = await get({ [DEVICE_COOKIE]: a.token });
+		expect(body!.lastInvoiceSeq).toBe(0);
+		expect(body!.openSession).toBeNull();
+	});
+
+	it('passes the accepted tenders through as stored', async () => {
+		const a = await makeRestaurant('Cafe Tenders', 'tenders@cafe.com');
+		await db
+			.update(restaurantSettings)
+			.set({ acceptsCard: true, acceptsMobile: false })
+			.where(eq(restaurantSettings.restaurantId, a.restaurantId));
+		const { body } = await get({ [DEVICE_COOKIE]: a.token });
+		expect(body!.settings.acceptsCard).toBe(true);
+		expect(body!.settings.acceptsMobile).toBe(false);
 	});
 });

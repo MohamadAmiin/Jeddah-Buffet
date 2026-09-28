@@ -8,10 +8,12 @@ import {
 	bindDevice,
 	cacheEmployees,
 	cacheSettings,
+	countParked,
 	countUnsynced,
 	forgetDevice,
 	onUnsyncedChange,
 	openPosDb,
+	pruneCompletedOrders,
 	readBoundDeviceId,
 	readCachedEmployees,
 	readCachedIdleSeconds,
@@ -21,8 +23,15 @@ import {
 	replaceMenu,
 	upgradeRunsForTest,
 	verifyCachedPin,
+	withDb,
+	inTransaction,
+	valueOf,
 	type CachedEmployee,
-	type OfflineLogin
+	type LocalOrder,
+	type LocalSession,
+	type OfflineLogin,
+	type QueueEntry,
+	type SequenceRow
 } from './store';
 
 function deleteDatabase(): Promise<void> {
@@ -264,5 +273,218 @@ describe('the POS store', () => {
 		stop();
 		await recordOfflineLogin(login('op-3', '2026-09-15T10:02:00.000Z'));
 		expect([await countUnsynced(), signals]).toEqual([3, 2]);
+	});
+});
+
+// A tiny helper for the T-22 tests: put an arbitrary row into a store.
+async function putRaw(store: string, value: unknown): Promise<void> {
+	await withDb((db) =>
+		inTransaction(db, [store], 'readwrite', (tx) => {
+			tx.objectStore(store).put(value as never);
+		})
+	);
+}
+
+async function readAll<T>(store: string): Promise<T[]> {
+	return await withDb(async (db) => {
+		const request = db.transaction(store).objectStore(store).getAll();
+		return (await valueOf(request)) as T[];
+	});
+}
+
+async function openVersionTwo(): Promise<void> {
+	// The version-2 layout, as the earlier release shipped it.
+	await new Promise<void>((resolve, reject) => {
+		const request = indexedDB.open('matcami-pos', 2);
+		request.onupgradeneeded = () => {
+			const db = request.result;
+			db.createObjectStore('employees', { keyPath: 'id' });
+			db.createObjectStore('settings', { keyPath: 'key' });
+			db.createObjectStore('offline_logins', { keyPath: 'clientOpId' });
+			db.createObjectStore('menu', { keyPath: 'id' });
+		};
+		request.onsuccess = () => {
+			const db = request.result;
+			const tx = db.transaction('offline_logins', 'readwrite');
+			tx.objectStore('offline_logins').put(login('op-existing-1', '2026-09-01T00:00:00.000Z'));
+			tx.objectStore('offline_logins').put(login('op-existing-2', '2026-09-02T00:00:00.000Z'));
+			tx.oncomplete = () => {
+				db.close();
+				resolve();
+			};
+			tx.onerror = () => reject(tx.error);
+		};
+		request.onerror = () => reject(request.error);
+	});
+}
+
+describe('upgrade 2 -> 3 (T-22)', () => {
+	it('creates the four new stores, keeps existing data, marks the seq index unique', async () => {
+		await openVersionTwo();
+		const before = upgradeRunsForTest();
+		const db = await openPosDb();
+		try {
+			expect(Array.from(db.objectStoreNames).sort()).toEqual([
+				'employees',
+				'invoice_sequence',
+				'menu',
+				'offline_logins',
+				'orders',
+				'session',
+				'settings',
+				'sync_queue'
+			]);
+			const queueStore = db.transaction('sync_queue').objectStore('sync_queue');
+			const indexNames = Array.from(queueStore.indexNames).sort();
+			expect(indexNames).toEqual(['deviceId', 'seq', 'state']);
+			expect(queueStore.index('seq').unique).toBe(true);
+		} finally {
+			db.close();
+		}
+		expect(upgradeRunsForTest() - before).toBe(1);
+		expect(await offlineLogins()).toHaveLength(2);
+	});
+});
+
+describe('wipes exempt the four new stores (T-22)', () => {
+	it('bindDevice and forgetDevice leave orders, sync_queue, invoice_sequence and session alone', async () => {
+		await putRaw('orders', {
+			id: 'o-1',
+			deviceId: 'device-A',
+			state: 'completed',
+			cart: {}
+		} satisfies LocalOrder);
+		await putRaw('sync_queue', {
+			clientOpId: 'op-1',
+			deviceId: 'device-A',
+			seq: 1,
+			kind: 'sale.complete',
+			envelope: {},
+			state: 'pending',
+			attempts: 0
+		} as unknown as QueueEntry);
+		await putRaw('invoice_sequence', {
+			deviceId: 'device-A',
+			invoiceSeq: 7,
+			queueSeq: 3
+		} satisfies SequenceRow);
+		await putRaw('session', {
+			deviceId: 'device-A',
+			posSessionId: 's-1',
+			employeeId: 'e-1',
+			openingCashMinor: '50000',
+			openedAt: '2026-09-28T08:00:00.000Z',
+			state: 'open'
+		} satisfies LocalSession);
+
+		await bindDevice('device-A');
+		await cacheEmployees([employee('a')]);
+		await bindDevice('device-B');
+		await forgetDevice();
+
+		expect(await readAll('orders')).toHaveLength(1);
+		expect(await readAll('sync_queue')).toHaveLength(1);
+		expect(await readAll('invoice_sequence')).toHaveLength(1);
+		expect(await readAll('session')).toHaveLength(1);
+		expect(await readCachedEmployees()).toEqual([]);
+		expect(await readBoundDeviceId()).toBeNull();
+	});
+});
+
+describe('countUnsynced and countParked (T-22)', () => {
+	it('excludes parked from the unsynced total; sending is counted', async () => {
+		await recordOfflineLogin(login('op-login-1', '2026-09-28T09:00:00.000Z'));
+		await recordOfflineLogin(login('op-login-2', '2026-09-28T09:00:01.000Z'));
+		for (const [i, state] of ['pending', 'pending', 'pending', 'parked', 'done'].entries()) {
+			await putRaw('sync_queue', {
+				clientOpId: `op-q-${i + 1}`,
+				deviceId: 'device-A',
+				seq: i + 1,
+				kind: 'sale.complete',
+				envelope: {},
+				state,
+				attempts: 0
+			} as unknown as QueueEntry);
+		}
+		expect(await countUnsynced()).toBe(5);
+		expect(await countParked()).toBe(1);
+		await putRaw('sync_queue', {
+			clientOpId: 'op-q-sending',
+			deviceId: 'device-A',
+			seq: 99,
+			kind: 'sale.complete',
+			envelope: {},
+			state: 'sending',
+			attempts: 0
+		} as unknown as QueueEntry);
+		expect(await countUnsynced()).toBe(6);
+	});
+});
+
+describe('pruneCompletedOrders (T-22)', () => {
+	it('removes completed synced orders older than the cutoff and their done queue rows', async () => {
+		const now = Date.parse('2026-09-28T12:00:00Z');
+		const day = 86_400_000;
+		await putRaw('orders', {
+			id: 'A',
+			deviceId: 'device-A',
+			state: 'completed',
+			syncedAt: new Date(now - 31 * day).toISOString(),
+			cart: {}
+		} satisfies LocalOrder);
+		await putRaw('orders', {
+			id: 'B',
+			deviceId: 'device-A',
+			state: 'completed',
+			syncedAt: new Date(now - 29 * day).toISOString(),
+			cart: {}
+		} satisfies LocalOrder);
+		await putRaw('orders', {
+			id: 'C',
+			deviceId: 'device-A',
+			state: 'completed',
+			cart: {}
+		} satisfies LocalOrder);
+		await putRaw('orders', {
+			id: 'D',
+			deviceId: 'device-A',
+			state: 'cart',
+			cart: {}
+		} satisfies LocalOrder);
+		await putRaw('sync_queue', {
+			clientOpId: 'op-A',
+			deviceId: 'device-A',
+			seq: 1,
+			kind: 'sale.complete',
+			envelope: { payload: { orderId: 'A' } },
+			state: 'done',
+			attempts: 1
+		} as unknown as QueueEntry);
+		await putRaw('sync_queue', {
+			clientOpId: 'op-B',
+			deviceId: 'device-A',
+			seq: 2,
+			kind: 'sale.complete',
+			envelope: { payload: { orderId: 'B' } },
+			state: 'done',
+			attempts: 1
+		} as unknown as QueueEntry);
+		await putRaw('sync_queue', {
+			clientOpId: 'op-Aa',
+			deviceId: 'device-A',
+			seq: 3,
+			kind: 'sale.abandoned',
+			envelope: { payload: { orderId: 'A' } },
+			state: 'done',
+			attempts: 1
+		} as unknown as QueueEntry);
+		const removed = await pruneCompletedOrders(30, now);
+		expect(removed).toBe(1);
+		const remainingOrders = (await readAll<LocalOrder>('orders')).map((o) => o.id).sort();
+		expect(remainingOrders).toEqual(['B', 'C', 'D']);
+		const remainingQueue = (await readAll<QueueEntry>('sync_queue'))
+			.map((q) => q.clientOpId)
+			.sort();
+		expect(remainingQueue).toEqual(['op-B']);
 	});
 });

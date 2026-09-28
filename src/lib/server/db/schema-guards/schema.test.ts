@@ -19,6 +19,10 @@ import * as sessionsSchema from '../schema/sessions';
 import * as auditSchema from '../schema/audit';
 import * as posDevicesSchema from '../schema/pos-devices';
 import * as menuSchema from '../schema/menu';
+import * as accountingSchema from '../schema/accounting';
+import * as posSessionsSchema from '../schema/pos-sessions';
+import * as ordersSchema from '../schema/orders';
+import * as posSyncSchema from '../schema/pos-sync';
 import { TABLES } from '../test/reset';
 
 // Tables are DISCOVERED from the schema modules' exports, never from a
@@ -39,16 +43,24 @@ const modules = {
 	...sessionsSchema,
 	...auditSchema,
 	...posDevicesSchema,
-	...menuSchema
+	...menuSchema,
+	...accountingSchema,
+	...posSessionsSchema,
+	...ordersSchema,
+	...posSyncSchema
 };
 
 // Every file in src/lib/server/db/schema/ that is imported above. A schema file
 // nobody imports is invisible to every guard in this file while every test stays
 // green, so the 'imports every file' case below holds this list to the directory.
 const IMPORTED_SCHEMA_FILES = [
+	'accounting.ts',
 	'audit.ts',
 	'menu.ts',
+	'orders.ts',
 	'pos-devices.ts',
+	'pos-sessions.ts',
+	'pos-sync.ts',
 	'restaurant-settings.ts',
 	'restaurants.ts',
 	'roles.ts',
@@ -176,13 +188,23 @@ function numericColumnOffenders(list: GuardedTable[]): string[] {
 describe('schema guards every future aggregate inherits', () => {
 	it('discovers the tables it is meant to guard', () => {
 		expect(tables.map((t) => t.name).sort()).toEqual([
+			'accounts',
 			'audit_log',
+			'invoices',
+			'journal_entries',
+			'journal_entry_lines',
 			'menu_categories',
 			'menu_item_modifier_groups',
 			'menu_items',
 			'modifier_groups',
 			'modifiers',
+			'order_line_modifiers',
+			'order_lines',
+			'orders',
+			'payments',
 			'pos_devices',
+			'pos_sessions',
+			'pos_sync_ops',
 			'restaurant_settings',
 			'restaurants',
 			'role_permissions',

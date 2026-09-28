@@ -31,6 +31,8 @@ export const load: ServerLoad = async (event) => {
 		taxMode: restaurant.taxMode,
 		taxRateBp: restaurant.taxRateBp,
 		currencyCode: restaurant.currencyCode,
+		acceptsCard: restaurant.acceptsCard,
+		acceptsMobile: restaurant.acceptsMobile,
 		taxModes: [...TAX_MODES],
 		supportedCurrencies: Object.keys(SUPPORTED_CURRENCIES)
 	};
@@ -57,8 +59,15 @@ const settingsSchema = z.object({
 		.trim()
 		.toUpperCase()
 		.refine((code) => Object.hasOwn(SUPPORTED_CURRENCIES, code), CURRENCY_MESSAGE)
-		.optional()
+		.optional(),
+	acceptsCard: z.enum(['unset', 'yes', 'no']).optional(),
+	acceptsMobile: z.enum(['unset', 'yes', 'no']).optional()
 });
+
+function tender(value: 'unset' | 'yes' | 'no' | undefined): boolean | undefined {
+	if (value === undefined || value === 'unset') return undefined;
+	return value === 'yes';
+}
 
 /** A blank or absent optional field is "not submitted": undefined, BEFORE parsing. */
 function optionalField(value: FormDataEntryValue | null): FormDataEntryValue | undefined {
@@ -82,7 +91,9 @@ export const actions: Actions = {
 			timeZone: form.get('timeZone'),
 			taxMode: optionalField(form.get('taxMode')),
 			taxRateBp: optionalField(form.get('taxRateBp')),
-			currencyCode: optionalField(form.get('currencyCode'))
+			currencyCode: optionalField(form.get('currencyCode')),
+			acceptsCard: optionalField(form.get('acceptsCard')),
+			acceptsMobile: optionalField(form.get('acceptsMobile'))
 		});
 
 		if (!parsed.success) {
@@ -102,7 +113,9 @@ export const actions: Actions = {
 					timeZone: parsed.data.timeZone,
 					taxMode: parsed.data.taxMode,
 					taxRateBp: parsed.data.taxRateBp,
-					currencyCode: parsed.data.currencyCode
+					currencyCode: parsed.data.currencyCode,
+					acceptsCard: tender(parsed.data.acceptsCard),
+					acceptsMobile: tender(parsed.data.acceptsMobile)
 				},
 				{ actorUserId: user.userId, ip, userAgent }
 			)
@@ -113,7 +126,8 @@ export const actions: Actions = {
 				invalid_time_zone: 'That time zone is not recognised.',
 				invalid_tax_mode: TAX_MODE_MESSAGE,
 				invalid_tax_rate: TAX_RATE_MESSAGE,
-				invalid_currency: CURRENCY_MESSAGE
+				invalid_currency: CURRENCY_MESSAGE,
+				invalid_tender: 'Choose Accepted or Not accepted for each payment method.'
 			};
 			return fail(400, {
 				message: messages[result.reason] ?? 'Those settings could not be saved.'

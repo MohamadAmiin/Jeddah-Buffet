@@ -26,11 +26,48 @@
 	// cannot carry a control's boundary, and WCAG 1.4.11 asks 3:1 of one.
 	// --c-control-line resolves to --c-ink-3, 4.73:1 on that ground. `border-line`
 	// is decorative only and never a control edge.
-	import { onMount } from 'svelte';
+	import { onMount, setContext } from 'svelte';
 	import { dev } from '$app/environment';
-	import { countUnsynced, onUnsyncedChange } from '$lib/pos/store';
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
+	import { createIdleWatch } from '$lib/pos/idle';
+	import {
+		countUnsynced,
+		onUnsyncedChange,
+		readBoundDeviceId,
+		readCachedIdleSeconds,
+		type LocalSession
+	} from '$lib/pos/store';
+	import {
+		RESTORED_CONTEXT,
+		restoreFromMirror,
+		signedIn,
+		signOut,
+		touch
+	} from '$lib/pos/employee.svelte';
+	import { flush, lastSkewMs, onFlushResult, onSkew, parkedCount } from '$lib/pos/queue';
+	import { readLocalSession } from '$lib/pos/session';
 
 	let { children } = $props();
+
+	// T-30: RESTORE GATE. Published synchronously so child pages can await it
+	// before their sign-in guard runs. `restoreFromMirror` runs from an onMount
+	// below; when it settles, the promise resolves and the page guards fire.
+	let markRestored: (() => void) | null = null;
+	const restored = new Promise<void>((done) => {
+		markRestored = done;
+	});
+	setContext(RESTORED_CONTEXT, restored);
+
+	let parked = $state(0);
+	async function refreshParked() {
+		try {
+			parked = await parkedCount();
+		} catch {
+			parked = 0;
+		}
+	}
 
 	// THE CONNECTION INDICATOR — permanent chrome on every POS screen, which is why
 	// it lives in this layout and not in a page, and never a toast (spec 6). Both
@@ -108,6 +145,109 @@
 	// `type: 'module'` in dev, where the worker is served unbundled; the production
 	// build is classic. onMount often runs after `load` has already fired, when a
 	// bare load listener would never run — hence the readyState check.
+	// T-30: RESTORE + FLUSH TRIGGERS. Restore the signed-in mirror using the
+	// cached idle lock (null -> no restore, ever); mark the gate resolved so
+	// child pages can guard. Trigger the flush once at mount and on every
+	// `online` event; T-25's single-flight makes this coalesce.
+	// `null` is the inert case: no idle return and the chip says so. There is no
+	// fallback number of seconds anywhere in this file (invariant 12).
+	let idleSeconds = $state<number | null>(null);
+
+	onMount(() => {
+		void (async () => {
+			try {
+				idleSeconds = await readCachedIdleSeconds();
+			} catch {
+				idleSeconds = null;
+			}
+			restoreFromMirror(idleSeconds);
+			markRestored?.();
+		})();
+		void flush().catch(() => {});
+		const onOnline = () => {
+			void flush().catch(() => {});
+		};
+		addEventListener('online', onOnline);
+		// A queued op flushes shortly after it is written, while the till is online.
+		let debounce: ReturnType<typeof setTimeout> | undefined;
+		const stopQueued = onUnsyncedChange(() => {
+			if (!navigator.onLine) return;
+			clearTimeout(debounce);
+			debounce = setTimeout(() => void flush().catch(() => {}), 500);
+		});
+		const stopFlush = onFlushResult(() => {
+			void refreshParked();
+			void refreshSession();
+		});
+		void refreshParked();
+		skewMs = lastSkewMs();
+		const stopSkew = onSkew((value) => {
+			skewMs = value;
+		});
+		return () => {
+			removeEventListener('online', onOnline);
+			clearTimeout(debounce);
+			stopQueued();
+			stopFlush();
+			stopSkew();
+		};
+	});
+
+	// THE IDLE WATCH re-arms whenever the employee, the route or the seconds
+	// change. /pos/pin keeps its own watch; employee-select needs none.
+	$effect(() => {
+		const here = page.url.pathname;
+		const armed = signedIn.current !== null && here !== '/pos' && here !== '/pos/pin';
+		if (!armed) return;
+		const watch = createIdleWatch({
+			seconds: idleSeconds,
+			onIdle: () => {
+				signOut();
+				void goto(resolve('/pos'));
+			}
+		});
+		const poke = () => {
+			watch.poke();
+			touch();
+		};
+		addEventListener('pointerdown', poke);
+		addEventListener('keydown', poke);
+		return () => {
+			removeEventListener('pointerdown', poke);
+			removeEventListener('keydown', poke);
+			watch.stop();
+		};
+	});
+
+	// THE SESSION CHIP reads the till's local session. A page writes the session
+	// store and then navigates, so the navigation is a re-read signal too; only
+	// the newest read may land.
+	let session = $state<LocalSession | null>(null);
+	let latestSessionRead = 0;
+	async function refreshSession() {
+		const mine = ++latestSessionRead;
+		try {
+			const deviceId = await readBoundDeviceId();
+			const row = deviceId === null ? null : await readLocalSession(deviceId);
+			if (mine === latestSessionRead) session = row;
+		} catch {
+			if (mine === latestSessionRead) session = null;
+		}
+	}
+	$effect(() => {
+		void page.url.pathname;
+		void refreshSession();
+	});
+	onMount(() => onUnsyncedChange(() => void refreshSession()));
+
+	// CLOCK SKEW, measured by the flush from each response's Date header.
+	let skewMs = $state<number | null>(null);
+	const skewMinutes = $derived(
+		skewMs !== null && Math.abs(skewMs) > 5 * 60 * 1000
+			? Math.round(Math.abs(skewMs) / 60000)
+			: null
+	);
+
 	onMount(() => {
 		if (!('serviceWorker' in navigator)) return;
 		const register = () => {
@@ -135,7 +275,7 @@
 <div data-surface="pos" class="text-pos bg-bg text-ink min-h-screen">
 	<div
 		role="status"
-		class={`flex items-center gap-2 px-4 py-2 ${online ? 'bg-ok-bg text-ok' : 'bg-st-offline-bg text-st-offline'}`}
+		class={`flex flex-wrap items-center gap-2 px-4 py-2 ${online ? 'bg-ok-bg text-ok' : 'bg-st-offline-bg text-st-offline'}`}
 	>
 		<span aria-hidden="true" class="font-mono">{online ? '●' : '◆'}</span>
 		<span>{online ? 'Online' : 'Offline'}</span>
@@ -145,6 +285,43 @@
 		{:else if unsyncedUnreadable}
 			<span aria-hidden="true">·</span>
 			<span>unsynced count unavailable</span>
+		{/if}
+		{#if signedIn.current !== null}
+			<span aria-hidden="true">·</span>
+			<span
+				>{signedIn.current.displayName} · {signedIn.current.isOwner
+					? 'Owner'
+					: signedIn.current.roleName}</span
+			>
+		{:else}
+			<span aria-hidden="true">·</span>
+			<span>Nobody signed in</span>
+		{/if}
+		<span aria-hidden="true">·</span>
+		{#if session === null}
+			<span>○ No session</span>
+		{:else if signedIn.current !== null}
+			<a
+				href={resolve('/pos/session')}
+				class="min-h-touch-min border-control-line rounded-control bg-raise text-ink inline-flex items-center border px-3"
+				>● Session · business date {session.businessDate ?? 'pending sync'}</a
+			>
+		{:else}
+			<span>● Session · business date {session.businessDate ?? 'pending sync'}</span>
+		{/if}
+		{#if parked > 0}
+			<span aria-hidden="true">·</span>
+			<span class="bg-st-offline-bg text-st-offline rounded px-2 py-0.5"
+				>◆ {parked} operations from a previous registration</span
+			>
+		{/if}
+		{#if skewMinutes !== null}
+			<span aria-hidden="true">·</span>
+			<span>◆ Clock is off by {skewMinutes} min</span>
+		{/if}
+		{#if signedIn.current !== null && idleSeconds === null}
+			<span aria-hidden="true">·</span>
+			<span>Idle lock not set</span>
 		{/if}
 	</div>
 	{@render children()}

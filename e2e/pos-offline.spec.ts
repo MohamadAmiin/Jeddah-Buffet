@@ -1,27 +1,31 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { acquireRunLock, closeResetPool, resetDb } from '../src/lib/server/db/test/reset';
 import {
 	TILL_URL,
+	closeDbRows,
 	createEmployee,
+	dbRows,
 	enterPin,
 	pickEmployee,
 	registerDevice,
 	registerRestaurant,
-	signIn
+	signIn,
+	storeRows
 } from './fixtures';
 
 // THE OFFLINE PIN LOGIN (spec 6 and 7; invariants 5, 10 and 12).
 //
-// THIS PLAN DOES NOT BUILD THE SALES SYNC QUEUE OR ITS FLUSH — the gap is
-// deliberate, not forgotten. Nothing here posts a locally recorded offline login
-// back to the server, so this spec asserts none of the three flush behaviours,
-// which are the SALES PLAN's obligation (and recorded as such by T-47):
-//   1. coming back online writes exactly one audit_log row per offline login;
-//   2. replaying the same idempotency key into audit_log.client_op_id writes none;
-//   3. a record is sent only under the device it is stamped with.
-// What IS asserted is the half this plan built: verification against the hashes
-// cached on the device, the locally stored record, and idempotency AT THE LOCAL
-// STORE — a real "a retry never duplicates" assertion on a real layer.
+// The sales plan (tasks/pos-sales, T-25) built the flush of offline_logins through
+// POST /api/pos/sync as `pin.login` ops. This spec therefore asserts BOTH halves:
+// the local half (verification against cached hashes, the locally stored record,
+// idempotency at the local store — step 9) and, from step 10, the server half:
+//   1. coming back online writes exactly one audit_log row per offline login —
+//      pos.pin.offline_success or pos.pin.offline_failed — under the device the
+//      record was stamped with and at the record's own occurredAt;
+//   2. flushing again, and replaying the same envelope, writes none;
+//   3. after a revoke and a re-registration as POS2, a new offline login syncs
+//      under POS2's device_id while the old rows keep POS1's.
+// MANDATORY (spec 29 — offline sync: retries never create duplicates).
 //
 // Spellings are the CODE's (src/lib/pos/store.ts): the cached hash is `pinPhc`
 // (not pinHash — the name is a tripwire against the audit writer), the record's
@@ -41,7 +45,7 @@ type OfflineRecord = {
 	event: string;
 	occurredAt: string;
 	outcome: 'success' | 'failed';
-	synced: false;
+	synced: boolean;
 };
 
 declare global {
@@ -50,33 +54,13 @@ declare global {
 	}
 }
 
-/** Every row of one store in the till's IndexedDB, read inside the page. */
-function storeRows<T>(tillPage: Page, store: string): Promise<T[]> {
-	return tillPage.evaluate(
-		(name) =>
-			new Promise<T[]>((resolve, reject) => {
-				const open = indexedDB.open('matcami-pos');
-				open.onerror = () => reject(open.error);
-				open.onsuccess = () => {
-					const db = open.result;
-					const request = db.transaction(name).objectStore(name).getAll();
-					request.onsuccess = () => {
-						db.close();
-						resolve(request.result as T[]);
-					};
-					request.onerror = () => reject(request.error);
-				};
-			}),
-		store
-	);
-}
-
 test.beforeAll(async () => {
 	await acquireRunLock();
 	await resetDb();
 });
 
 test.afterAll(async () => {
+	await closeDbRows();
 	await closeResetPool();
 });
 
@@ -84,11 +68,23 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	page,
 	browser
 }) => {
+	// PBKDF2 at 600,000 iterations runs on every PIN, online and offline.
+	test.setTimeout(180_000);
+
 	// ── 1. three employees: switching between them is what is under test ────────
 	await registerRestaurant(page, OWNER);
 	await createEmployee(page, { displayName: 'The Cashier', role: 'cashier', pin: '4321' });
 	await createEmployee(page, { displayName: 'The Waiter', role: 'waiter', pin: '5678' });
 	await createEmployee(page, { displayName: 'The Runner', role: 'waiter', pin: '6789' });
+	// The idle lock: without it the till never restores a signed-in employee on
+	// reload (T-26), and step 7's reload is exactly that restore.
+	await page.getByRole('link', { name: 'POS', exact: true }).click();
+	await expect(page).toHaveURL(/\/device$/);
+	await page.getByLabel('Auto-lock after (seconds)').fill('120');
+	await page.getByRole('button', { name: 'Save auto-lock' }).click();
+	await expect(page.getByRole('alert')).toContainText('Auto-lock saved.');
+	// Leave /device: step 11 reaches it again by its rail link and needs a fresh load.
+	await page.getByRole('link', { name: 'Overview', exact: true }).click();
 
 	// ── 2. the till, with the persistence request COUNTED before the first load ──
 	const till = await browser.newContext();
@@ -179,13 +175,14 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	await tillPage.reload();
 	await enterPin(tillPage, '6789');
 	await expect(tillPage.getByRole('alert')).toContainText('Locked after 5 wrong attempts');
-	await expect(tillPage.getByRole('heading', { name: /Signed in/ })).toHaveCount(0);
+	await expect(tillPage).toHaveURL(/\/pos\/pin/);
 
 	// ── 5. still online, The Cashier signs in — the panel we go offline from ────
 	await tillPage.goto(TILL_URL);
 	await pickEmployee(tillPage, 'The Cashier');
 	await enterPin(tillPage, '4321');
-	await expect(tillPage.getByRole('heading', { name: /Signed in as The Cashier/ })).toBeVisible();
+	await expect(tillPage).toHaveURL(/\/pos\/session$/);
+	await expect(tillPage.getByRole('status')).toContainText('The Cashier · Cashier');
 	// Online attempts are the server's to record: nothing is waiting on the till.
 	await expect(tillPage.getByRole('status')).toContainText('0 unsynced');
 
@@ -195,8 +192,8 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 		if (request.url().includes('/api/pos/pin')) failedPinRequests.push(request.url());
 	});
 	await till.setOffline(true);
-	// Client-side navigation only, from here on: the screens are already loaded.
-	await tillPage.getByRole('button', { name: 'Back to employee select' }).click();
+	// Landing on /pos IS signing out; offline, the worker's shell answers it.
+	await tillPage.goto(TILL_URL);
 	await expect(tillPage.getByText('this is the staff list saved on this device')).toBeVisible();
 
 	await pickEmployee(tillPage, 'The Waiter');
@@ -206,25 +203,29 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	// Invariant 5: the unsynced count is on screen, and it moved with no reload.
 	await expect(tillPage.getByRole('status')).toContainText('1 unsynced');
 	await enterPin(tillPage, '5678');
-	await expect(tillPage.getByRole('heading', { name: /Signed in as The Waiter/ })).toBeVisible();
+	await expect(tillPage).toHaveURL(/\/pos\/session$/);
+	await expect(tillPage.getByRole('status')).toContainText('The Waiter · Waiter');
 	// The till ATTEMPTED the network and caught the throw — never assert the
 	// opposite: a till that short-circuited on navigator.onLine would make the
 	// online half above unreachable.
 	expect(failedPinRequests.length).toBeGreaterThanOrEqual(1);
 
 	// A second offline switch, wrong PIN then right, back to The Cashier.
-	await tillPage.getByRole('button', { name: 'Back to employee select' }).click();
+	await tillPage.goto(TILL_URL);
 	await pickEmployee(tillPage, 'The Cashier');
 	await enterPin(tillPage, '0000');
 	await expect(tillPage.getByRole('alert')).toContainText('That PIN is not right');
 	await enterPin(tillPage, '4321');
-	await expect(tillPage.getByRole('heading', { name: /Signed in as The Cashier/ })).toBeVisible();
+	await expect(tillPage).toHaveURL(/\/pos\/session$/);
+	await expect(tillPage.getByRole('status')).toContainText('The Cashier · Cashier');
 
 	// ── 7. the offline session survives a reload ──────────────────────────────
 	// Spec 6's actual guarantee: a till that dies on refresh is not an offline till.
 	await tillPage.reload();
 	await expect(tillPage.getByRole('status')).toContainText('Offline');
 	await expect(tillPage.getByRole('status')).toContainText('4 unsynced');
+	await expect(tillPage.getByRole('heading', { name: 'Who is signing in?' })).toHaveCount(0);
+	await expect(tillPage.getByRole('status')).toContainText('The Cashier · Cashier');
 
 	// ── 8. every offline attempt was recorded locally, with its own key ────────
 	const records = await storeRows<OfflineRecord>(tillPage, 'offline_logins');
@@ -277,10 +278,68 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 		retried.occurredAt
 	);
 
-	// ── 10. back online: unsynced work is never discarded (invariant 5) ────────
+	// ── 10. back online: every offline login lands in audit_log exactly once ───
+	const pinBodies: string[] = [];
+	tillPage.on('request', (r) => {
+		if (r.method() === 'POST' && r.url().endsWith('/api/pos/sync'))
+			pinBodies.push(r.postData() ?? '');
+	});
 	await till.setOffline(false);
 	await tillPage.goto(TILL_URL);
-	expect(await storeRows<OfflineRecord>(tillPage, 'offline_logins')).toHaveLength(records.length);
+	await expect(tillPage.getByRole('status')).toContainText('0 unsynced');
+	const auditRows = await dbRows<{
+		client_op_id: string;
+		event: string;
+		device_id: string;
+		occurred_at_iso: string;
+	}>(
+		`select client_op_id, event, device_id,
+			to_char(occurred_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') as occurred_at_iso
+		 from audit_log where client_op_id = any($1::text[]) order by client_op_id`,
+		[records.map((r) => r.clientOpId)]
+	);
+	expect(auditRows).toHaveLength(records.length);
+	for (const record of records) {
+		const matching = auditRows.filter((row) => row.client_op_id === record.clientOpId);
+		expect(matching).toHaveLength(1);
+		expect(matching[0].event).toBe(
+			record.outcome === 'success' ? 'pos.pin.offline_success' : 'pos.pin.offline_failed'
+		);
+		expect(matching[0].device_id).toBe(record.deviceId);
+		expect(matching[0].occurred_at_iso).toBe(record.occurredAt);
+	}
+	const offlinePinRows = () =>
+		dbRows<{ n: string }>(
+			"select count(*)::text as n from audit_log where event in ('pos.pin.offline_success', 'pos.pin.offline_failed')"
+		).then((rows) => rows[0].n);
+	expect(await offlinePinRows()).toBe('4');
+
+	// MANDATORY (spec 29): a reload flush, an online-event flush and a byte-identical
+	// replay each leave audit_log exactly as it is.
+	const auditCount = () =>
+		dbRows<{ n: string }>('select count(*)::text as n from audit_log').then((rows) => rows[0].n);
+	const before = await auditCount();
+	await tillPage.reload();
+	await expect(tillPage.getByRole('status')).toContainText('0 unsynced');
+	expect(await auditCount()).toBe(before);
+	await till.setOffline(true);
+	await till.setOffline(false);
+	await expect(tillPage.getByRole('status')).toContainText('0 unsynced');
+	expect(await auditCount()).toBe(before);
+	const pinBody = pinBodies.find((b) => b.includes('"pin.login"'));
+	expect(pinBody).toBeDefined();
+	const replayed = await tillPage.evaluate(
+		(b) =>
+			fetch('/api/pos/sync', {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: { 'content-type': 'application/json' },
+				body: b
+			}).then((r) => r.json()),
+		pinBody!
+	);
+	expect(replayed.status).toBe('replayed');
+	expect(await auditCount()).toBe(before);
 
 	// ── 11. REVOKED: the till forgets its bundle and refuses offline sign-ins ───
 	// Invariant 12: the owner can revoke the device. Once the server has told the
@@ -302,8 +361,48 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	await enterPin(tillPage, '4321');
 	await expect(tillPage.getByRole('alert')).toContainText('cannot check a PIN offline');
 	await expect(tillPage.getByRole('heading', { name: /Signed in/ })).toHaveCount(0);
-	expect(await storeRows<OfflineRecord>(tillPage, 'offline_logins')).toHaveLength(records.length);
-	await expect(tillPage.getByRole('status')).toContainText(`${records.length} unsynced`);
+	// Flushed in step 10 and marked synced, never removed; the refused attempt added none.
+	expect(
+		(await storeRows<OfflineRecord>(tillPage, 'offline_logins')).filter((r) => r.synced === false)
+	).toHaveLength(0);
+	await expect(tillPage.getByRole('status')).toContainText('0 unsynced');
+
+	// ── 12. re-registered as POS2: a new offline login syncs under POS2 ────────
+	await till.setOffline(false);
+	await registerDevice(tillPage, OWNER, 'Second tablet');
+	const devices = await dbRows<{ id: string; device_code: string }>(
+		'select id, device_code from pos_devices order by registered_at'
+	);
+	expect(devices.map((d) => d.device_code)).toEqual(['POS1', 'POS2']);
+	const [pos1Id, pos2Id] = devices.map((d) => d.id);
+
+	await pickEmployee(tillPage, 'The Cashier');
+	await enterPin(tillPage, '4321');
+	await expect(tillPage).toHaveURL(/\/pos\/session$/);
+	await till.setOffline(true);
+	await tillPage.goto(TILL_URL);
+	await pickEmployee(tillPage, 'The Waiter');
+	await enterPin(tillPage, '5678');
+	await expect(tillPage).toHaveURL(/\/pos\/session$/);
+	await expect(tillPage.getByRole('status')).toContainText('1 unsynced');
+	const newRecords = (await storeRows<OfflineRecord>(tillPage, 'offline_logins')).filter(
+		(r) => r.synced === false
+	);
+	expect(newRecords).toHaveLength(1);
+	expect(newRecords[0].deviceId).toBe(pos2Id);
+
+	await till.setOffline(false);
+	await expect(tillPage.getByRole('status')).toContainText('0 unsynced');
+	const deviceOf = async (clientOpId: string) =>
+		(
+			await dbRows<{ device_id: string }>(
+				'select device_id from audit_log where client_op_id = $1',
+				[clientOpId]
+			)
+		).map((r) => r.device_id);
+	expect(await deviceOf(newRecords[0].clientOpId)).toEqual([pos2Id]);
+	for (const record of records) expect(await deviceOf(record.clientOpId)).toEqual([pos1Id]);
+	expect(await offlinePinRows()).toBe('5');
 
 	await till.close();
 });

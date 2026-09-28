@@ -12,6 +12,7 @@
 // correct, and the two would drift the first time the cost factor changes.
 
 import { verifyPin } from '../pin';
+import type { OpEnvelope, OpKind, SyncResult } from '../sync-ops';
 import {
 	compareVersions,
 	parseSnapshot,
@@ -23,8 +24,9 @@ import {
 
 const DB_NAME = 'matcami-pos';
 
-// 2 since T-42 added the menu store (case 1 below).
-const DB_VERSION = 2;
+// 3 since T-22 (tasks/pos-sales) added the order store, the sync queue, the
+// invoice sequence and the session store (case 2 below).
+const DB_VERSION = 3;
 
 // Copied, not imported: these are T-14's event names in
 // src/lib/server/audit/events.ts, and src/lib/pos may not import lib/server. The
@@ -66,7 +68,57 @@ export type OfflineLogin = {
 	event: string;
 	occurredAt: string;
 	outcome: 'success' | 'failed';
-	synced: false;
+	synced: boolean;
+	parked?: true;
+};
+
+/** One order on this till. `cart` is T-24's Cart; typed as a parameter so this
+ * file does not import a module that does not exist yet. */
+export type LocalOrder<C = unknown> = {
+	id: string;
+	deviceId: string;
+	employeeId?: string;
+	clientOpId?: string;
+	state: 'cart' | 'completed' | 'abandoned';
+	cart: C;
+	invoiceSeq?: number;
+	invoiceNumber?: string;
+	completedAt?: string;
+	syncedAt?: string;
+	syncStatus?: 'accepted' | 'recorded_flagged' | 'unrecorded' | 'rejected';
+};
+
+/** One queued operation. Every *Minor field in `envelope` is a decimal STRING
+ * (bigint never survives JSON). */
+export type QueueEntry = {
+	clientOpId: string;
+	deviceId: string;
+	seq: number;
+	kind: OpKind;
+	envelope: OpEnvelope<OpKind, unknown>;
+	state: 'pending' | 'sending' | 'done' | 'parked';
+	attempts: number;
+	lastError?: string;
+	lastResult?: SyncResult;
+};
+
+/** Per-device counters. NEVER cleared by bindDevice or forgetDevice. */
+export type SequenceRow = { deviceId: string; invoiceSeq: number; queueSeq: number };
+
+/** The cashier shift this device is in, if any. */
+export type LocalSession = {
+	deviceId: string;
+	posSessionId: string;
+	employeeId: string;
+	openingCashMinor: string;
+	openedAt: string;
+	businessDate?: string;
+	state: 'opening' | 'open' | 'closing' | 'closed';
+	countedCashMinor?: string;
+	closedAt?: string;
+	expectedCashMinor?: string;
+	differenceMinor?: string;
+	lastError?: string;
 };
 
 let upgrades = 0;
@@ -94,6 +146,20 @@ function upgrade(db: IDBDatabase, oldVersion: number): void {
 			// T-42: the menu snapshot. A till already at version 1 runs ONLY this case
 			// and keeps its cached employees; a fresh till runs case 0, then this one.
 			db.createObjectStore('menu', { keyPath: 'id' });
+		// falls through
+		case 2: {
+			// T-22 (tasks/pos-sales): the sales stores. A till at version 2 runs ONLY
+			// this case and keeps its employees, settings, menu and offline_logins.
+			const orders = db.createObjectStore('orders', { keyPath: 'id' });
+			orders.createIndex('status', 'state');
+			orders.createIndex('deviceId', 'deviceId');
+			const queue = db.createObjectStore('sync_queue', { keyPath: 'clientOpId' });
+			queue.createIndex('seq', 'seq', { unique: true });
+			queue.createIndex('deviceId', 'deviceId');
+			queue.createIndex('state', 'state');
+			db.createObjectStore('invoice_sequence', { keyPath: 'deviceId' });
+			db.createObjectStore('session', { keyPath: 'deviceId' });
+		}
 		// falls through
 	}
 }
@@ -126,12 +192,14 @@ export function openPosDb(): Promise<IDBDatabase> {
 			);
 
 		request.onblocked = () =>
-			reject(new Error(`Opening the POS database "${DB_NAME}" is blocked by another tab`));
+			console.warn(
+				`Opening the POS database "${DB_NAME}" is waiting for another tab to close its older connection`
+			);
 	});
 }
 
 /** Run `work` in one transaction and settle when that transaction completes. */
-function inTransaction(
+export function inTransaction(
 	db: IDBDatabase,
 	stores: string[],
 	mode: IDBTransactionMode,
@@ -154,7 +222,7 @@ function inTransaction(
 	});
 }
 
-function valueOf<T>(request: IDBRequest<T>): Promise<T> {
+export function valueOf<T>(request: IDBRequest<T>): Promise<T> {
 	return new Promise((resolve, reject) => {
 		request.onsuccess = () => resolve(request.result);
 		request.onerror = () => reject(request.error);
@@ -162,7 +230,7 @@ function valueOf<T>(request: IDBRequest<T>): Promise<T> {
 }
 
 /** Open, run, and always close — every operation below stands alone. */
-async function withDb<T>(use: (db: IDBDatabase) => Promise<T>): Promise<T> {
+export async function withDb<T>(use: (db: IDBDatabase) => Promise<T>): Promise<T> {
 	const db = await openPosDb();
 
 	try {
@@ -301,7 +369,12 @@ const BOUND_DEVICE_KEY = 'deviceId';
  * otherwise sign the old restaurant's staff in on the new till offline, and the
  * settings (the idle lock, and the menu version kept there). offline_logins is
  * NEVER touched: each row carries the device it was recorded on, and an unsynced
- * record is kept, never deleted (invariant 5).
+ * record is kept, never deleted (invariant 5). `orders`, `sync_queue`,
+ * `invoice_sequence` and `session` are NEVER touched here, for the same reason
+ * as `offline_logins`: an unsynced sale is a recorded fact stamped with the
+ * device it was made on (invariant 5), and a wiped invoice counter would hand
+ * out a number that is already queued (00-overview.md, the 'invoice counter in
+ * a store the device wipes' risk).
  *
  * (Requested by the public-sign-up planning session on the user's behalf: once
  * anyone can create a restaurant, a tablet can change hands between companies.)
@@ -352,6 +425,11 @@ export async function readBoundDeviceId(): Promise<string | null> {
  * holds once the server has told it so. With no bound device, the PIN screen's
  * offline path refuses. offline_logins is NEVER touched: those records are
  * unsynced work, each stamped with the device it was made on (invariant 5).
+ * `orders`, `sync_queue`, `invoice_sequence` and `session` are NEVER touched
+ * here, for the same reason as `offline_logins`: an unsynced sale is a
+ * recorded fact stamped with the device it was made on (invariant 5), and a
+ * wiped invoice counter would hand out a number that is already queued
+ * (00-overview.md, the 'invoice counter in a store the device wipes' risk).
  */
 export function forgetDevice(): Promise<void> {
 	return withDb((db) =>
@@ -410,24 +488,104 @@ export async function recordOfflineLogin(record: OfflineLogin): Promise<void> {
 		throw error;
 	}
 
-	unsyncedChanges.dispatchEvent(new Event('change'));
+	signalUnsyncedChange();
 }
 
 /**
- * The unsynced work on this till: the offline_logins rows still marked
- * synced: false. Spec 6 and invariant 5 want this number on screen at all times,
- * and the connection bar in the /pos layout shows it. It is ONE count: when the
- * sales plan adds its queue, those rows are counted here too, never shown as a
- * second number.
+ * THE unsynced count that the connection bar shows. ONE number over TWO
+ * stores: offline_logins rows still `synced: false` PLUS sync_queue rows
+ * whose state is neither `'done'` nor `'parked'`. `'parked'` is deliberately
+ * excluded — a parked op is not waiting for a connection, it is waiting for
+ * the owner; `countParked()` shows it as its own chrome so it is never a
+ * second "unsynced" number (spec 6, invariant 5).
  */
 export function countUnsynced(): Promise<number> {
-	return withDb(async (db) => {
-		const rows = (await valueOf(
-			db.transaction('offline_logins', 'readonly').objectStore('offline_logins').getAll()
-		)) as Array<{ synced?: unknown }>;
+	return withDb(
+		(db) =>
+			new Promise<number>((resolve, reject) => {
+				const tx = db.transaction(['offline_logins', 'sync_queue'], 'readonly');
+				let logins = 0;
+				let queued = 0;
+				const loginsRequest = tx.objectStore('offline_logins').getAll();
+				loginsRequest.onsuccess = () => {
+					const rows = loginsRequest.result as Array<{
+						synced?: unknown;
+						parked?: unknown;
+					}>;
+					logins = rows.filter((row) => row.synced === false && row.parked !== true).length;
+				};
+				const queueRequest = tx.objectStore('sync_queue').getAll();
+				queueRequest.onsuccess = () => {
+					const rows = queueRequest.result as Array<{ state?: unknown }>;
+					queued = rows.filter((row) => row.state !== 'done' && row.state !== 'parked').length;
+				};
+				tx.oncomplete = () => resolve(logins + queued);
+				tx.onerror = () => reject(tx.error);
+				tx.onabort = () => reject(tx.error ?? new Error('transaction aborted'));
+			})
+	);
+}
 
-		return rows.filter((row) => row.synced === false).length;
-	});
+/** Sync_queue rows in state `'parked'` PLUS offline_logins with parked=true. */
+export function countParked(): Promise<number> {
+	return withDb(
+		(db) =>
+			new Promise<number>((resolve, reject) => {
+				const tx = db.transaction(['sync_queue', 'offline_logins'], 'readonly');
+				let queued = 0;
+				let logins = 0;
+				const queueRequest = tx.objectStore('sync_queue').index('state').count('parked');
+				queueRequest.onsuccess = () => {
+					queued = queueRequest.result;
+				};
+				const loginsRequest = tx.objectStore('offline_logins').getAll();
+				loginsRequest.onsuccess = () => {
+					const rows = loginsRequest.result as Array<{ parked?: unknown }>;
+					logins = rows.filter((row) => row.parked === true).length;
+				};
+				tx.oncomplete = () => resolve(queued + logins);
+				tx.onerror = () => reject(tx.error);
+				tx.onabort = () => reject(tx.error ?? new Error('transaction aborted'));
+			})
+	);
+}
+
+/** T-25: mark an offline_logins row synced after a successful POST. */
+export function markOfflineLoginSynced(clientOpId: string): Promise<void> {
+	return withDb(
+		(db) =>
+			new Promise<void>((resolve, reject) => {
+				const tx = db.transaction('offline_logins', 'readwrite');
+				const store = tx.objectStore('offline_logins');
+				const request = store.get(clientOpId);
+				request.onsuccess = () => {
+					const row = request.result as OfflineLogin | undefined;
+					if (row) store.put({ ...row, synced: true });
+				};
+				tx.oncomplete = () => resolve();
+				tx.onerror = () => reject(tx.error);
+				tx.onabort = () => reject(tx.error ?? new Error('transaction aborted'));
+			})
+	);
+}
+
+/** T-25: park an offline_logins row when the server refuses it out of contract. */
+export function markOfflineLoginParked(clientOpId: string): Promise<void> {
+	return withDb(
+		(db) =>
+			new Promise<void>((resolve, reject) => {
+				const tx = db.transaction('offline_logins', 'readwrite');
+				const store = tx.objectStore('offline_logins');
+				const request = store.get(clientOpId);
+				request.onsuccess = () => {
+					const row = request.result as OfflineLogin | undefined;
+					if (row) store.put({ ...row, parked: true });
+				};
+				tx.oncomplete = () => resolve();
+				tx.onerror = () => reject(tx.error);
+				tx.onabort = () => reject(tx.error ?? new Error('transaction aborted'));
+			})
+	);
 }
 
 /**
@@ -438,6 +596,73 @@ export function onUnsyncedChange(listener: () => void): () => void {
 	unsyncedChanges.addEventListener('change', listener);
 
 	return () => unsyncedChanges.removeEventListener('change', listener);
+}
+
+/** Public trigger for the change event — completeSale, abandonSale,
+ * openLocalSession, closeLocalSession and the flush call it after every
+ * commit that changes the count. */
+export function signalUnsyncedChange(): void {
+	unsyncedChanges.dispatchEvent(new Event('change'));
+}
+
+/** Assumption 13: synced sales are pruned from the device after 30 days.
+ * Deletes only LOCAL copies of sales the server has already answered for
+ * (never touches a server row; invariant 2). */
+export function pruneCompletedOrders(
+	olderThanDays = 30,
+	now: number = Date.now()
+): Promise<number> {
+	return withDb(
+		(db) =>
+			new Promise<number>((resolve, reject) => {
+				const cutoff = now - olderThanDays * 86_400_000;
+				let removed = 0;
+				const tx = db.transaction(['orders', 'sync_queue'], 'readwrite');
+				const ordersStore = tx.objectStore('orders');
+				const queueStore = tx.objectStore('sync_queue');
+				const ordersRequest = ordersStore.getAll();
+				ordersRequest.onsuccess = () => {
+					const rows = ordersRequest.result as Array<{
+						id?: string;
+						state?: unknown;
+						syncedAt?: unknown;
+					}>;
+					const toDelete = rows.filter((row) => {
+						if (row.state !== 'completed') return false;
+						if (typeof row.syncedAt !== 'string') return false;
+						const at = Date.parse(row.syncedAt);
+						return Number.isFinite(at) && at < cutoff;
+					});
+					const orderIds = new Set(
+						toDelete.map((row) => row.id).filter((id): id is string => typeof id === 'string')
+					);
+					removed = orderIds.size;
+					for (const id of orderIds) {
+						ordersStore.delete(id);
+					}
+					const doneRequest = queueStore.index('state').getAll('done');
+					doneRequest.onsuccess = () => {
+						const queueRows = doneRequest.result as Array<{
+							clientOpId?: string;
+							envelope?: { payload?: { orderId?: string } };
+						}>;
+						for (const row of queueRows) {
+							const orderId = row.envelope?.payload?.orderId;
+							if (
+								typeof orderId === 'string' &&
+								orderIds.has(orderId) &&
+								typeof row.clientOpId === 'string'
+							) {
+								queueStore.delete(row.clientOpId);
+							}
+						}
+					};
+				};
+				tx.oncomplete = () => resolve(removed);
+				tx.onerror = () => reject(tx.error);
+				tx.onabort = () => reject(tx.error ?? new Error('transaction aborted'));
+			})
+	);
 }
 
 /**

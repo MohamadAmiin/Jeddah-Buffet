@@ -2,8 +2,19 @@ import { describe, it, expect, afterAll } from 'vitest';
 import pg from 'pg';
 import { eq } from 'drizzle-orm';
 import { TAX_MODES } from '$lib/money/tax';
+import {
+	OP_KINDS,
+	OP_STATUSES,
+	ORDER_TYPES,
+	PAYMENT_METHODS,
+	ORDER_STATUSES,
+	LINE_STATUSES,
+	SESSION_STATUSES
+} from '$lib/sync-ops';
 import { testDb, closeTestDb } from '../test/db';
 import { menuItems } from '../schema/menu';
+import { orders, payments } from '../schema/orders';
+import { posSessions } from '../schema/pos-sessions';
 
 // A constraint that exists only in a schema file proves nothing. These assertions
 // run real inserts against the real database and check the ERROR, not merely that
@@ -843,5 +854,1102 @@ describe('roles constraints', () => {
 
 		expect(live).toHaveLength(1);
 		expect(live[0].id).not.toBe(archivedId);
+	});
+});
+
+// T-13 exports POSTING_EVENTS from src/lib/server/accounting/posting-rules.ts;
+// this local restates the six literals and is swapped for an import once T-13
+// has landed. Keeping it local now keeps the schema tests independent of the
+// domain module that has not been written.
+const POSTING_EVENTS = [
+	'cash_sale',
+	'card_sale',
+	'mobile_sale',
+	'cost_of_goods_sold',
+	'cash_shortage_at_close',
+	'cash_overage_at_close'
+] as const;
+
+type MakeSessionOverrides = {
+	openingCashMinor?: number | bigint;
+	status?: 'open' | 'closed';
+	closedAt?: Date | null;
+	closedByUserId?: string | null;
+	closedFromDeviceId?: string | null;
+	countedCashMinor?: number | bigint | null;
+	expectedCashMinor?: number | bigint | null;
+	differenceMinor?: number | bigint | null;
+};
+
+async function makeSession(
+	restaurantId: string,
+	deviceId: string,
+	userId: string,
+	overrides: MakeSessionOverrides = {}
+): Promise<string> {
+	const openingCashMinor = overrides.openingCashMinor ?? 50000;
+	const status = overrides.status ?? 'open';
+	const closedAt = overrides.closedAt ?? null;
+	const closedByUserId = overrides.closedByUserId ?? null;
+	const closedFromDeviceId = overrides.closedFromDeviceId ?? null;
+	const countedCashMinor = overrides.countedCashMinor ?? null;
+	const expectedCashMinor = overrides.expectedCashMinor ?? null;
+	const differenceMinor = overrides.differenceMinor ?? null;
+
+	const { rows } = await pool.query<{ id: string }>(
+		`insert into pos_sessions (
+			restaurant_id, device_id, opened_by_user_id, opened_at, business_date,
+			opening_cash_minor, status, closed_at, closed_by_user_id, closed_from_device_id,
+			counted_cash_minor, expected_cash_minor, difference_minor
+		) values ($1, $2, $3, now(), '2026-09-28', $4, $5, $6, $7, $8, $9, $10, $11)
+		returning id`,
+		[
+			restaurantId,
+			deviceId,
+			userId,
+			openingCashMinor,
+			status,
+			closedAt,
+			closedByUserId,
+			closedFromDeviceId,
+			countedCashMinor,
+			expectedCashMinor,
+			differenceMinor
+		]
+	);
+	return rows[0].id;
+}
+
+async function makeMenuItem(restaurantId: string, categoryName = 'Drinks'): Promise<string> {
+	const { rows: categoryRows } = await pool.query<{ id: string }>(
+		`insert into menu_categories (restaurant_id, name) values ($1, $2) returning id`,
+		[restaurantId, categoryName]
+	);
+	const categoryId = categoryRows[0].id;
+	const { rows: itemRows } = await pool.query<{ id: string }>(
+		`insert into menu_items (restaurant_id, category_id, name, price_minor)
+		 values ($1, $2, 'Tea', 850) returning id`,
+		[restaurantId, categoryId]
+	);
+	return itemRows[0].id;
+}
+
+type MakeOrderOverrides = {
+	orderType?: 'dine_in' | 'takeaway';
+	tableLabel?: string | null;
+	status?: 'open' | 'billed' | 'paid' | 'voided' | 'refunded';
+	taxMode?: 'exclusive' | 'inclusive';
+	currencyCode?: string;
+	subtotalMinor?: number | bigint;
+	discountMinor?: number | bigint;
+	taxMinor?: number | bigint;
+	totalMinor?: number | bigint;
+};
+
+async function makeOrder(
+	restaurantId: string,
+	sessionId: string,
+	deviceId: string,
+	userId: string,
+	overrides: MakeOrderOverrides = {}
+): Promise<string> {
+	const orderType = overrides.orderType ?? 'takeaway';
+	const tableLabel = overrides.tableLabel ?? null;
+	const status = overrides.status ?? 'paid';
+	const taxMode = overrides.taxMode ?? 'exclusive';
+	const currencyCode = overrides.currencyCode ?? 'USD';
+	const subtotal = overrides.subtotalMinor ?? 1000;
+	const discount = overrides.discountMinor ?? 0;
+	const tax = overrides.taxMinor ?? 100;
+	const total = overrides.totalMinor ?? 1100;
+
+	const { rows } = await pool.query<{ id: string }>(
+		`insert into orders (
+			restaurant_id, pos_session_id, device_id, employee_user_id, order_type, table_label,
+			status, tax_mode, currency_code, menu_version, subtotal_minor, discount_minor,
+			tax_minor, total_minor, opened_at, paid_at
+		) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12, $13, now(), now())
+		returning id`,
+		[
+			restaurantId,
+			sessionId,
+			deviceId,
+			userId,
+			orderType,
+			tableLabel,
+			status,
+			taxMode,
+			currencyCode,
+			subtotal,
+			discount,
+			tax,
+			total
+		]
+	);
+	return rows[0].id;
+}
+
+async function makeLine(
+	restaurantId: string,
+	orderId: string,
+	menuItemId: string,
+	overrides: {
+		lineNo?: number;
+		quantity?: number;
+		unitPriceMinor?: number | bigint;
+		taxRateBp?: number;
+		status?: 'new' | 'sent' | 'voided';
+		discountMinor?: number | bigint;
+	} = {}
+): Promise<string> {
+	const lineNo = overrides.lineNo ?? 1;
+	const quantity = overrides.quantity ?? 1;
+	const unitPriceMinor = overrides.unitPriceMinor ?? 850;
+	const taxRateBp = overrides.taxRateBp ?? 825;
+	const status = overrides.status ?? 'new';
+	const discountMinor = overrides.discountMinor ?? 0;
+
+	const { rows } = await pool.query<{ id: string }>(
+		`insert into order_lines (
+			restaurant_id, order_id, line_no, menu_item_id, item_name, quantity,
+			unit_price_minor, tax_rate_bp, discount_minor, status
+		) values ($1, $2, $3, $4, 'Tea', $5, $6, $7, $8, $9)
+		returning id`,
+		[
+			restaurantId,
+			orderId,
+			lineNo,
+			menuItemId,
+			quantity,
+			unitPriceMinor,
+			taxRateBp,
+			discountMinor,
+			status
+		]
+	);
+	return rows[0].id;
+}
+
+async function makePayment(
+	restaurantId: string,
+	orderId: string,
+	method: 'cash' | 'card' | 'mobile' = 'cash',
+	amount: number | bigint = 1100,
+	tendered: number | bigint | null = 2000,
+	change: number | bigint | null = 900
+): Promise<string> {
+	const { rows } = await pool.query<{ id: string }>(
+		`insert into payments (
+			restaurant_id, order_id, method, amount_minor, tendered_minor, change_minor, paid_at
+		) values ($1, $2, $3, $4, $5, $6, now()) returning id`,
+		[restaurantId, orderId, method, amount, tendered, change]
+	);
+	return rows[0].id;
+}
+
+async function makeInvoice(
+	restaurantId: string,
+	orderId: string,
+	deviceId: string,
+	seq = 1,
+	number = 'POS1-000001'
+): Promise<string> {
+	const { rows } = await pool.query<{ id: string }>(
+		`insert into invoices (
+			restaurant_id, order_id, device_id, invoice_seq, invoice_number, total_minor, issued_at
+		) values ($1, $2, $3, $4, $5, 1100, now()) returning id`,
+		[restaurantId, orderId, deviceId, seq, number]
+	);
+	return rows[0].id;
+}
+
+async function makeAccount(
+	restaurantId: string,
+	code = '1000',
+	name = 'Cash on Hand',
+	type = 'asset'
+): Promise<string> {
+	const { rows } = await pool.query<{ id: string }>(
+		`insert into accounts (restaurant_id, code, name, type)
+		 values ($1, $2, $3, $4) returning id`,
+		[restaurantId, code, name, type]
+	);
+	return rows[0].id;
+}
+
+/** withRollback: every insert into journal_entries or journal_entry_lines
+ * MUST run through this — after T-09, an autocommitted entry with no lines
+ * is rejected at its own COMMIT by the deferred trigger. */
+async function withRollback(fn: (client: pg.PoolClient) => Promise<void>): Promise<void> {
+	const client = await pool.connect();
+	try {
+		await client.query('begin');
+		try {
+			await fn(client);
+		} finally {
+			await client.query('rollback');
+		}
+	} finally {
+		client.release();
+	}
+}
+
+async function makeEntry(client: pg.PoolClient, restaurantId: string): Promise<string> {
+	const { rows } = await client.query<{ id: string }>(
+		`insert into journal_entries (
+			restaurant_id, business_date, event, source_type, source_id, memo
+		) values ($1, '2026-09-28', 'cash_sale', 'order', gen_random_uuid(), 'test')
+		returning id`,
+		[restaurantId]
+	);
+	return rows[0].id;
+}
+
+describe('value sets are pinned to the isomorphic constants (T-08)', () => {
+	it('lists match the wire contract, verbatim', () => {
+		expect([...ORDER_TYPES]).toEqual(['dine_in', 'takeaway']);
+		expect([...PAYMENT_METHODS]).toEqual(['cash', 'card', 'mobile']);
+		expect([...ORDER_STATUSES]).toEqual(['open', 'billed', 'paid', 'voided', 'refunded']);
+		expect([...LINE_STATUSES]).toEqual(['new', 'sent', 'voided']);
+		expect([...SESSION_STATUSES]).toEqual(['open', 'closed']);
+		expect([...OP_KINDS]).toEqual([
+			'session.open',
+			'session.close',
+			'sale.complete',
+			'sale.abandoned',
+			'pin.login'
+		]);
+		expect([...OP_STATUSES]).toEqual(['accepted', 'recorded_flagged', 'unrecorded']);
+		expect([...TAX_MODES]).toEqual(['exclusive', 'inclusive']);
+	});
+
+	it('rejects a value outside orders.order_type with the named CHECK', async () => {
+		const r = await makeRestaurant('vs-order-type');
+		const o = await makeOwner(r, 'vs-order-type@example.com');
+		const d = await makeDevice(r, o);
+		const s = await makeSession(r, d, o);
+		const error = await expectError(
+			`insert into orders (
+				restaurant_id, pos_session_id, device_id, employee_user_id, order_type, status,
+				tax_mode, currency_code, menu_version, subtotal_minor, tax_minor, total_minor,
+				opened_at, paid_at
+			) values ($1, $2, $3, $4, 'delivery', 'paid', 'exclusive', 'USD', 1, 1000, 100, 1100,
+				now(), now())`,
+			[r, s, d, o]
+		);
+		expect(error.code).toBe('23514');
+		expect(error.constraint).toBe('orders_order_type_valid');
+	});
+
+	it('rejects a value outside pos_sessions.status', async () => {
+		const r = await makeRestaurant('vs-session-status');
+		const o = await makeOwner(r, 'vs-session-status@example.com');
+		const d = await makeDevice(r, o);
+		// 'suspended' fails both pos_sessions_status_valid AND
+		// pos_sessions_closed_fields, and Postgres reports whichever one it
+		// evaluates first — that order is not specified. Assert on the failure
+		// class and that at least one of the two named constraints reported it.
+		const error = await expectError(
+			`insert into pos_sessions (
+				restaurant_id, device_id, opened_by_user_id, opened_at, business_date,
+				opening_cash_minor, status
+			) values ($1, $2, $3, now(), '2026-09-28', 50000, 'suspended')`,
+			[r, d, o]
+		);
+		expect(error.code).toBe('23514');
+		expect(['pos_sessions_status_valid', 'pos_sessions_closed_fields']).toContain(error.constraint);
+	});
+
+	it('rejects a value outside pos_sync_ops.kind and pos_sync_ops.status', async () => {
+		const r = await makeRestaurant('vs-sync-ops');
+		const o = await makeOwner(r, 'vs-sync-ops@example.com');
+		const d = await makeDevice(r, o);
+		const badKind = await expectError(
+			`insert into pos_sync_ops (
+				restaurant_id, device_id, received_via_device_id, client_op_id, kind, status,
+				occurred_at, payload
+			) values ($1, $2, $2, gen_random_uuid(), 'sale.void', 'accepted', now(),
+				'{"outcome":"success"}'::jsonb)`,
+			[r, d]
+		);
+		expect(badKind.code).toBe('23514');
+		expect(badKind.constraint).toBe('pos_sync_ops_kind_valid');
+
+		const badStatus = await expectError(
+			`insert into pos_sync_ops (
+				restaurant_id, device_id, received_via_device_id, client_op_id, kind, status,
+				occurred_at, payload
+			) values ($1, $2, $2, gen_random_uuid(), 'pin.login', 'rejected', now(),
+				'{"outcome":"success"}'::jsonb)`,
+			[r, d]
+		);
+		expect(badStatus.code).toBe('23514');
+		expect(badStatus.constraint).toBe('pos_sync_ops_status_valid');
+
+		const badResolution = await expectError(
+			`insert into pos_sync_ops (
+				restaurant_id, device_id, received_via_device_id, client_op_id, kind, status,
+				resolution, occurred_at, payload
+			) values ($1, $2, $2, gen_random_uuid(), 'pin.login', 'accepted', 'ignored', now(),
+				'{"outcome":"success"}'::jsonb)`,
+			[r, d]
+		);
+		expect(badResolution.code).toBe('23514');
+		expect(badResolution.constraint).toBe('pos_sync_ops_resolution_valid');
+	});
+
+	it('rejects an invalid journal_entries.event and source_type', async () => {
+		const r = await makeRestaurant('vs-event');
+		await withRollback(async (client) => {
+			try {
+				await client.query(
+					`insert into journal_entries (restaurant_id, business_date, event, source_type,
+					 source_id, memo) values ($1, '2026-09-28', 'refund', 'order', gen_random_uuid(),
+					 'test')`,
+					[r]
+				);
+				throw new Error('expected 23514');
+			} catch (error) {
+				expect((error as pg.DatabaseError).code).toBe('23514');
+				expect((error as pg.DatabaseError).constraint).toBe('journal_entries_event_valid');
+			}
+		});
+
+		await withRollback(async (client) => {
+			try {
+				await client.query(
+					`insert into journal_entries (restaurant_id, business_date, event, source_type,
+					 source_id, memo) values ($1, '2026-09-28', 'cash_sale', 'purchase',
+					 gen_random_uuid(), 'test')`,
+					[r]
+				);
+				throw new Error('expected 23514');
+			} catch (error) {
+				expect((error as pg.DatabaseError).code).toBe('23514');
+				expect((error as pg.DatabaseError).constraint).toBe('journal_entries_source_type_valid');
+			}
+		});
+	});
+
+	it('accepts the six spec 23 account types and rejects one outside', async () => {
+		const r = await makeRestaurant('vs-account-types');
+		let code = 1000;
+		for (const type of [
+			'asset',
+			'liability',
+			'equity',
+			'revenue',
+			'cost_of_sales',
+			'expense'
+		] as const) {
+			const { rowCount } = await pool.query(
+				`insert into accounts (restaurant_id, code, name, type) values ($1, $2, $3, $4)`,
+				[r, String(code++), type, type]
+			);
+			expect(rowCount).toBe(1);
+		}
+		const error = await expectError(
+			`insert into accounts (restaurant_id, code, name, type)
+			 values ($1, '9999', 'Contra', 'contra')`,
+			[r]
+		);
+		expect(error.code).toBe('23514');
+		expect(error.constraint).toBe('accounts_type_valid');
+	});
+
+	it('POSTING_EVENTS restated locally matches the six wire literals', () => {
+		expect([...POSTING_EVENTS]).toEqual([
+			'cash_sale',
+			'card_sale',
+			'mobile_sale',
+			'cost_of_goods_sold',
+			'cash_shortage_at_close',
+			'cash_overage_at_close'
+		]);
+	});
+});
+
+describe('pos_sessions constraints (T-08)', () => {
+	it('allows only one open session per device', async () => {
+		const r = await makeRestaurant('sess-one-open');
+		const o = await makeOwner(r, 'sess-one-open@example.com');
+		const d1 = await makeDevice(r, o);
+		const s1 = await makeSession(r, d1, o);
+
+		const duplicate = await expectError(
+			`insert into pos_sessions (
+				restaurant_id, device_id, opened_by_user_id, opened_at, business_date,
+				opening_cash_minor, status
+			) values ($1, $2, $3, now(), '2026-09-28', 50000, 'open')`,
+			[r, d1, o]
+		);
+		expect(duplicate.code).toBe('23505');
+		expect(duplicate.constraint).toBe('pos_sessions_one_open_per_device');
+
+		// Close the first session, then a new open one is fine on the same device.
+		await pool.query(
+			`update pos_sessions set status = 'closed', closed_at = now(),
+			 closed_by_user_id = $2, closed_from_device_id = $3,
+			 counted_cash_minor = 50000, expected_cash_minor = 50000, difference_minor = 0
+			 where id = $1`,
+			[s1, o, d1]
+		);
+		const { rowCount } = await pool.query(
+			`insert into pos_sessions (
+				restaurant_id, device_id, opened_by_user_id, opened_at, business_date,
+				opening_cash_minor, status
+			) values ($1, $2, $3, now(), '2026-09-28', 50000, 'open')`,
+			[r, d1, o]
+		);
+		expect(rowCount).toBe(1);
+
+		// A different device holds its own open session concurrently.
+		const d2 = await makeDevice(r, o, 'POS2', 'b'.repeat(64));
+		const { rowCount: rc2 } = await pool.query(
+			`insert into pos_sessions (
+				restaurant_id, device_id, opened_by_user_id, opened_at, business_date,
+				opening_cash_minor, status
+			) values ($1, $2, $3, now(), '2026-09-28', 50000, 'open')`,
+			[r, d2, o]
+		);
+		expect(rc2).toBe(1);
+	});
+
+	it('closed_fields requires all six close fields together', async () => {
+		const r = await makeRestaurant('sess-closed-fields');
+		const o = await makeOwner(r, 'sess-closed-fields@example.com');
+		const d = await makeDevice(r, o);
+
+		// closed status but no closed_at
+		const noClosedAt = await expectError(
+			`insert into pos_sessions (
+				restaurant_id, device_id, opened_by_user_id, opened_at, business_date,
+				opening_cash_minor, status
+			) values ($1, $2, $3, now(), '2026-09-28', 50000, 'closed')`,
+			[r, d, o]
+		);
+		expect(noClosedAt.code).toBe('23514');
+		expect(noClosedAt.constraint).toBe('pos_sessions_closed_fields');
+
+		// difference_minor null while status = 'closed'
+		const noDiff = await expectError(
+			`insert into pos_sessions (
+				restaurant_id, device_id, opened_by_user_id, opened_at, business_date,
+				opening_cash_minor, status, closed_at, closed_by_user_id, closed_from_device_id,
+				counted_cash_minor, expected_cash_minor
+			) values ($1, $2, $3, now(), '2026-09-28', 50000, 'closed', now(), $3, $2, 50000, 50000)`,
+			[r, d, o]
+		);
+		expect(noDiff.code).toBe('23514');
+		expect(noDiff.constraint).toBe('pos_sessions_closed_fields');
+
+		// closed with everything but closed_from_device_id
+		const noLineage = await expectError(
+			`insert into pos_sessions (
+				restaurant_id, device_id, opened_by_user_id, opened_at, business_date,
+				opening_cash_minor, status, closed_at, closed_by_user_id,
+				counted_cash_minor, expected_cash_minor, difference_minor
+			) values ($1, $2, $3, now(), '2026-09-28', 50000, 'closed', now(), $3, 50000, 50000, 0)`,
+			[r, d, o]
+		);
+		expect(noLineage.code).toBe('23514');
+		expect(noLineage.constraint).toBe('pos_sessions_closed_fields');
+
+		// open with closed_at set
+		const openWithClosedAt = await expectError(
+			`insert into pos_sessions (
+				restaurant_id, device_id, opened_by_user_id, opened_at, business_date,
+				opening_cash_minor, status, closed_at
+			) values ($1, $2, $3, now(), '2026-09-28', 50000, 'open', now())`,
+			[r, d, o]
+		);
+		expect(openWithClosedAt.code).toBe('23514');
+		expect(openWithClosedAt.constraint).toBe('pos_sessions_closed_fields');
+	});
+
+	it('opening_cash_minor >= 0 is enforced', async () => {
+		const r = await makeRestaurant('sess-opening-neg');
+		const o = await makeOwner(r, 'sess-opening-neg@example.com');
+		const d = await makeDevice(r, o);
+		const error = await expectError(
+			`insert into pos_sessions (
+				restaurant_id, device_id, opened_by_user_id, opened_at, business_date,
+				opening_cash_minor, status
+			) values ($1, $2, $3, now(), '2026-09-28', -1, 'open')`,
+			[r, d, o]
+		);
+		expect(error.code).toBe('23514');
+		expect(error.constraint).toBe('pos_sessions_opening_cash_non_negative');
+	});
+
+	it('business_date is a plain YYYY-MM-DD string through Drizzle', async () => {
+		const r = await makeRestaurant('sess-business-date');
+		const o = await makeOwner(r, 'sess-business-date@example.com');
+		const d = await makeDevice(r, o);
+		const s = await makeSession(r, d, o);
+
+		const { rows: raw } = await pool.query<{ d: string }>(
+			`select business_date::text as d from pos_sessions where id = $1`,
+			[s]
+		);
+		expect(raw[0].d).toBe('2026-09-28');
+
+		const [row] = await testDb()
+			.select({ d: posSessions.businessDate })
+			.from(posSessions)
+			.where(eq(posSessions.id, s));
+		expect(row.d).toBe('2026-09-28');
+	});
+});
+
+describe('orders, payments and invoices constraints (T-08)', () => {
+	it('orders_totals_identity enforces subtotal - discount + tax = total', async () => {
+		const r = await makeRestaurant('orders-totals');
+		const o = await makeOwner(r, 'orders-totals@example.com');
+		const d = await makeDevice(r, o);
+		const s = await makeSession(r, d, o);
+		const error = await expectError(
+			`insert into orders (
+				restaurant_id, pos_session_id, device_id, employee_user_id, order_type, status,
+				tax_mode, currency_code, menu_version, subtotal_minor, discount_minor, tax_minor,
+				total_minor, opened_at, paid_at
+			) values ($1, $2, $3, $4, 'takeaway', 'paid', 'exclusive', 'USD', 1, 1000, 0, 100, 1000,
+				now(), now())`,
+			[r, s, d, o]
+		);
+		expect(error.code).toBe('23514');
+		expect(error.constraint).toBe('orders_totals_identity');
+
+		// With a real discount the identity holds and the row is accepted.
+		const orderId = await makeOrder(r, s, d, o, {
+			subtotalMinor: 1000,
+			discountMinor: 100,
+			taxMinor: 90,
+			totalMinor: 990
+		});
+		expect(orderId).toBeTruthy();
+	});
+
+	it('table_label length 1..32, and currency_code ^[A-Z]{3}$', async () => {
+		const r = await makeRestaurant('orders-checks');
+		const o = await makeOwner(r, 'orders-checks@example.com');
+		const d = await makeDevice(r, o);
+		const s = await makeSession(r, d, o);
+
+		const tooLong = await expectError(
+			`insert into orders (
+				restaurant_id, pos_session_id, device_id, employee_user_id, order_type, table_label,
+				status, tax_mode, currency_code, menu_version, subtotal_minor, tax_minor, total_minor,
+				opened_at, paid_at
+			) values ($1, $2, $3, $4, 'dine_in', $5, 'paid', 'exclusive', 'USD', 1, 1000, 100, 1100,
+				now(), now())`,
+			[r, s, d, o, 'x'.repeat(33)]
+		);
+		expect(tooLong.constraint).toBe('orders_table_label_length');
+
+		const empty = await expectError(
+			`insert into orders (
+				restaurant_id, pos_session_id, device_id, employee_user_id, order_type, table_label,
+				status, tax_mode, currency_code, menu_version, subtotal_minor, tax_minor, total_minor,
+				opened_at, paid_at
+			) values ($1, $2, $3, $4, 'dine_in', '', 'paid', 'exclusive', 'USD', 1, 1000, 100, 1100,
+				now(), now())`,
+			[r, s, d, o]
+		);
+		expect(empty.constraint).toBe('orders_table_label_length');
+
+		const badCurrency = await expectError(
+			`insert into orders (
+				restaurant_id, pos_session_id, device_id, employee_user_id, order_type, status,
+				tax_mode, currency_code, menu_version, subtotal_minor, tax_minor, total_minor,
+				opened_at, paid_at
+			) values ($1, $2, $3, $4, 'takeaway', 'paid', 'exclusive', 'usd', 1, 1000, 100, 1100,
+				now(), now())`,
+			[r, s, d, o]
+		);
+		expect(badCurrency.constraint).toBe('orders_currency_code_format');
+	});
+
+	it('an order whose session belongs to another restaurant is refused (tenant isolation)', async () => {
+		const rA = await makeRestaurant('orders-tenant-A');
+		const oA = await makeOwner(rA, 'orders-tenant-a@example.com');
+		const dA = await makeDevice(rA, oA);
+		const sA = await makeSession(rA, dA, oA);
+		const rB = await makeRestaurant('orders-tenant-B');
+		const oB = await makeOwner(rB, 'orders-tenant-b@example.com');
+		const dB = await makeDevice(rB, oB, 'POS2', 'c'.repeat(64));
+
+		const error = await expectError(
+			`insert into orders (
+				restaurant_id, pos_session_id, device_id, employee_user_id, order_type, status,
+				tax_mode, currency_code, menu_version, subtotal_minor, tax_minor, total_minor,
+				opened_at, paid_at
+			) values ($1, $2, $3, $4, 'takeaway', 'paid', 'exclusive', 'USD', 1, 1000, 100, 1100,
+				now(), now())`,
+			[rB, sA, dB, oB]
+		);
+		expect(error.code).toBe('23503');
+		expect(error.constraint).toBe('orders_session_fk');
+	});
+
+	it('payments_cash_fields enforces cash vs card/mobile shape', async () => {
+		const r = await makeRestaurant('payments-cash');
+		const o = await makeOwner(r, 'payments-cash@example.com');
+		const d = await makeDevice(r, o);
+		const s = await makeSession(r, d, o);
+		const orderId = await makeOrder(r, s, d, o);
+
+		const changeWrong = await expectError(
+			`insert into payments (
+				restaurant_id, order_id, method, amount_minor, tendered_minor, change_minor, paid_at
+			) values ($1, $2, 'cash', 1100, 2000, 800, now())`,
+			[r, orderId]
+		);
+		expect(changeWrong.constraint).toBe('payments_cash_fields');
+
+		const tenderedShort = await expectError(
+			`insert into payments (
+				restaurant_id, order_id, method, amount_minor, tendered_minor, change_minor, paid_at
+			) values ($1, $2, 'cash', 1100, 1000, -100, now())`,
+			[r, orderId]
+		);
+		expect(tenderedShort.constraint).toBe('payments_cash_fields');
+
+		const cardWithTendered = await expectError(
+			`insert into payments (
+				restaurant_id, order_id, method, amount_minor, tendered_minor, change_minor, paid_at
+			) values ($1, $2, 'card', 1100, 1100, 0, now())`,
+			[r, orderId]
+		);
+		expect(cardWithTendered.constraint).toBe('payments_cash_fields');
+
+		const cashNullTendered = await expectError(
+			`insert into payments (
+				restaurant_id, order_id, method, amount_minor, tendered_minor, change_minor, paid_at
+			) values ($1, $2, 'cash', 1100, null, null, now())`,
+			[r, orderId]
+		);
+		expect(cashNullTendered.constraint).toBe('payments_cash_fields');
+
+		const amountNegative = await expectError(
+			`insert into payments (
+				restaurant_id, order_id, method, amount_minor, tendered_minor, change_minor, paid_at
+			) values ($1, $2, 'card', -1, null, null, now())`,
+			[r, orderId]
+		);
+		expect(amountNegative.constraint).toBe('payments_amount_minor_non_negative');
+	});
+
+	it('MANDATORY (spec 29 offline sync — the invoice half): the namespace is per device', async () => {
+		const r = await makeRestaurant('invoices-device-namespace');
+		const o = await makeOwner(r, 'invoices-device-namespace@example.com');
+		const d1 = await makeDevice(r, o);
+		const d2 = await makeDevice(r, o, 'POS2', 'e'.repeat(64));
+		const s = await makeSession(r, d1, o);
+		const orderA = await makeOrder(r, s, d1, o);
+		const orderB = await makeOrder(r, s, d1, o);
+		const orderC = await makeOrder(r, s, d2, o);
+
+		await makeInvoice(r, orderA, d1, 1, 'POS1-000001');
+
+		const numberDup = await expectError(
+			`insert into invoices (restaurant_id, order_id, device_id, invoice_seq, invoice_number,
+				 total_minor, issued_at)
+				 values ($1, $2, $3, 2, 'POS1-000001', 1100, now())`,
+			[r, orderB, d1]
+		);
+		expect(numberDup.code).toBe('23505');
+		expect(numberDup.constraint).toBe('invoices_device_number_unique');
+
+		// Same number on a different device: namespace is per device (invariant 5).
+		const { rowCount } = await pool.query(
+			`insert into invoices (restaurant_id, order_id, device_id, invoice_seq, invoice_number,
+				 total_minor, issued_at)
+				 values ($1, $2, $3, 1, 'POS1-000001', 1100, now())`,
+			[r, orderC, d2]
+		);
+		expect(rowCount).toBe(1);
+
+		// Two invoices for one order.
+		const twoInvoices = await expectError(
+			`insert into invoices (restaurant_id, order_id, device_id, invoice_seq, invoice_number,
+				 total_minor, issued_at)
+				 values ($1, $2, $3, 3, 'POS1-000003', 1100, now())`,
+			[r, orderA, d1]
+		);
+		expect(twoInvoices.constraint).toBe('invoices_order_unique');
+
+		// Same seq twice on one device with different numbers.
+		await makeInvoice(r, orderB, d1, 2, 'POS1-000002');
+		const orderD = await makeOrder(r, s, d1, o);
+		const seqDup = await expectError(
+			`insert into invoices (restaurant_id, order_id, device_id, invoice_seq, invoice_number,
+				 total_minor, issued_at)
+				 values ($1, $2, $3, 2, 'POS1-000004', 1100, now())`,
+			[r, orderD, d1]
+		);
+		expect(seqDup.constraint).toBe('invoices_device_seq_unique');
+
+		const seqZero = await expectError(
+			`insert into invoices (restaurant_id, order_id, device_id, invoice_seq, invoice_number,
+				 total_minor, issued_at)
+				 values ($1, $2, $3, 0, 'POS1-000000', 1100, now())`,
+			[r, orderD, d1]
+		);
+		expect(seqZero.constraint).toBe('invoices_seq_range');
+
+		const badFormat = await expectError(
+			`insert into invoices (restaurant_id, order_id, device_id, invoice_seq, invoice_number,
+				 total_minor, issued_at)
+				 values ($1, $2, $3, 3, 'POS1-1', 1100, now())`,
+			[r, orderD, d1]
+		);
+		expect(badFormat.constraint).toBe('invoices_number_format');
+
+		const lowerCase = await expectError(
+			`insert into invoices (restaurant_id, order_id, device_id, invoice_seq, invoice_number,
+				 total_minor, issued_at)
+				 values ($1, $2, $3, 3, 'pos1-000003', 1100, now())`,
+			[r, orderD, d1]
+		);
+		expect(lowerCase.constraint).toBe('invoices_number_format');
+	});
+
+	it('order_lines constraints: quantity, tax range, uniqueness, tenant', async () => {
+		const r = await makeRestaurant('order-lines');
+		const o = await makeOwner(r, 'order-lines@example.com');
+		const d = await makeDevice(r, o);
+		const s = await makeSession(r, d, o);
+		const orderId = await makeOrder(r, s, d, o);
+		const menuItemId = await makeMenuItem(r);
+		await makeLine(r, orderId, menuItemId, { lineNo: 1 });
+
+		const zeroQty = await expectError(
+			`insert into order_lines (restaurant_id, order_id, line_no, menu_item_id, item_name,
+			 quantity, unit_price_minor, tax_rate_bp, discount_minor, status)
+			 values ($1, $2, 2, $3, 'Tea', 0, 850, 825, 0, 'new')`,
+			[r, orderId, menuItemId]
+		);
+		expect(zeroQty.constraint).toBe('order_lines_quantity_positive');
+
+		const tooHighRate = await expectError(
+			`insert into order_lines (restaurant_id, order_id, line_no, menu_item_id, item_name,
+			 quantity, unit_price_minor, tax_rate_bp, discount_minor, status)
+			 values ($1, $2, 3, $3, 'Tea', 1, 850, 10001, 0, 'new')`,
+			[r, orderId, menuItemId]
+		);
+		expect(tooHighRate.constraint).toBe('order_lines_tax_rate_bp_range');
+
+		const dupLineNo = await expectError(
+			`insert into order_lines (restaurant_id, order_id, line_no, menu_item_id, item_name,
+			 quantity, unit_price_minor, tax_rate_bp, discount_minor, status)
+			 values ($1, $2, 1, $3, 'Tea', 1, 850, 825, 0, 'new')`,
+			[r, orderId, menuItemId]
+		);
+		expect(dupLineNo.constraint).toBe('order_lines_order_line_no_unique');
+
+		const negPrice = await expectError(
+			`insert into order_lines (restaurant_id, order_id, line_no, menu_item_id, item_name,
+			 quantity, unit_price_minor, tax_rate_bp, discount_minor, status)
+			 values ($1, $2, 4, $3, 'Tea', 1, -1, 825, 0, 'new')`,
+			[r, orderId, menuItemId]
+		);
+		expect(negPrice.constraint).toBe('order_lines_unit_price_minor_non_negative');
+
+		// tenant isolation
+		const rOther = await makeRestaurant('order-lines-other');
+		const oOther = await makeOwner(rOther, 'order-lines-other@example.com');
+		const menuItemOther = await makeMenuItem(rOther);
+		const tenantMismatch = await expectError(
+			`insert into order_lines (restaurant_id, order_id, line_no, menu_item_id, item_name,
+			 quantity, unit_price_minor, tax_rate_bp, discount_minor, status)
+			 values ($1, $2, 5, $3, 'Tea', 1, 850, 825, 0, 'new')`,
+			[r, orderId, menuItemOther]
+		);
+		expect(tenantMismatch.code).toBe('23503');
+		expect(tenantMismatch.constraint).toBe('order_lines_menu_item_fk');
+		expect(oOther).toBeTruthy();
+	});
+
+	it('MANDATORY (spec 29 — money bigint): Drizzle reads bigints for money columns', async () => {
+		const r = await makeRestaurant('bigint-round-trip');
+		const o = await makeOwner(r, 'bigint-round-trip@example.com');
+		const d = await makeDevice(r, o);
+		const s = await makeSession(r, d, o);
+		const orderId = await makeOrder(r, s, d, o);
+		await makePayment(r, orderId, 'cash', 1100, 2000, 900);
+
+		const [orderRow] = await testDb()
+			.select({ total: orders.totalMinor })
+			.from(orders)
+			.where(eq(orders.id, orderId));
+		expect(orderRow.total).toBe(1100n);
+		expect(typeof orderRow.total).toBe('bigint');
+
+		const [paymentRow] = await testDb()
+			.select({ change: payments.changeMinor })
+			.from(payments)
+			.where(eq(payments.orderId, orderId));
+		expect(paymentRow.change).toBe(900n);
+	});
+});
+
+describe('pos_sync_ops constraints (T-08)', () => {
+	it('MANDATORY (spec 29 — offline sync: retries never create duplicates)', async () => {
+		const r = await makeRestaurant('sync-ops-idempotency');
+		const o = await makeOwner(r, 'sync-ops-idempotency@example.com');
+		const d = await makeDevice(r, o);
+		const d2 = await makeDevice(r, o, 'POS2', 'f'.repeat(64));
+		const clientOpId = crypto.randomUUID();
+
+		const { rowCount } = await pool.query(
+			`insert into pos_sync_ops (restaurant_id, device_id, received_via_device_id, client_op_id,
+			 kind, status, occurred_at, payload)
+			 values ($1, $2, $2, $3, 'pin.login', 'accepted', now(),
+			 '{"outcome":"success"}'::jsonb)`,
+			[r, d, clientOpId]
+		);
+		expect(rowCount).toBe(1);
+
+		const duplicate = await expectError(
+			`insert into pos_sync_ops (restaurant_id, device_id, received_via_device_id, client_op_id,
+			 kind, status, occurred_at, payload)
+			 values ($1, $2, $2, $3, 'pin.login', 'accepted', now(),
+			 '{"outcome":"success"}'::jsonb)`,
+			[r, d, clientOpId]
+		);
+		expect(duplicate.code).toBe('23505');
+		expect(duplicate.constraint).toBe('pos_sync_ops_device_client_op_unique');
+
+		const { rows: countRows } = await pool.query<{ c: string }>(
+			`select count(*)::text as c from pos_sync_ops where device_id = $1 and client_op_id = $2`,
+			[d, clientOpId]
+		);
+		expect(countRows[0].c).toBe('1');
+
+		// Same client_op_id on a different device: accepted.
+		const { rowCount: onOther } = await pool.query(
+			`insert into pos_sync_ops (restaurant_id, device_id, received_via_device_id, client_op_id,
+			 kind, status, occurred_at, payload)
+			 values ($1, $2, $2, $3, 'pin.login', 'accepted', now(),
+			 '{"outcome":"success"}'::jsonb)`,
+			[r, d2, clientOpId]
+		);
+		expect(onOther).toBe(1);
+	});
+
+	it('payload NOT NULL is enforced', async () => {
+		const r = await makeRestaurant('sync-ops-payload-null');
+		const o = await makeOwner(r, 'sync-ops-payload-null@example.com');
+		const d = await makeDevice(r, o);
+		const error = await expectError(
+			`insert into pos_sync_ops (restaurant_id, device_id, received_via_device_id, client_op_id,
+			 kind, status, occurred_at, payload)
+			 values ($1, $2, $2, gen_random_uuid(), 'pin.login', 'accepted', now(), null)`,
+			[r, d]
+		);
+		expect(error.code).toBe('23502');
+	});
+
+	it('a revoked device may still be named on an op — the queued fact stands', async () => {
+		const r = await makeRestaurant('sync-ops-revoked');
+		const o = await makeOwner(r, 'sync-ops-revoked@example.com');
+		const d = await makeDevice(r, o);
+		await pool.query(
+			`update pos_devices set revoked_at = now(), revoked_by_user_id = $2 where id = $1`,
+			[d, o]
+		);
+		const { rowCount } = await pool.query(
+			`insert into pos_sync_ops (restaurant_id, device_id, received_via_device_id, client_op_id,
+			 kind, status, occurred_at, payload)
+			 values ($1, $2, $2, gen_random_uuid(), 'pin.login', 'accepted', now(),
+			 '{"outcome":"success"}'::jsonb)`,
+			[r, d]
+		);
+		expect(rowCount).toBe(1);
+	});
+
+	it('accepts_card and accepts_mobile land null with no default, and toggle freely', async () => {
+		const r = await makeRestaurant('sync-ops-settings');
+		await pool.query(
+			`insert into restaurant_settings (restaurant_id, time_zone) values ($1, 'UTC')`,
+			[r]
+		);
+		const { rows } = await pool.query<{
+			accepts_card: boolean | null;
+			accepts_mobile: boolean | null;
+		}>(`select accepts_card, accepts_mobile from restaurant_settings where restaurant_id = $1`, [
+			r
+		]);
+		expect(rows[0].accepts_card).toBeNull();
+		expect(rows[0].accepts_mobile).toBeNull();
+
+		const on = await pool.query(
+			`update restaurant_settings set accepts_card = true, accepts_mobile = false
+			 where restaurant_id = $1`,
+			[r]
+		);
+		expect(on.rowCount).toBe(1);
+		const off = await pool.query(
+			`update restaurant_settings set accepts_card = null, accepts_mobile = null
+			 where restaurant_id = $1`,
+			[r]
+		);
+		expect(off.rowCount).toBe(1);
+	});
+});
+
+describe('accounting constraints (T-08)', () => {
+	it('accounts_code_format enforces four digits, and the uniqueness is per restaurant', async () => {
+		const r = await makeRestaurant('accounts-format');
+		const short = await expectError(
+			`insert into accounts (restaurant_id, code, name, type)
+			 values ($1, '100', 'Bad', 'asset')`,
+			[r]
+		);
+		expect(short.constraint).toBe('accounts_code_format');
+
+		const long = await expectError(
+			`insert into accounts (restaurant_id, code, name, type)
+			 values ($1, '10000', 'Bad', 'asset')`,
+			[r]
+		);
+		expect(long.constraint).toBe('accounts_code_format');
+
+		const alpha = await expectError(
+			`insert into accounts (restaurant_id, code, name, type)
+			 values ($1, '1A00', 'Bad', 'asset')`,
+			[r]
+		);
+		expect(alpha.constraint).toBe('accounts_code_format');
+
+		await makeAccount(r, '1000', 'Cash on Hand', 'asset');
+		const dup = await expectError(
+			`insert into accounts (restaurant_id, code, name, type)
+			 values ($1, '1000', 'Cash on Hand', 'asset')`,
+			[r]
+		);
+		expect(dup.code).toBe('23505');
+		expect(dup.constraint).toBe('accounts_restaurant_code_unique');
+
+		// Same code in a different restaurant: fine.
+		const rOther = await makeRestaurant('accounts-format-other');
+		const otherId = await makeAccount(rOther, '1000');
+		expect(otherId).toBeTruthy();
+	});
+
+	it('MANDATORY (spec 29 — well-formed lines): one_side and non_negative', async () => {
+		const r = await makeRestaurant('journal-lines');
+		const accountId = await makeAccount(r, '1000');
+
+		await withRollback(async (client) => {
+			const entryId = await makeEntry(client, r);
+			try {
+				await client.query(
+					`insert into journal_entry_lines (restaurant_id, entry_id, account_id, line_no,
+					 debit_minor, credit_minor) values ($1, $2, $3, 1, 5, 5)`,
+					[r, entryId, accountId]
+				);
+				throw new Error('expected 23514');
+			} catch (error) {
+				expect((error as pg.DatabaseError).code).toBe('23514');
+				expect((error as pg.DatabaseError).constraint).toBe('journal_entry_lines_one_side');
+			}
+		});
+
+		await withRollback(async (client) => {
+			const entryId = await makeEntry(client, r);
+			try {
+				await client.query(
+					`insert into journal_entry_lines (restaurant_id, entry_id, account_id, line_no,
+					 debit_minor, credit_minor) values ($1, $2, $3, 1, 0, 0)`,
+					[r, entryId, accountId]
+				);
+				throw new Error('expected 23514');
+			} catch (error) {
+				expect((error as pg.DatabaseError).constraint).toBe('journal_entry_lines_one_side');
+			}
+		});
+
+		await withRollback(async (client) => {
+			const entryId = await makeEntry(client, r);
+			try {
+				await client.query(
+					`insert into journal_entry_lines (restaurant_id, entry_id, account_id, line_no,
+					 debit_minor, credit_minor) values ($1, $2, $3, 1, -1, 0)`,
+					[r, entryId, accountId]
+				);
+				throw new Error('expected 23514');
+			} catch (error) {
+				expect((error as pg.DatabaseError).constraint).toBe('journal_entry_lines_non_negative');
+			}
+		});
+	});
+
+	it('journal_entry_lines FKs and uniqueness: entry_line_no, cross-tenant rejection, accepted pair', async () => {
+		const rA = await makeRestaurant('journal-fks-A');
+		const rB = await makeRestaurant('journal-fks-B');
+		const accountA = await makeAccount(rA, '1000');
+		const accountBcode = await makeAccount(rB, '1000');
+
+		await withRollback(async (client) => {
+			const entryId = await makeEntry(client, rA);
+
+			// Cross-tenant account_id — inside a SAVEPOINT so the transaction can
+			// keep running after the FK violation aborts it.
+			await client.query('savepoint sp_account_fk');
+			try {
+				await client.query(
+					`insert into journal_entry_lines (restaurant_id, entry_id, account_id, line_no,
+					 debit_minor, credit_minor) values ($1, $2, $3, 1, 100, 0)`,
+					[rA, entryId, accountBcode]
+				);
+				throw new Error('expected 23503');
+			} catch (error) {
+				expect((error as pg.DatabaseError).code).toBe('23503');
+				expect((error as pg.DatabaseError).constraint).toBe('journal_entry_lines_account_fk');
+				await client.query('rollback to savepoint sp_account_fk');
+			}
+			await client.query('release savepoint sp_account_fk');
+
+			// duplicate (entry_id, line_no)
+			const { rowCount: firstLine } = await client.query(
+				`insert into journal_entry_lines (restaurant_id, entry_id, account_id, line_no,
+				 debit_minor, credit_minor) values ($1, $2, $3, 1, 1100, 0)`,
+				[rA, entryId, accountA]
+			);
+			expect(firstLine).toBe(1);
+			await client.query('savepoint sp_dup_line_no');
+			try {
+				await client.query(
+					`insert into journal_entry_lines (restaurant_id, entry_id, account_id, line_no,
+					 debit_minor, credit_minor) values ($1, $2, $3, 1, 0, 1100)`,
+					[rA, entryId, accountA]
+				);
+				throw new Error('expected 23505');
+			} catch (error) {
+				expect((error as pg.DatabaseError).code).toBe('23505');
+				expect((error as pg.DatabaseError).constraint).toBe(
+					'journal_entry_lines_entry_line_no_unique'
+				);
+				await client.query('rollback to savepoint sp_dup_line_no');
+			}
+			await client.query('release savepoint sp_dup_line_no');
+
+			// A balanced pair reads back as bigints (through raw pg's text cast).
+			const revenueA = await makeAccount(rA, '4000', 'Sales Revenue', 'revenue');
+			const { rowCount: creditLine } = await client.query(
+				`insert into journal_entry_lines (restaurant_id, entry_id, account_id, line_no,
+				 debit_minor, credit_minor) values ($1, $2, $3, 2, 0, 1100)`,
+				[rA, entryId, revenueA]
+			);
+			expect(creditLine).toBe(1);
+			const { rows: debitRows } = await client.query<{ debit_text: string }>(
+				`select debit_minor::text as debit_text from journal_entry_lines
+				 where entry_id = $1 and line_no = 1`,
+				[entryId]
+			);
+			expect(debitRows[0].debit_text).toBe('1100');
+		});
 	});
 });

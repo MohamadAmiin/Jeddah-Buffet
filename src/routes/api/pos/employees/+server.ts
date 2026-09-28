@@ -3,6 +3,8 @@ import { db } from '$lib/server/db/client';
 import { requireDevice } from '$lib/server/auth/pos-context';
 import { listPosEmployees } from '$lib/server/auth/employee-directory';
 import { getRestaurantWithSettings } from '$lib/server/restaurants';
+import { lastInvoiceSeqForDevice } from '$lib/server/orders/invoice-hint';
+import { openSessionForDevice } from '$lib/server/pos-sessions';
 
 // GET /api/pos/employees — the till's employee-select list, and its settings.
 //
@@ -38,7 +40,33 @@ export const GET: RequestHandler = async (event) => {
 	// 2026-09-15): null travels as null — a number substituted here would silently
 	// answer the setting for every restaurant whose owner never chose one.
 	const restaurant = await getRestaurantWithSettings(db, device.restaurantId);
-	const settings = { posIdleLockSeconds: restaurant?.posIdleLockSeconds ?? null };
+	const settings = {
+		posIdleLockSeconds: restaurant?.posIdleLockSeconds ?? null,
+		timeZone: restaurant?.timeZone ?? null,
+		acceptsCard: restaurant?.acceptsCard ?? null,
+		acceptsMobile: restaurant?.acceptsMobile ?? null
+	};
+
+	// T-28: the till's adoptServerHint (T-23) folds this into
+	// max(local counter, highest queued number, server hint), so it can only
+	// RAISE the counter — the code beside it feeds formatInvoiceNumber to print
+	// POS1-000001.
+	const lastInvoiceSeq = await lastInvoiceSeqForDevice(db, device.restaurantId, device.deviceId);
+
+	// T-28: the device's open session, if any. bigint stringified because a
+	// bigint cannot cross JSON.stringify (invariant 1). businessDate stays a
+	// 'YYYY-MM-DD' string end to end — a JS Date at midnight would shift with
+	// the process time zone.
+	const open = await openSessionForDevice(db, device.restaurantId, device.deviceId);
+	const openSession = open
+		? {
+				id: open.id,
+				openedByUserId: open.openedByUserId,
+				businessDate: open.businessDate,
+				openingCashMinor: String(open.openingCashMinor),
+				openedAt: open.openedAt.toISOString()
+			}
+		: null;
 
 	// no-store: neither the browser's HTTP cache nor any intermediary keeps this
 	// body. The till caches it deliberately in IndexedDB — a different store, with
@@ -47,8 +75,20 @@ export const GET: RequestHandler = async (event) => {
 	// like POS1 repeats in every restaurant). When it changes, the till drops every
 	// bundle cached for the old device, so a tablet moved to another restaurant can
 	// never sign the old restaurant's staff in from their cached PIN hashes.
+	// device.code is the printed prefix (POS1) formatInvoiceNumber needs on the
+	// till. lastInvoiceSeq is the max of invoices AND pos_sync_ops for this device,
+	// unrecorded ops included. openSession lets the till adopt an existing shift
+	// after a reload without a second open. settings carries the four owner-set
+	// values (idle lock, time zone, accepts_card, accepts_mobile) as their true
+	// nulls when no answer has been chosen.
 	return json(
-		{ device: { id: device.deviceId }, employees, settings },
+		{
+			device: { id: device.deviceId, code: device.deviceCode },
+			employees,
+			lastInvoiceSeq,
+			openSession,
+			settings
+		},
 		{ status: 200, headers: { 'cache-control': 'no-store' } }
 	);
 };

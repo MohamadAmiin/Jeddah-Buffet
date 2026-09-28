@@ -5,14 +5,31 @@ import pg from 'pg';
 // with the code under test.
 //
 // Current tables, child-first for readability (the single statement below makes
-// the order irrelevant):
-//   audit_log, sessions, pos_devices, menu_item_modifier_groups, modifiers,
-//   menu_items, modifier_groups, menu_categories, users, role_permissions,
-//   roles, restaurant_settings, restaurants
+// the order irrelevant): journal_entry_lines, journal_entries, accounts,
+// pos_sync_ops, invoices, payments, order_line_modifiers, order_lines, orders,
+// pos_sessions, audit_log, sessions, pos_devices, menu_item_modifier_groups,
+// modifiers, menu_items, modifier_groups, menu_categories, users,
+// role_permissions, roles, restaurant_settings, restaurants.
 // users before roles in the comment order: users.role_id references roles.
+//
+// T-09's append-only triggers on journal_entries, journal_entry_lines, invoices
+// and payments block UPDATE and DELETE but not TRUNCATE (TRUNCATE fires only
+// statement-level triggers), so this single TRUNCATE ... RESTART IDENTITY CASCADE
+// remains the one way to clear them. RESTART IDENTITY also resets the identity
+// sequences of journal_entry_lines and pos_sync_ops.
 export const TABLES = [
 	'audit_log',
 	'sessions',
+	'journal_entry_lines',
+	'journal_entries',
+	'accounts',
+	'pos_sync_ops',
+	'invoices',
+	'payments',
+	'order_line_modifiers',
+	'order_lines',
+	'orders',
+	'pos_sessions',
 	'pos_devices',
 	'menu_item_modifier_groups',
 	'modifiers',

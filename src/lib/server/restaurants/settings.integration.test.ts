@@ -370,6 +370,107 @@ describe('the tax and currency settings (T-36)', () => {
 	});
 });
 
+describe('accepted tenders and the menu-version bump (T-29)', () => {
+	async function menuVersionOf(id: string): Promise<number> {
+		const [row] = await db
+			.select({ menuVersion: restaurantSettings.menuVersion })
+			.from(restaurantSettings)
+			.where(eq(restaurantSettings.restaurantId, id));
+		return row.menuVersion;
+	}
+
+	it('a tax rate change bumps menu_version by exactly 1; re-saving the same rate does not', async () => {
+		const id = await makeRestaurant('Cafe T29a');
+		expect(await menuVersionOf(id)).toBe(1);
+		await db.transaction((tx) => updateSettings(tx, id, { taxRateBp: 825 }, ctx));
+		expect(await menuVersionOf(id)).toBe(2);
+		const again = await db.transaction((tx) => updateSettings(tx, id, { taxRateBp: 825 }, ctx));
+		expect(again).toEqual({ ok: true, changed: false });
+		expect(await menuVersionOf(id)).toBe(2);
+	});
+
+	it('one save changing mode, rate and currency together bumps once', async () => {
+		const id = await makeRestaurant('Cafe T29b');
+		expect(await menuVersionOf(id)).toBe(1);
+		await db.transaction((tx) =>
+			updateSettings(tx, id, { taxMode: 'exclusive', taxRateBp: 825, currencyCode: 'USD' }, ctx)
+		);
+		expect(await menuVersionOf(id)).toBe(2);
+	});
+
+	it('saving only the name, the time zone, the idle lock or a tender does not bump', async () => {
+		const id = await makeRestaurant('Cafe T29c');
+		for (const changes of [
+			{ name: 'Renamed' },
+			{ timeZone: 'Asia/Riyadh' },
+			{ posIdleLockSeconds: 120 },
+			{ acceptsCard: true }
+		] as const) {
+			await db.transaction((tx) => updateSettings(tx, id, changes, ctx));
+			expect(await menuVersionOf(id)).toBe(1);
+		}
+	});
+
+	it('saving acceptsCard true writes the column with one audit row; false is a chosen answer distinct from null', async () => {
+		const id = await makeRestaurant('Cafe T29d');
+		const first = await db.transaction((tx) => updateSettings(tx, id, { acceptsCard: true }, ctx));
+		expect(first).toEqual({
+			ok: true,
+			changed: true,
+			changes: { acceptsCard: { old: null, new: true } }
+		});
+		const [after] = await db
+			.select({
+				acceptsCard: restaurantSettings.acceptsCard,
+				acceptsMobile: restaurantSettings.acceptsMobile
+			})
+			.from(restaurantSettings)
+			.where(eq(restaurantSettings.restaurantId, id));
+		expect(after.acceptsCard).toBe(true);
+		expect(after.acceptsMobile).toBeNull();
+
+		const second = await db.transaction((tx) =>
+			updateSettings(tx, id, { acceptsMobile: false }, ctx)
+		);
+		expect(second).toMatchObject({
+			ok: true,
+			changed: true,
+			changes: { acceptsMobile: { old: null, new: false } }
+		});
+	});
+
+	it('rejects a non-boolean tender and writes nothing', async () => {
+		const id = await makeRestaurant('Cafe T29e');
+		const result = await db.transaction((tx) =>
+			updateSettings(tx, id, { acceptsCard: 'yes' as unknown as boolean }, ctx)
+		);
+		expect(result).toEqual({ ok: false, reason: 'invalid_tender' });
+		const [after] = await db
+			.select({ acceptsCard: restaurantSettings.acceptsCard })
+			.from(restaurantSettings)
+			.where(eq(restaurantSettings.restaurantId, id));
+		expect(after.acceptsCard).toBeNull();
+	});
+
+	it('the tenders are not part of settingsComplete', async () => {
+		const id = await makeRestaurant('Cafe T29f');
+		await db.transaction((tx) =>
+			updateSettings(
+				tx,
+				id,
+				{
+					taxMode: 'exclusive',
+					taxRateBp: 825,
+					currencyCode: 'USD',
+					posIdleLockSeconds: 120
+				},
+				ctx
+			)
+		);
+		expect(await settingsComplete(db, id)).toEqual({ complete: true, missing: [] });
+	});
+});
+
 describe('onRestaurantCreated', () => {
 	it('inserts the settings row with the canonical time zone', async () => {
 		const [row] = await db.insert(restaurants).values({ name: 'Cafe' }).returning();

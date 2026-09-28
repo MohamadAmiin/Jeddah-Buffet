@@ -24,5 +24,15 @@ export const EVENT_TEXT: Record<AuditEventName, string> = {
 	'role.created': 'Role created',
 	'role.updated': 'Role changed',
 	'role.archived': 'Role archived',
-	'menu.price_changed': 'Menu price changed'
+	'menu.price_changed': 'Menu price changed',
+	'pos.session.opened': 'POS session opened',
+	'pos.session.closed': 'POS session closed and drawer counted',
+	'sale.recorded': 'Sale recorded',
+	'sale.flagged': 'Sale recorded with a flag for review',
+	'sale.abandoned': 'Sale abandoned; its invoice number was burned',
+	'sync.op_unrecorded': 'A synced operation could not be recorded and needs review',
+	'sync.op_retried': 'Flagged operation retried',
+	'sync.op_dismissed': 'Flagged operation dismissed',
+	'pos.pin.offline_success': 'Signed in at the POS while offline',
+	'pos.pin.offline_failed': 'Failed POS sign-in attempt while offline'
 };

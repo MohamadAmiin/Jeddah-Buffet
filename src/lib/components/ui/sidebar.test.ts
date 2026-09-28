@@ -45,7 +45,7 @@ describe('the dashboard rail', () => {
 	// Every task that turns a rail row on must decrement this number in the same
 	// commit. T-31 turns `Employees` on (6 → 5) and T-39 turns `Menu` on (5 → 4).
 	it('counts the rows that are not built yet', () => {
-		expect(source.match(/href: null/g)?.length).toBe(4);
+		expect(source.match(/href: null/g)?.length).toBe(3);
 	});
 
 	it('has a live Menu row', () => {
@@ -54,5 +54,9 @@ describe('the dashboard rail', () => {
 
 	it('has a live Employees row', () => {
 		expect(source).toMatch(/label:\s*'Employees',\s*href:\s*'\/employees'/);
+	});
+
+	it('has a live Reports row', () => {
+		expect(source).toMatch(/label:\s*'Reports',\s*href:\s*'\/reports'/);
 	});
 });

@@ -5,6 +5,7 @@
 import 'dotenv/config';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
+import { svelte } from '@sveltejs/vite-plugin-svelte';
 
 // The integration project imports REAL route modules and the real hook, so it
 // needs the two aliases SvelteKit would otherwise provide. Without them a route's
@@ -25,6 +26,7 @@ export default defineConfig({
 	test: {
 		projects: [
 			{
+				plugins: [svelte()],
 				test: {
 					name: 'unit',
 					environment: 'node',

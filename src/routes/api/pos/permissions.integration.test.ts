@@ -9,7 +9,10 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import type { RequestEvent } from '@sveltejs/kit';
 import { eq, sql } from 'drizzle-orm';
 import { testDb, closeTestDb } from '$lib/server/db/test/db';
+import { randomUUID } from 'node:crypto';
 import { seedStaff } from '$lib/server/db/test/seed';
+import { POST as syncPost } from './sync/+server';
+import { onRestaurantCreated } from '$lib/server/restaurants';
 import { restaurants } from '$lib/server/db/schema/restaurants';
 import { users } from '$lib/server/db/schema/users';
 import { posDevices } from '$lib/server/db/schema/pos-devices';
@@ -23,6 +26,9 @@ import { POST as registerPost } from './register/+server';
 import { GET as menuVersionGet } from '../menu/version/+server';
 import { GET as menuGet } from '../menu/+server';
 import { actions as deviceActions } from '../../(dashboard)/device/+page.server';
+import { db as appDb } from '$lib/server/db/client';
+import { orders } from '$lib/server/db/schema/orders';
+import { openSessionAt, saleEnvelope, seedSalesRestaurant } from '$lib/server/db/test/sales';
 
 const db = testDb();
 
@@ -45,6 +51,17 @@ type Seed = {
 /** One restaurant with an owner, a cashier, one ACTIVE device and one REVOKED device. */
 async function seed(): Promise<Seed> {
 	const [restaurant] = await db.insert(restaurants).values({ name: 'Cafe One' }).returning();
+	// The onRestaurantCreated initializers add the settings row (a session
+	// derives its business_date from the time zone), the two default roles
+	// (Cashier / Waiter — seedStaff below finds Cashier instead of creating
+	// one), and the 23 spec-23 accounts T-19's journal writer resolves codes
+	// against.
+	await db.transaction((tx) =>
+		onRestaurantCreated(tx, restaurant.id, {
+			restaurantName: 'Cafe One',
+			timeZone: 'UTC'
+		})
+	);
 	const [owner] = await db
 		.insert(users)
 		.values({
@@ -164,6 +181,20 @@ const DEVICE_GUARDED = [
 		method: 'GET',
 		body: () => undefined,
 		handler: menuGet
+	},
+	{
+		routeId: '/api/pos/sync',
+		method: 'POST',
+		body: (s: Seed) => ({
+			kind: 'session.open',
+			clientOpId: randomUUID(),
+			deviceId: s.activeDeviceId,
+			employeeId: s.cashierId,
+			occurredAt: new Date().toISOString(),
+			seq: 0,
+			payload: { posSessionId: randomUUID(), openingCashMinor: '0' }
+		}),
+		handler: syncPost
 	}
 ] as const;
 
@@ -263,5 +294,63 @@ describe('MANDATORY (spec 29): insufficient role with a valid session', () => {
 		expect(status).toBe(403);
 		const [row] = await db.select().from(posDevices).where(eq(posDevices.id, s.activeDeviceId));
 		expect(row.revokedAt).toBeNull();
+	});
+});
+
+describe('MANDATORY (spec 29): /api/pos/sync checks the EMPLOYEE, and the tender decides the answer', () => {
+	// The sync route is the role-sensitive POS endpoint the block above anticipates.
+	// A card sale has not completed on the till yet, so an employee without
+	// pos.payment is refused outright; a cash sale has already happened, so it is
+	// recorded and flagged for the owner instead (CLAUDE.md decision (f)).
+	it('a card sale by a waiter answers 403 and records nothing; a cash one is recorded_flagged', async () => {
+		const f = await seedSalesRestaurant(appDb);
+		const waiter = await seedStaff(appDb, f.restaurantId, {
+			displayName: 'Robin',
+			roleName: 'Waiter'
+		});
+		const posSessionId = randomUUID();
+		await openSessionAt(appDb, f, {
+			posSessionId,
+			openedAt: new Date(Date.now() - 300_000),
+			openingCashMinor: 0n
+		});
+		const sale = (method: 'cash' | 'card', invoiceSeq: number) =>
+			saleEnvelope(f, {
+				posSessionId,
+				occurredAt: new Date(Date.now() - 60_000),
+				invoiceSeq,
+				method,
+				orderType: 'takeaway',
+				tableLabel: null,
+				employeeId: waiter.id,
+				lines: [
+					{
+						menuItemId: f.items.tea,
+						itemName: 'Tea',
+						quantity: 1,
+						unitPriceMinor: 200n,
+						taxRateBp: f.taxRateBp
+					}
+				]
+			});
+		const post = (body: unknown) =>
+			syncPost(
+				makeEvent('/api/pos/sync', 'POST', body, { [DEVICE_COOKIE]: f.deviceToken })
+			) as Promise<Response>;
+
+		const card = await post(sale('card', 1));
+		expect(card.status).toBe(403);
+		const [{ n: afterCard }] = await db
+			.select({ n: sql<number>`count(*)::int` })
+			.from(orders)
+			.where(eq(orders.restaurantId, f.restaurantId));
+		expect(afterCard).toBe(0);
+
+		const cash = await post(sale('cash', 2));
+		expect(cash.status).toBe(200);
+		expect(await cash.json()).toMatchObject({
+			status: 'recorded_flagged',
+			flag: 'employee_not_permitted'
+		});
 	});
 });

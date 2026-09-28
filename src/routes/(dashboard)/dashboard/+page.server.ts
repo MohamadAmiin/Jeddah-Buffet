@@ -6,6 +6,7 @@ import { recentActivity } from '$lib/server/audit';
 import { employeeSetupStatus } from '$lib/server/auth/employees';
 import { getRegisteredDevice } from '$lib/server/auth/pos-device';
 import { hasMenuItems } from '$lib/server/menu';
+import { countUnresolvedOps } from '$lib/server/reports/flagged';
 
 export const load: ServerLoad = async (event) => {
 	// Its own guard, even though the hook already guards the group and the layout
@@ -47,6 +48,7 @@ export const load: ServerLoad = async (event) => {
 	// would want here (takings, covers, stock) has no data behind it yet, and a
 	// zero would be indistinguishable from a broken query.
 	const activity = await recentActivity(db, restaurantId);
+	const flaggedCount = await countUnresolvedOps(db, restaurantId);
 
 	return {
 		settings,
@@ -56,6 +58,7 @@ export const load: ServerLoad = async (event) => {
 		menuReady,
 		timeZone: restaurant?.timeZone ?? null,
 		openedOn: restaurant?.createdAt ?? null,
-		activity
+		activity,
+		flaggedCount
 	};
 };

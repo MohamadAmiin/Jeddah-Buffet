@@ -29,7 +29,9 @@ const DASHBOARD_ROUTE_IDS = [
 	'/(dashboard)/employees',
 	'/(dashboard)/employees/[id]',
 	'/(dashboard)/employees/roles',
-	'/(dashboard)/menu'
+	'/(dashboard)/menu',
+	'/(dashboard)/reports',
+	'/(dashboard)/reports/flagged'
 ];
 const NON_PUBLIC_ROUTE_IDS = [...DASHBOARD_ROUTE_IDS, '/logout'];
 

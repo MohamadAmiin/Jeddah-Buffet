@@ -1,10 +1,11 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { Executor } from '../auth/session';
 import type { DbTx } from '../db/client';
 import { restaurants } from '../db/schema/restaurants';
 import { restaurantSettings } from '../db/schema/restaurant-settings';
 import { roles, rolePermissions } from '../db/schema/roles';
 import { writeAudit } from '../audit';
+import { ensureChart } from '../accounting/chart';
 import { TAX_MODES, type TaxMode } from '../../money/tax';
 import { SUPPORTED_CURRENCIES } from '../../money/format';
 import { DEFAULT_ROLES } from '../permissions/keys';
@@ -13,10 +14,11 @@ import { isValidTimeZone, canonicalTimeZone } from './time-zone';
 export { isValidTimeZone, canonicalTimeZone, timeZoneSuggestions } from './time-zone';
 
 // This module holds restaurant identity and settings and the onRestaurantCreated
-// initializer list. It calls audit/ and NOTHING else — the two lists it reads from
-// the isomorphic src/lib/money (TAX_MODES, SUPPORTED_CURRENCIES) call nothing —
-// and is called by routes and by auth/register.ts. CLAUDE.md's "Where code lives"
-// does not list it; T-26 adds it.
+// initializer list. It calls audit/ and, for the chart seed only, accounting/chart
+// (amendment recorded by T-02 on 2026-09-28) — and reads constants from
+// permissions/keys.ts. The two lists it reads from the isomorphic src/lib/money
+// (TAX_MODES, SUPPORTED_CURRENCIES) call nothing. It is called by routes and by
+// auth/register.ts. CLAUDE.md's "Where code lives" does not list it; T-26 adds it.
 //
 // CONVENTION, applied throughout src/lib/server: functions that WRITE take DbTx,
 // so a plain `db` handle cannot be passed where a transaction is required;
@@ -38,6 +40,10 @@ export type RestaurantWithSettings = {
 	taxRateBp: number | null;
 	/** An ISO 4217 code the money formatter supports, or null. */
 	currencyCode: string | null;
+	/** null until the owner chooses on /settings; no default anywhere. */
+	acceptsCard: boolean | null;
+	/** null until the owner chooses on /settings; no default anywhere. */
+	acceptsMobile: boolean | null;
 	createdAt: Date;
 };
 
@@ -61,6 +67,8 @@ export async function getRestaurantWithSettings(
 			taxMode: restaurantSettings.taxMode,
 			taxRateBp: restaurantSettings.taxRateBp,
 			currencyCode: restaurantSettings.currencyCode,
+			acceptsCard: restaurantSettings.acceptsCard,
+			acceptsMobile: restaurantSettings.acceptsMobile,
 			createdAt: restaurants.createdAt
 		})
 		.from(restaurants)
@@ -84,6 +92,8 @@ export type SettingsChanges = {
 	taxMode?: string;
 	taxRateBp?: number;
 	currencyCode?: string;
+	acceptsCard?: boolean;
+	acceptsMobile?: boolean;
 };
 
 export type UpdateSettingsContext = {
@@ -103,7 +113,8 @@ export type UpdateSettingsResult =
 				| 'invalid_idle_lock'
 				| 'invalid_tax_mode'
 				| 'invalid_tax_rate'
-				| 'invalid_currency';
+				| 'invalid_currency'
+				| 'invalid_tender';
 	  };
 
 // The POS idle lock's SANITY BOUND — not a default (CLAUDE.md, "Decisions already
@@ -204,6 +215,17 @@ export async function updateSettings(
 		}
 	}
 
+	// T-29: accepted tenders. `false` is a chosen answer ("not accepted") and
+	// diffs against null ("not chosen"); undefined means "not submitted, leave
+	// it alone", like every other optional field here. NO default anywhere:
+	// nothing in this module, the schema or the page turns null into false.
+	for (const key of ['acceptsCard', 'acceptsMobile'] as const) {
+		const value = changes[key];
+		if (value === undefined) continue;
+		if (typeof value !== 'boolean') return { ok: false, reason: 'invalid_tender' };
+		if (value !== current[key]) diff[key] = { old: current[key], new: value };
+	}
+
 	// A no-op submission must not produce a meaningless audit row.
 	if (Object.keys(diff).length === 0) return { ok: true, changed: false };
 
@@ -221,12 +243,15 @@ export async function updateSettings(
 	// 11). Adding the column to the payload without widening the condition would
 	// write the audit row and nothing else — and the owner could then never satisfy
 	// settingsComplete().
+	const bumpMenuVersion = Boolean(diff.taxMode || diff.taxRateBp || diff.currencyCode);
 	if (
 		diff.timeZone ||
 		diff.posIdleLockSeconds ||
 		diff.taxMode ||
 		diff.taxRateBp ||
-		diff.currencyCode
+		diff.currencyCode ||
+		diff.acceptsCard ||
+		diff.acceptsMobile
 	) {
 		await tx
 			.update(restaurantSettings)
@@ -236,6 +261,14 @@ export async function updateSettings(
 				...(diff.taxMode ? { taxMode: changes.taxMode! } : {}),
 				...(diff.taxRateBp ? { taxRateBp: changes.taxRateBp! } : {}),
 				...(diff.currencyCode ? { currencyCode: changes.currencyCode! } : {}),
+				...(diff.acceptsCard ? { acceptsCard: changes.acceptsCard! } : {}),
+				...(diff.acceptsMobile ? { acceptsMobile: changes.acceptsMobile! } : {}),
+				// T-29: the ONE menu-version bump on the server side. Inline SQL so
+				// two concurrent saves cannot both read 7 and both write 8. The
+				// convention amendment (CLAUDE.md, 2026-09-28, T-02): restaurants/
+				// may bump menu_version by an inline SQL increment rather than
+				// calling menu/, which it may not import.
+				...(bumpMenuVersion ? { menuVersion: sql`${restaurantSettings.menuVersion} + 1` } : {}),
 				updatedAt: now
 			})
 			.where(eq(restaurantSettings.restaurantId, restaurantId));
@@ -335,10 +368,10 @@ async function insertDefaultRoles(tx: DbTx, restaurantId: string): Promise<void>
 /**
  * Ordered initializers run INSIDE the registration transaction.
  *
- * Ships with the settings row and default role rows. The list exists so later
- * plans can add idempotent per-restaurant initialization here, rather than
- * writing a migration that cross-joins every existing restaurant and then
- * silently does nothing for the next one created.
+ * Ships with the settings row, the default role rows and the chart of
+ * accounts. The list exists so later plans can add idempotent per-restaurant
+ * initialization here, rather than writing a migration that cross-joins every
+ * existing restaurant and then silently does nothing for the next one created.
  */
 export const restaurantInitializers: Array<
 	(tx: DbTx, restaurantId: string, input: RestaurantInitializerInput) => Promise<void>
@@ -351,6 +384,14 @@ export const restaurantInitializers: Array<
 	},
 	async function initializeDefaultRoles(tx, restaurantId) {
 		await insertDefaultRoles(tx, restaurantId);
+	},
+	// The chart of accounts, spec 23 verbatim, seeded for EVERY new restaurant.
+	// CLAUDE.md's house convention says restaurants/ calls only audit/; T-02 of
+	// tasks/pos-sales recorded the amendment (CLAUDE.md, "Decisions already made",
+	// 2026-09-28) that it may import CHART and ensureChart from accounting/chart.ts
+	// for exactly this entry — it still calls no other module.
+	async function seedChartOfAccounts(tx, restaurantId) {
+		await ensureChart(tx, restaurantId);
 	}
 ];
 
@@ -370,3 +411,6 @@ export async function onRestaurantCreated(
 // nullable, no column default, and no fallback number anywhere in code.
 // Roles ARE here: insertDefaultRoles runs as part of the registration initializer
 // transaction above.
+// The chart of accounts HAS landed here (T-12 of tasks/pos-sales, by decision of
+// 2026-09-28): seeded through the initializer list for new restaurants and
+// backfilled by migration 0012 for existing ones.

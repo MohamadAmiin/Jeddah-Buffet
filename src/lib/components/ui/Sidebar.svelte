@@ -29,7 +29,7 @@
 
 	type NavItem = {
 		label: string;
-		href: '/dashboard' | '/settings' | '/device' | '/employees' | '/menu' | null;
+		href: '/dashboard' | '/settings' | '/device' | '/employees' | '/menu' | '/reports' | null;
 		icon: IconName;
 	};
 	type NavGroup = { id: string; label: string | null; items: NavItem[] };
@@ -101,7 +101,7 @@
 			items: [
 				{ label: 'Purchases', href: null, icon: 'purchases' },
 				{ label: 'Expenses', href: null, icon: 'expenses' },
-				{ label: 'Reports', href: null, icon: 'reports' }
+				{ label: 'Reports', href: '/reports', icon: 'reports' }
 			]
 		},
 		{
