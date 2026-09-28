@@ -102,8 +102,8 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	// 7. Open with a 500.00 float; the chip shows the SERVER's business date.
 	await openSession(tillPage, 50000n);
 	await expect(status).toContainText('0 unsynced');
-	await expect(status).toContainText(/Session · business date \d{4}-\d{2}-\d{2}/);
-	const businessDate = /business date (\d{4}-\d{2}-\d{2})/.exec(await status.innerText())![1];
+	await expect(status).toContainText(/Business date \d{4}-\d{2}-\d{2}/);
+	const businessDate = /Business date (\d{4}-\d{2}-\d{2})/.exec(await status.innerText())![1];
 	const sessions = await dbRows<{
 		status: string;
 		opening_cash_minor: string;
@@ -249,7 +249,7 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	await expect(status).toContainText('Offline');
 	await expect(status).toContainText('1 unsynced');
 	await expect(status).toContainText('The Cashier · Cashier');
-	await expect(status).toContainText(`Session · business date ${businessDate}`);
+	await expect(status).toContainText(`Business date ${businessDate}`);
 	await expect(tillPage).toHaveURL(/\/pos\/order$/);
 
 	// 12. Reconnect: the online event flushes the queue.
