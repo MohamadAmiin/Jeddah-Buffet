@@ -57,14 +57,18 @@ export default ts.config(
 		}
 	},
 
-	// src/lib/money is ISOMORPHIC: the server, lib/pos and the (pos) routes all
-	// import it, so it must import nothing from lib/server. The pattern list is
-	// copied verbatim from the (pos) block above rather than invented anew. None
-	// of those patterns matches $lib/money, which is why lib/pos and the (pos)
-	// routes may import it with no allowance — do not add one, and do not add
-	// $lib/money to the (pos) restriction: that import is the whole point.
+	// src/lib/money and src/lib/sync-ops are ISOMORPHIC: the server, lib/pos and
+	// the (pos) routes all import them, so they must import nothing from
+	// lib/server. The pattern list is copied verbatim from the (pos) block above
+	// rather than invented anew. None of those patterns matches $lib/money or
+	// $lib/sync-ops, which is why lib/pos and the (pos) routes may import both
+	// with no allowance — do not add one, and do not add either module to the
+	// (pos) restriction: those imports are the whole point. The finer rule —
+	// $lib/sync-ops imports NOTHING at all, no sibling and no $lib/* — is
+	// enforced by the source-text test in src/lib/sync-ops/index.test.ts, the
+	// same division of labour src/lib/money uses.
 	{
-		files: ['src/lib/money/**/*.ts'],
+		files: ['src/lib/money/**/*.ts', 'src/lib/sync-ops/**/*.ts'],
 		rules: {
 			'no-restricted-imports': [
 				'error',
@@ -73,9 +77,9 @@ export default ts.config(
 						{
 							group: ['$lib/server/*', '$lib/server/**', '../server/*', '**/lib/server/**'],
 							message:
-								'src/lib/money is isomorphic — the POS totals a bill in the browser, so an import ' +
-								'of $lib/server/** from here cannot work offline; DB-touching helpers belong in ' +
-								'src/lib/server/money/.'
+								'this module is isomorphic — the POS imports it in the browser, so an import of ' +
+								'$lib/server/** from here cannot work offline; DB-touching helpers belong in ' +
+								'src/lib/server/money/ (money) or src/lib/server/orders/ (sync-op consumers).'
 						}
 					]
 				}
