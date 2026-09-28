@@ -337,18 +337,10 @@
 
 <main class="mx-auto flex max-w-md flex-col items-center gap-4 px-4 py-8">
 	{#if signedIn}
-		<!-- The order screen arrives with the sales plan. This plan's till can be
-		     registered and signed into; it cannot sell, and no /pos/order route exists. -->
+		<!-- Shown only for the instant between signIn and the hand-off landing. -->
 		<h1 class="text-title text-ink">
 			Signed in as {signedIn.displayName} ({signedIn.roleName})
 		</h1>
-		<button
-			type="button"
-			onclick={() => goto(resolve('/pos'))}
-			class="min-h-touch-lg bg-raise border-control-line rounded-control text-pos text-ink w-full border"
-		>
-			Back to employee select
-		</button>
 	{:else if employeeId}
 		<h1 class="text-title text-ink">Enter your PIN</h1>
 
