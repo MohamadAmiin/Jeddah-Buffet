@@ -218,7 +218,6 @@ Files this plan opens and EDITs (they exist on main, or will after pos-sales mer
 - `src/lib/components/ui/Sidebar.svelte`
 - `src/lib/components/ui/sidebar.test.ts`
 - `src/lib/server/accounting/README.md`
-- `src/lib/server/accounting/index.ts`
 - `src/lib/server/accounting/journal-guards.integration.test.ts`
 - `src/lib/server/accounting/journal.integration.test.ts`
 - `src/lib/server/accounting/journal.ts`
