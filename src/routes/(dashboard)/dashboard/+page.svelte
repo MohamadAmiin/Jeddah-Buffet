@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { Card, PageHeader, StatusMark } from '$lib/components/ui';
+	import { Alert, Card, PageHeader, StatusMark } from '$lib/components/ui';
 	import { EVENT_TEXT } from './event-text';
 
 	let { data } = $props();
@@ -117,6 +117,15 @@
 />
 
 <div class="flex max-w-6xl flex-col gap-10 px-4 pt-8 pb-16 lg:px-7">
+	{#if data.flaggedCount > 0}
+		<Alert tone="info">
+			<span aria-hidden="true" class="text-st-offline font-mono">◆</span>
+			{data.flaggedCount} sales await your review —
+			<a href={resolve('/reports/flagged')} class="text-accent underline underline-offset-2"
+				>Review them</a
+			>
+		</Alert>
+	{/if}
 	<!-- WHAT IS TRUE RIGHT NOW. Every figure below is read from the database or
 	     computed from the restaurant's own time zone on this render — none of it is
 	     a placeholder, and none of it is money. Takings, covers and stock are the
