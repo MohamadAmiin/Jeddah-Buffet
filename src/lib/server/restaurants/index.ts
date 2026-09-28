@@ -40,6 +40,10 @@ export type RestaurantWithSettings = {
 	taxRateBp: number | null;
 	/** An ISO 4217 code the money formatter supports, or null. */
 	currencyCode: string | null;
+	/** null until the owner chooses on /settings; no default anywhere. */
+	acceptsCard: boolean | null;
+	/** null until the owner chooses on /settings; no default anywhere. */
+	acceptsMobile: boolean | null;
 	createdAt: Date;
 };
 
@@ -63,6 +67,8 @@ export async function getRestaurantWithSettings(
 			taxMode: restaurantSettings.taxMode,
 			taxRateBp: restaurantSettings.taxRateBp,
 			currencyCode: restaurantSettings.currencyCode,
+			acceptsCard: restaurantSettings.acceptsCard,
+			acceptsMobile: restaurantSettings.acceptsMobile,
 			createdAt: restaurants.createdAt
 		})
 		.from(restaurants)

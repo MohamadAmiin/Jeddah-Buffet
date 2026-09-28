@@ -304,3 +304,36 @@ export async function closeSession(
 void orders;
 void payments;
 void asc;
+
+/** The device's currently OPEN session, or null. T-05's partial unique index
+ * pos_sessions_one_open_per_device makes .limit(1) exact. */
+export async function openSessionForDevice(
+	database: Executor,
+	restaurantId: string,
+	deviceId: string
+): Promise<{
+	id: string;
+	openedByUserId: string;
+	businessDate: string;
+	openingCashMinor: bigint;
+	openedAt: Date;
+} | null> {
+	const rows = await database
+		.select({
+			id: posSessions.id,
+			openedByUserId: posSessions.openedByUserId,
+			businessDate: posSessions.businessDate,
+			openingCashMinor: posSessions.openingCashMinor,
+			openedAt: posSessions.openedAt
+		})
+		.from(posSessions)
+		.where(
+			and(
+				eq(posSessions.restaurantId, restaurantId),
+				eq(posSessions.deviceId, deviceId),
+				eq(posSessions.status, 'open')
+			)
+		)
+		.limit(1);
+	return rows[0] ?? null;
+}
