@@ -26,11 +26,31 @@
 	// cannot carry a control's boundary, and WCAG 1.4.11 asks 3:1 of one.
 	// --c-control-line resolves to --c-ink-3, 4.73:1 on that ground. `border-line`
 	// is decorative only and never a control edge.
-	import { onMount } from 'svelte';
+	import { onMount, setContext } from 'svelte';
 	import { dev } from '$app/environment';
-	import { countUnsynced, onUnsyncedChange } from '$lib/pos/store';
+	import { countUnsynced, onUnsyncedChange, readCachedIdleSeconds } from '$lib/pos/store';
+	import { RESTORED_CONTEXT, restoreFromMirror, signedIn } from '$lib/pos/employee.svelte';
+	import { flush, onFlushResult, parkedCount } from '$lib/pos/queue';
 
 	let { children } = $props();
+
+	// T-30: RESTORE GATE. Published synchronously so child pages can await it
+	// before their sign-in guard runs. `restoreFromMirror` runs from an onMount
+	// below; when it settles, the promise resolves and the page guards fire.
+	let markRestored: (() => void) | null = null;
+	const restored = new Promise<void>((done) => {
+		markRestored = done;
+	});
+	setContext(RESTORED_CONTEXT, restored);
+
+	let parked = $state(0);
+	async function refreshParked() {
+		try {
+			parked = await parkedCount();
+		} catch {
+			parked = 0;
+		}
+	}
 
 	// THE CONNECTION INDICATOR — permanent chrome on every POS screen, which is why
 	// it lives in this layout and not in a page, and never a toast (spec 6). Both
@@ -108,6 +128,36 @@
 	// `type: 'module'` in dev, where the worker is served unbundled; the production
 	// build is classic. onMount often runs after `load` has already fired, when a
 	// bare load listener would never run — hence the readyState check.
+	// T-30: RESTORE + FLUSH TRIGGERS. Restore the signed-in mirror using the
+	// cached idle lock (null -> no restore, ever); mark the gate resolved so
+	// child pages can guard. Trigger the flush once at mount and on every
+	// `online` event; T-25's single-flight makes this coalesce.
+	onMount(() => {
+		let idleSeconds: number | null = null;
+		void (async () => {
+			try {
+				idleSeconds = await readCachedIdleSeconds();
+			} catch {
+				idleSeconds = null;
+			}
+			restoreFromMirror(idleSeconds);
+			markRestored?.();
+		})();
+		void flush().catch(() => {});
+		const onOnline = () => {
+			void flush().catch(() => {});
+		};
+		addEventListener('online', onOnline);
+		const stopFlush = onFlushResult(() => {
+			void refreshParked();
+		});
+		void refreshParked();
+		return () => {
+			removeEventListener('online', onOnline);
+			stopFlush();
+		};
+	});
+
 	onMount(() => {
 		if (!('serviceWorker' in navigator)) return;
 		const register = () => {
@@ -145,6 +195,23 @@
 		{:else if unsyncedUnreadable}
 			<span aria-hidden="true">·</span>
 			<span>unsynced count unavailable</span>
+		{/if}
+		{#if signedIn.current !== null}
+			<span aria-hidden="true">·</span>
+			<span
+				>{signedIn.current.displayName} · {signedIn.current.isOwner
+					? 'Owner'
+					: signedIn.current.roleName}</span
+			>
+		{:else}
+			<span aria-hidden="true">·</span>
+			<span>Nobody signed in</span>
+		{/if}
+		{#if parked > 0}
+			<span aria-hidden="true">·</span>
+			<span class="bg-st-offline-bg text-st-offline rounded px-2 py-0.5"
+				>◆ {parked} operations from a previous registration</span
+			>
 		{/if}
 	</div>
 	{@render children()}

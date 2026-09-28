@@ -20,6 +20,9 @@
 		readCachedEmployees,
 		syncMenu
 	} from '$lib/pos/store';
+	import { adoptServerHint } from '$lib/pos/invoice-sequence';
+	import { adoptServerSession } from '$lib/pos/session';
+	import { signOut } from '$lib/pos/employee.svelte';
 
 	type DirectoryEntry = {
 		id: string;
@@ -103,9 +106,22 @@
 		}
 
 		const body = (await response.json()) as {
-			device: { id: string };
+			device: { id: string; code: string };
 			employees: DirectoryEntry[];
-			settings: { posIdleLockSeconds: number | null };
+			lastInvoiceSeq: number;
+			openSession: {
+				id: string;
+				openedByUserId: string;
+				businessDate: string;
+				openingCashMinor: string;
+				openedAt: string;
+			} | null;
+			settings: {
+				posIdleLockSeconds: number | null;
+				timeZone: string | null;
+				acceptsCard: boolean | null;
+				acceptsMobile: boolean | null;
+			};
 		};
 
 		employees = toChoices(body.employees);
@@ -122,7 +138,28 @@
 			// before anything new is written.
 			await bindDevice(body.device.id);
 			await cacheEmployees(body.employees);
-			await cacheSettings([{ key: 'posIdleLockSeconds', value: body.settings.posIdleLockSeconds }]);
+			await cacheSettings([
+				{ key: 'posIdleLockSeconds', value: body.settings.posIdleLockSeconds },
+				{ key: 'acceptsCard', value: body.settings.acceptsCard },
+				{ key: 'acceptsMobile', value: body.settings.acceptsMobile },
+				{ key: 'timeZone', value: body.settings.timeZone },
+				{ key: 'deviceCode', value: body.device.code }
+			]);
+			// T-30: fold the server's invoice hint into the till's counter and
+			// adopt any server-open session so the till doesn't re-open it.
+			await adoptServerHint(body.device.id, body.lastInvoiceSeq);
+			await adoptServerSession(
+				body.device.id,
+				body.openSession === null
+					? null
+					: {
+							posSessionId: body.openSession.id,
+							employeeId: body.openSession.openedByUserId,
+							openingCashMinor: body.openSession.openingCashMinor,
+							openedAt: body.openSession.openedAt,
+							businessDate: body.openSession.businessDate
+						}
+			);
 		} catch {
 			// The live list still works; what fails is starting offline later, and
 			// a till that silently forgets is worse than one that says so.
@@ -136,6 +173,10 @@
 		// a fresh menu is never cleared behind it. It runs again on reconnect. A failed
 		// refresh is swallowed on purpose: an offline till keeps the menu it has, and
 		// the Offline bar is the permanent chrome that says so — never a toast.
+		// T-30: landing on the employee-select screen IS signing out — whichever
+		// way the cashier arrived (idle return, Done after close, browser back).
+		signOut();
+
 		void loadDirectory()
 			.then(() => syncMenu())
 			.catch(() => {});

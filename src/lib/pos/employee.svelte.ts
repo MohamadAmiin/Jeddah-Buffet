@@ -22,6 +22,11 @@ export type SignedInEmployee = {
  * cannot be exported from a module; screens read `signedIn.current`. */
 export const signedIn = $state<{ current: SignedInEmployee | null }>({ current: null });
 
+/** T-30: the context key screens await before running their sign-in guard.
+ * The layout resolves the promise after restoreFromMirror has run so a child
+ * page's onMount doesn't see signedIn.current as null mid-shift on reload. */
+export const RESTORED_CONTEXT = 'pos.employee.restored';
+
 const MIRROR_KEY = 'matcami_pos_employee';
 const TOUCH_THROTTLE_MS = 5_000;
 let lastActiveAt = 0;
