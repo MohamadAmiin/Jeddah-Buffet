@@ -162,7 +162,12 @@ export async function closeDbRows(): Promise<void> {
 /** Tax, currency and the idle lock: /settings, then /device, each by its rail link. */
 export async function completeSettings(
 	page: Page,
-	s: { taxMode: 'exclusive' | 'inclusive'; taxRateBp: number; currency: string; idleSeconds: number }
+	s: {
+		taxMode: 'exclusive' | 'inclusive';
+		taxRateBp: number;
+		currency: string;
+		idleSeconds: number;
+	}
 ): Promise<void> {
 	await page.getByRole('link', { name: 'Settings', exact: true }).click();
 	await expect(page).toHaveURL(/\/settings$/);

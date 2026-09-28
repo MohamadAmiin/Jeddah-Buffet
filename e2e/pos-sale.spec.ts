@@ -104,7 +104,11 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	await expect(status).toContainText('0 unsynced');
 	await expect(status).toContainText(/Session · business date \d{4}-\d{2}-\d{2}/);
 	const businessDate = /business date (\d{4}-\d{2}-\d{2})/.exec(await status.innerText())![1];
-	const sessions = await dbRows<{ status: string; opening_cash_minor: string; business_date: string }>(
+	const sessions = await dbRows<{
+		status: string;
+		opening_cash_minor: string;
+		business_date: string;
+	}>(
 		'select status, opening_cash_minor::text, business_date::text as business_date from pos_sessions'
 	);
 	expect(sessions).toEqual([
@@ -159,13 +163,15 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 		await dbRows(
 			'select method, amount_minor::text, tendered_minor::text, change_minor::text from payments'
 		)
-	).toEqual([{ method: 'cash', amount_minor: '1100', tendered_minor: '2000', change_minor: '900' }]);
+	).toEqual([
+		{ method: 'cash', amount_minor: '1100', tendered_minor: '2000', change_minor: '900' }
+	]);
 	const [device] = await dbRows<{ id: string }>(
 		"select id from pos_devices where device_code = 'POS1'"
 	);
-	expect(
-		await dbRows('select invoice_number, device_id from invoices')
-	).toEqual([{ invoice_number: 'POS1-000001', device_id: device.id }]);
+	expect(await dbRows('select invoice_number, device_id from invoices')).toEqual([
+		{ invoice_number: 'POS1-000001', device_id: device.id }
+	]);
 	const [entry1] = await dbRows<{ id: string; event: string; business_date: string }>(
 		'select id, event, business_date::text as business_date from journal_entries'
 	);
@@ -183,21 +189,31 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 		{ code: '2100', debit: '0', credit: '100' }
 	]);
 	expect(
-		await count("select count(*)::text as n from journal_entries where event = 'cost_of_goods_sold'")
+		await count(
+			"select count(*)::text as n from journal_entries where event = 'cost_of_goods_sold'"
+		)
 	).toBe('0');
-	const saleOps = await dbRows<{ client_op_id: string; status: string; invoice_seq: number; order_id: string }>(
+	const saleOps = await dbRows<{
+		client_op_id: string;
+		status: string;
+		invoice_seq: number;
+		order_id: string;
+	}>(
 		"select client_op_id, status, invoice_seq, order_id from pos_sync_ops where kind = 'sale.complete'"
 	);
 	expect(saleOps).toEqual([
-		{ client_op_id: saleOps[0].client_op_id, status: 'accepted', invoice_seq: 1, order_id: order1.id }
+		{
+			client_op_id: saleOps[0].client_op_id,
+			status: 'accepted',
+			invoice_seq: 1,
+			order_id: order1.id
+		}
 	]);
-	expect(await count("select count(*)::text as n from pos_sync_ops where status <> 'accepted'")).toBe(
-		'0'
-	);
 	expect(
-		await dbRows(
-			"select device_id, client_op_id from audit_log where event = 'sale.recorded'"
-		)
+		await count("select count(*)::text as n from pos_sync_ops where status <> 'accepted'")
+	).toBe('0');
+	expect(
+		await dbRows("select device_id, client_op_id from audit_log where event = 'sale.recorded'")
 	).toEqual([{ device_id: device.id, client_op_id: saleOps[0].client_op_id }]);
 
 	// 10. Offline: the second sale is a recorded fact with the device's own number.
@@ -221,7 +237,8 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	expect(op).toBeDefined();
 	const syncBodies: string[] = [];
 	tillPage.on('request', (r) => {
-		if (r.method() === 'POST' && r.url().endsWith('/api/pos/sync')) syncBodies.push(r.postData() ?? '');
+		if (r.method() === 'POST' && r.url().endsWith('/api/pos/sync'))
+			syncBodies.push(r.postData() ?? '');
 	});
 	await tillPage.getByRole('link', { name: 'New sale' }).click();
 	await expect(tillPage).toHaveURL(/\/pos\/order$/);
@@ -239,7 +256,7 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	await till.setOffline(false);
 	await expect(status).toContainText('0 unsynced');
 	expect(
-		await dbRows("select status, order_type, table_label from orders order by paid_at")
+		await dbRows('select status, order_type, table_label from orders order by paid_at')
 	).toEqual([
 		{ status: 'paid', order_type: 'takeaway', table_label: null },
 		{ status: 'paid', order_type: 'dine_in', table_label: '4' }
@@ -276,9 +293,12 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	});
 
 	// 13. MANDATORY (spec 29): three retries change nothing.
-	const body = syncBodies.find((b) => b.includes('"POS1-000002"')) ?? JSON.stringify(
-		(queued.find((q) => q.clientOpId === op!.clientOpId) as unknown as { envelope: unknown }).envelope
-	);
+	const body =
+		syncBodies.find((b) => b.includes('"POS1-000002"')) ??
+		JSON.stringify(
+			(queued.find((q) => q.clientOpId === op!.clientOpId) as unknown as { envelope: unknown })
+				.envelope
+		);
 	const replay = await tillPage.evaluate(
 		(b) =>
 			fetch('/api/pos/sync', {
@@ -352,7 +372,9 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 		counted_cash_minor: '52100',
 		difference_minor: '-100'
 	});
-	expect(await count('select count(distinct business_date)::text as n from pos_sessions')).toBe('1');
+	expect(await count('select count(distinct business_date)::text as n from pos_sessions')).toBe(
+		'1'
+	);
 	const [shortage] = await dbRows<{ id: string }>(
 		"select id from journal_entries where event = 'cash_shortage_at_close'"
 	);
@@ -378,7 +400,9 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	await expect(page.getByRole('heading', { name: `Sales · ${businessDate}` })).toBeVisible();
 	await page.goto('/reports?date=' + businessDate);
 	const tile = (label: string) =>
-		page.locator('dt', { hasText: new RegExp(`^${label}$`) }).locator('xpath=following-sibling::dd[1]');
+		page
+			.locator('dt', { hasText: new RegExp(`^${label}$`) })
+			.locator('xpath=following-sibling::dd[1]');
 	await expect(tile('Gross sales')).toContainText('20.00');
 	await expect(tile('Discounts')).toContainText('0.00');
 	await expect(tile('Net sales')).toContainText('20.00');
