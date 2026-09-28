@@ -8,6 +8,7 @@ import {
 	date,
 	timestamp,
 	index,
+	uniqueIndex,
 	unique,
 	check,
 	foreignKey,
@@ -40,9 +41,12 @@ import { restaurants } from './restaurants';
 // JavaScript bigint. Money in any other type is forbidden by the schema guard
 // in schema.test.ts, which keys on the _minor suffix.
 //
-// reverses_entry_id is a SEAM: nothing in this plan writes it. The refund /
-// void plan will point a reversing entry at the entry it cancels; ON DELETE
-// RESTRICT so the target cannot vanish.
+// reverses_entry_id points a reversing entry at the entry it cancels. It is
+// written ONLY by postReversal (src/lib/server/accounting/journal.ts,
+// tasks/inventory-cogs T-14), and the partial unique index
+// journal_entries_reverses_entry_unique allows exactly one reversal per entry,
+// so a double-submitted reversal fails with 23505. ON DELETE RESTRICT so the
+// target cannot vanish.
 //
 // Every value set is text + a named CHECK, never a Postgres enum: adding a
 // value later is one reversible constraint swap (DROP / ADD CONSTRAINT), and
@@ -97,7 +101,7 @@ export const journalEntries = pgTable(
 		// different aggregate and an entry must outlive any later change to it.
 		sourceId: uuid('source_id').notNull(),
 		memo: text('memo').notNull(),
-		// SEAM — nothing in this plan writes it.
+		// Written only by postReversal (T-14); one reversal per entry.
 		reversesEntryId: uuid('reverses_entry_id').references((): AnyPgColumn => journalEntries.id, {
 			onDelete: 'restrict'
 		}),
@@ -111,9 +115,16 @@ export const journalEntries = pgTable(
 		index('journal_entries_source_idx').on(t.sourceType, t.sourceId),
 		check(
 			'journal_entries_event_valid',
-			sql`${t.event} in ('cash_sale', 'card_sale', 'mobile_sale', 'cost_of_goods_sold', 'cash_shortage_at_close', 'cash_overage_at_close')`
+			sql`${t.event} in ('cash_sale', 'card_sale', 'mobile_sale', 'cost_of_goods_sold', 'cash_shortage_at_close', 'cash_overage_at_close', 'purchase_paid', 'purchase_on_credit', 'supplier_paid', 'waste', 'stock_count_shortfall', 'stock_count_surplus', 'inventory_revaluation', 'opening_stock')`
 		),
-		check('journal_entries_source_type_valid', sql`${t.sourceType} in ('order', 'pos_session')`)
+		check(
+			'journal_entries_source_type_valid',
+			sql`${t.sourceType} in ('order', 'pos_session', 'purchase', 'supplier_payment', 'waste_entry', 'stock_count', 'opening_stock')`
+		),
+		// One reversal per entry: a double-submitted reversal fails with 23505.
+		uniqueIndex('journal_entries_reverses_entry_unique')
+			.on(t.reversesEntryId)
+			.where(sql`${t.reversesEntryId} is not null`)
 	]
 );
 
