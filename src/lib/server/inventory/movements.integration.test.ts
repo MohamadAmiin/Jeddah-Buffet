@@ -292,6 +292,57 @@ describe('applyMovements', () => {
 		}
 	});
 
+	it('LOCK ORDER: the writer locks every row in id order, in one statement, before it waits', async () => {
+		// The race above proves no lost update, but not the ORDER of the locks: its
+		// sale holds both rows before the delivery arrives. This probe does. C holds
+		// the HIGHER id; the writer is handed [higher, lower] (request order is the
+		// reverse of id order). Taken in one id-ordered statement, the writer locks
+		// the LOWER row first and then blocks on the higher one — so D's NOWAIT on
+		// the lower row must fail with 55P03. A writer that locked one row at a
+		// time in request order would be blocked on `higher` holding nothing, and
+		// D's NOWAIT would succeed.
+		const a = await makeIngredient(restaurantId, 'First');
+		const b = await makeIngredient(restaurantId, 'Second');
+		const [lower, higher] = [a, b].sort();
+		await db.transaction((tx) =>
+			applyMovements(tx, ctx(restaurantId), [
+				inbound(lower, 1000n, 10n),
+				inbound(higher, 1000n, 10n)
+			])
+		);
+
+		const holder = await pool.connect();
+		const prober = await pool.connect();
+		try {
+			await holder.query('begin');
+			await holder.query('select 1 from ingredients where id = $1 for update', [higher]);
+
+			const writer = db.transaction((tx) =>
+				applyMovements(tx, ctx(restaurantId, 'order'), [out(higher, 100n), out(lower, 100n)])
+			);
+			await new Promise((resolve) => setTimeout(resolve, 150));
+
+			let probeCode: string | undefined;
+			try {
+				await prober.query('select 1 from ingredients where id = $1 for update nowait', [lower]);
+			} catch (error) {
+				probeCode = (error as { code?: string }).code;
+			}
+			expect(probeCode).toBe('55P03');
+
+			await holder.query('commit');
+			await writer;
+		} finally {
+			// Never leave the holder's transaction open on a failed assertion — the
+			// writer would wait on it forever. A rollback after the commit is a no-op.
+			await holder.query('rollback').catch(() => undefined);
+			holder.release();
+			prober.release();
+		}
+		expect((await cache(lower)).qty).toBe('0.900');
+		expect((await cache(higher)).qty).toBe('0.900');
+	});
+
 	it("another restaurant's ingredient throws and writes nothing", async () => {
 		const other = await makeRestaurant('Other Cafe');
 		const foreign = await makeIngredient(other, 'Salt');
