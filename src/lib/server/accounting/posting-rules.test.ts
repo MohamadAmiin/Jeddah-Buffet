@@ -11,8 +11,17 @@ import {
 	overShortLines,
 	overShortEvent,
 	eventForMethod,
-	linesBalance
+	linesBalance,
+	purchaseEvent,
+	purchaseLines,
+	supplierPaymentLines,
+	wasteLines,
+	countShortfallLines,
+	countSurplusLines,
+	revaluationLines,
+	openingStockLines
 } from './posting-rules';
+import { JOURNAL_SOURCE_TYPES } from './journal';
 
 function generator(seed: bigint) {
 	let state = seed;
@@ -203,10 +212,37 @@ describe('code coverage and refusals', () => {
 		for (const line of cogsLines(minor(1n))) codes.add(line.code);
 		for (const line of overShortLines(minor(-1n))) codes.add(line.code);
 		for (const line of overShortLines(minor(1n))) codes.add(line.code);
+		// tasks/inventory-cogs T-13's eight rules.
+		for (const paidBy of ['cash', 'bank', 'credit'] as const) {
+			for (const line of purchaseLines(paidBy, minor(1n))) codes.add(line.code);
+		}
+		for (const paidFrom of ['cash', 'bank'] as const) {
+			for (const line of supplierPaymentLines(paidFrom, minor(1n))) codes.add(line.code);
+		}
+		for (const line of wasteLines(minor(1n))) codes.add(line.code);
+		for (const line of countShortfallLines(minor(1n))) codes.add(line.code);
+		for (const line of countSurplusLines(minor(1n))) codes.add(line.code);
+		for (const line of revaluationLines(minor(-1n))) codes.add(line.code);
+		for (const line of revaluationLines(minor(1n))) codes.add(line.code);
+		for (const line of openingStockLines(minor(1n))) codes.add(line.code);
 		const chartCodes = new Set(CHART.map((r) => r.code));
 		for (const code of codes) expect(chartCodes.has(code)).toBe(true);
 		expect(codes).toEqual(
-			new Set(['1000', '1020', '1030', '4100', '4000', '2100', '5000', '1200', '6800'])
+			new Set([
+				'1000',
+				'1010',
+				'1020',
+				'1030',
+				'1200',
+				'2000',
+				'2100',
+				'3000',
+				'4000',
+				'4100',
+				'5000',
+				'5100',
+				'6800'
+			])
 		);
 	});
 
@@ -229,7 +265,133 @@ describe('code coverage and refusals', () => {
 			'mobile_sale',
 			'cost_of_goods_sold',
 			'cash_shortage_at_close',
-			'cash_overage_at_close'
+			'cash_overage_at_close',
+			'purchase_paid',
+			'purchase_on_credit',
+			'supplier_paid',
+			'waste',
+			'stock_count_shortfall',
+			'stock_count_surplus',
+			'inventory_revaluation',
+			'opening_stock'
 		]);
+	});
+
+	it('JOURNAL_SOURCE_TYPES spellings match the schema CHECK the constraints test pins', () => {
+		expect([...JOURNAL_SOURCE_TYPES]).toEqual([
+			'order',
+			'pos_session',
+			'purchase',
+			'supplier_payment',
+			'waste_entry',
+			'stock_count',
+			'opening_stock'
+		]);
+	});
+});
+
+describe('MANDATORY (spec 29) — one posting-rule test per inventory business event (tasks/inventory-cogs T-13)', () => {
+	it('purchase paid by cash: Dr 1200 / Cr 1000, event purchase_paid', () => {
+		expect(purchaseLines('cash', minor(11000n))).toEqual([
+			{ code: '1200', debit: 11000n },
+			{ code: '1000', credit: 11000n }
+		]);
+		expect(purchaseEvent('cash')).toBe('purchase_paid');
+	});
+
+	it('purchase paid by bank: Dr 1200 / Cr 1010, event purchase_paid', () => {
+		expect(purchaseLines('bank', minor(11000n))).toEqual([
+			{ code: '1200', debit: 11000n },
+			{ code: '1010', credit: 11000n }
+		]);
+		expect(purchaseEvent('bank')).toBe('purchase_paid');
+	});
+
+	it('purchase on credit: Dr 1200 / Cr 2000, event purchase_on_credit', () => {
+		expect(purchaseLines('credit', minor(11000n))).toEqual([
+			{ code: '1200', debit: 11000n },
+			{ code: '2000', credit: 11000n }
+		]);
+		expect(purchaseEvent('credit')).toBe('purchase_on_credit');
+	});
+
+	it('supplier paid: Dr 2000 / Cr 1000 (cash) or 1010 (bank)', () => {
+		expect(supplierPaymentLines('cash', minor(5000n))).toEqual([
+			{ code: '2000', debit: 5000n },
+			{ code: '1000', credit: 5000n }
+		]);
+		expect(supplierPaymentLines('bank', minor(5000n))).toEqual([
+			{ code: '2000', debit: 5000n },
+			{ code: '1010', credit: 5000n }
+		]);
+	});
+
+	it('waste: Dr 5100 / Cr 1200', () => {
+		expect(wasteLines(minor(82n))).toEqual([
+			{ code: '5100', debit: 82n },
+			{ code: '1200', credit: 82n }
+		]);
+	});
+
+	it('stock count shortfall Dr 5100 / Cr 1200; surplus Dr 1200 / Cr 5100', () => {
+		expect(countShortfallLines(minor(300n))).toEqual([
+			{ code: '5100', debit: 300n },
+			{ code: '1200', credit: 300n }
+		]);
+		expect(countSurplusLines(minor(300n))).toEqual([
+			{ code: '1200', debit: 300n },
+			{ code: '5100', credit: 300n }
+		]);
+	});
+
+	it('inventory revaluation (signed, against 5000)', () => {
+		expect(revaluationLines(minor(-15000n))).toEqual([
+			{ code: '5000', debit: 15000n },
+			{ code: '1200', credit: 15000n }
+		]);
+		expect(revaluationLines(minor(3600n))).toEqual([
+			{ code: '1200', debit: 3600n },
+			{ code: '5000', credit: 3600n }
+		]);
+		expect(revaluationLines(minor(0n))).toEqual([]);
+	});
+
+	it("opening stock: Dr 1200 / Cr 3000 Owner's Capital", () => {
+		expect(openingStockLines(minor(25000n))).toEqual([
+			{ code: '1200', debit: 25000n },
+			{ code: '3000', credit: 25000n }
+		]);
+	});
+
+	it('every non-signed rule refuses a negative amount with TypeError', () => {
+		const neg = minor(-1n);
+		expect(() => purchaseLines('cash', neg)).toThrow(TypeError);
+		expect(() => supplierPaymentLines('bank', neg)).toThrow(TypeError);
+		expect(() => wasteLines(neg)).toThrow(TypeError);
+		expect(() => countShortfallLines(neg)).toThrow(TypeError);
+		expect(() => countSurplusLines(neg)).toThrow(TypeError);
+		expect(() => openingStockLines(neg)).toThrow(TypeError);
+	});
+
+	it('every rule balances over 1,000 seeded amounts', () => {
+		const next = generator(20260930n);
+		for (let i = 0; i < 1000; i++) {
+			const a = minor(between(next, 0n, 10_000_000n));
+			const signed = minor(between(next, -10_000_000n, 10_000_000n));
+			for (const lines of [
+				purchaseLines('cash', a),
+				purchaseLines('bank', a),
+				purchaseLines('credit', a),
+				supplierPaymentLines('cash', a),
+				supplierPaymentLines('bank', a),
+				wasteLines(a),
+				countShortfallLines(a),
+				countSurplusLines(a),
+				revaluationLines(signed),
+				openingStockLines(a)
+			]) {
+				expect(linesBalance(lines)).toBe(true);
+			}
+		}
 	});
 });

@@ -9,8 +9,19 @@ import {
 	cogsLines,
 	overShortLines,
 	overShortEvent,
-	SALE_EVENTS
+	SALE_EVENTS,
+	purchaseEvent,
+	purchaseLines,
+	supplierPaymentLines,
+	wasteLines,
+	countShortfallLines,
+	countSurplusLines,
+	revaluationLines,
+	openingStockLines,
+	type PostingEvent,
+	type RuleLine
 } from './posting-rules';
+import type { JournalSourceType } from './journal';
 import { postEntry, entryLines } from './journal';
 import { db } from '../db/client';
 import { onRestaurantCreated } from '../restaurants';
@@ -66,67 +77,116 @@ function underlyingMessage(err: unknown): string {
 	return messages.join(' | ');
 }
 
+// One rule builder per POSTING_EVENTS member: pos-sales' six unchanged, plus
+// tasks/inventory-cogs' eight (T-13). Record<PostingEvent, ...> makes a missing
+// event a type error, so the property test always covers every event.
+type Built = { lines: RuleLine[]; sourceType: JournalSourceType };
+function saleBuilder(kind: (typeof SALE_EVENTS)[number]) {
+	return (next: () => bigint, i: number): Built => {
+		const nLines = Number(between(next, 1n, 6n));
+		const cartLines = [];
+		for (let j = 0; j < nLines; j++) {
+			const unitPriceMinor = minor(between(next, 0n, 100_000n));
+			const quantity = between(next, 1n, 9n);
+			const nDeltas = Number(between(next, 0n, 3n));
+			const deltas = [];
+			let deltaSum = 0n;
+			for (let k = 0; k < nDeltas; k++) {
+				const d = between(next, 0n, 2000n);
+				deltas.push(minor(d));
+				deltaSum += d;
+			}
+			const taxRateBp = Number(between(next, 0n, 10_000n));
+			const base = (unitPriceMinor + deltaSum) * quantity;
+			const discountMinor = minor(base > 0n ? between(next, 0n, base) : 0n);
+			cartLines.push({
+				unitPriceMinor,
+				quantity,
+				modifierDeltasMinor: deltas,
+				taxRateBp,
+				discountMinor
+			});
+		}
+		const totals = computeOrderTotals(
+			{ taxMode: i % 2 === 0 ? 'exclusive' : 'inclusive', lines: cartLines },
+			ROUNDING_RULE
+		);
+		return { lines: saleLines(kind, totals), sourceType: 'order' };
+	};
+}
+const amount = (next: () => bigint) => minor(between(next, 0n, 100_000n));
+const BUILDERS: Record<PostingEvent, (next: () => bigint, i: number) => Built> = {
+	cash_sale: saleBuilder('cash_sale'),
+	card_sale: saleBuilder('card_sale'),
+	mobile_sale: saleBuilder('mobile_sale'),
+	cost_of_goods_sold: (next) => ({ lines: cogsLines(amount(next)), sourceType: 'pos_session' }),
+	cash_shortage_at_close: (next) => {
+		const d = minor(between(next, -100_000n, -1n));
+		expect(overShortEvent(d)).toBe('cash_shortage_at_close');
+		return { lines: overShortLines(d), sourceType: 'pos_session' };
+	},
+	cash_overage_at_close: (next) => {
+		const d = minor(between(next, 1n, 100_000n));
+		expect(overShortEvent(d)).toBe('cash_overage_at_close');
+		return { lines: overShortLines(d), sourceType: 'pos_session' };
+	},
+	purchase_paid: (next, i) => {
+		const paidBy = i % 2 === 0 ? 'cash' : 'bank';
+		expect(purchaseEvent(paidBy)).toBe('purchase_paid');
+		return { lines: purchaseLines(paidBy, amount(next)), sourceType: 'purchase' };
+	},
+	purchase_on_credit: (next) => {
+		expect(purchaseEvent('credit')).toBe('purchase_on_credit');
+		return { lines: purchaseLines('credit', amount(next)), sourceType: 'purchase' };
+	},
+	supplier_paid: (next, i) => ({
+		lines: supplierPaymentLines(i % 2 === 0 ? 'cash' : 'bank', amount(next)),
+		sourceType: 'supplier_payment'
+	}),
+	waste: (next) => ({ lines: wasteLines(amount(next)), sourceType: 'waste_entry' }),
+	stock_count_shortfall: (next) => ({
+		lines: countShortfallLines(amount(next)),
+		sourceType: 'stock_count'
+	}),
+	stock_count_surplus: (next) => ({
+		lines: countSurplusLines(amount(next)),
+		sourceType: 'stock_count'
+	}),
+	inventory_revaluation: (next) => ({
+		lines: revaluationLines(minor(between(next, -100_000n, 100_000n))),
+		sourceType: 'purchase'
+	}),
+	opening_stock: (next) => ({
+		lines: openingStockLines(amount(next)),
+		sourceType: 'opening_stock'
+	})
+};
+
 describe('MANDATORY (spec 29) — 300 generated events all balance at COMMIT', () => {
-	it('every one of the six POSTING_EVENTS commits and Sigma-debit = Sigma-credit per entry', async () => {
+	it('every one of the POSTING_EVENTS commits and Sigma-debit = Sigma-credit per entry', async () => {
 		const next = generator(20260929n);
 		const kept: string[] = [];
+		const posted = new Set<PostingEvent>();
 		await db.transaction(async (tx) => {
 			for (let i = 0; i < 300; i++) {
-				const kind = POSTING_EVENTS[i % 6];
-				let lines;
-				if ((SALE_EVENTS as readonly string[]).includes(kind)) {
-					const nLines = Number(between(next, 1n, 6n));
-					const cartLines = [];
-					for (let j = 0; j < nLines; j++) {
-						const unitPriceMinor = minor(between(next, 0n, 100_000n));
-						const quantity = between(next, 1n, 9n);
-						const nDeltas = Number(between(next, 0n, 3n));
-						const deltas = [];
-						let deltaSum = 0n;
-						for (let k = 0; k < nDeltas; k++) {
-							const d = between(next, 0n, 2000n);
-							deltas.push(minor(d));
-							deltaSum += d;
-						}
-						const taxRateBp = Number(between(next, 0n, 10_000n));
-						const base = (unitPriceMinor + deltaSum) * quantity;
-						const discountMinor = minor(base > 0n ? between(next, 0n, base) : 0n);
-						cartLines.push({
-							unitPriceMinor,
-							quantity,
-							modifierDeltasMinor: deltas,
-							taxRateBp,
-							discountMinor
-						});
-					}
-					const totals = computeOrderTotals(
-						{ taxMode: i % 2 === 0 ? 'exclusive' : 'inclusive', lines: cartLines },
-						ROUNDING_RULE
-					);
-					lines = saleLines(kind as (typeof SALE_EVENTS)[number], totals);
-				} else if (kind === 'cost_of_goods_sold') {
-					lines = cogsLines(minor(between(next, 0n, 100_000n)));
-				} else if (kind === 'cash_shortage_at_close') {
-					const d = between(next, -100_000n, -1n);
-					lines = overShortLines(minor(d));
-					expect(overShortEvent(minor(d))).toBe('cash_shortage_at_close');
-				} else {
-					const d = between(next, 1n, 100_000n);
-					lines = overShortLines(minor(d));
-					expect(overShortEvent(minor(d))).toBe('cash_overage_at_close');
-				}
+				const kind = POSTING_EVENTS[i % POSTING_EVENTS.length];
+				const { lines, sourceType } = BUILDERS[kind](next, i);
 				const result = await postEntry(tx, {
 					restaurantId,
 					businessDate: '2026-09-27',
 					event: kind,
-					sourceType: (SALE_EVENTS as readonly string[]).includes(kind) ? 'order' : 'pos_session',
+					sourceType,
 					sourceId: randomUUID(),
 					memo: `case ${i}`,
 					lines
 				});
-				if (result) kept.push(result.entryId);
+				if (result) {
+					kept.push(result.entryId);
+					posted.add(kind);
+				}
 			}
 		});
+		expect(posted.size).toBe(POSTING_EVENTS.length);
 
 		const summary = await testDb().execute(sql`
 			select entry_id::text as entry_id,

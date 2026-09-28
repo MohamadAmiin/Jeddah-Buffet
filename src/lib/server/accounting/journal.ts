@@ -14,13 +14,26 @@ import { accountIdByCode } from './chart';
 import type { PostingEvent, RuleLine } from './posting-rules';
 import { minor, type Minor } from '../../money';
 
+/** Every source an entry may name; spelled exactly as
+ * journal_entries_source_type_valid (tasks/inventory-cogs T-06, T-13). */
+export const JOURNAL_SOURCE_TYPES = [
+	'order',
+	'pos_session',
+	'purchase',
+	'supplier_payment',
+	'waste_entry',
+	'stock_count',
+	'opening_stock'
+] as const;
+export type JournalSourceType = (typeof JOURNAL_SOURCE_TYPES)[number];
+
 export type JournalEntryInput = {
 	restaurantId: string;
 	/** The POS session's business date as 'YYYY-MM-DD' — never derived from a
 	 * timestamp here (invariant 11). */
 	businessDate: string;
 	event: PostingEvent;
-	sourceType: 'order' | 'pos_session';
+	sourceType: JournalSourceType;
 	sourceId: string;
 	memo: string;
 	lines: RuleLine[];
