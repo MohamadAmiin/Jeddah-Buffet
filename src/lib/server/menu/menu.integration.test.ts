@@ -5,7 +5,7 @@ import { testDb, closeTestDb } from '../db/test/db';
 import { restaurants } from '../db/schema/restaurants';
 import { users } from '../db/schema/users';
 import { auditLog } from '../db/schema/audit';
-import { menuItems } from '../db/schema/menu';
+import { menuCategories, menuItems } from '../db/schema/menu';
 import { onRestaurantCreated } from '../restaurants';
 import {
 	archiveCategory,
@@ -238,11 +238,113 @@ describe('archive, never delete (invariant 2)', () => {
 		expect(source).not.toContain('.delete(modifierGroups)');
 	});
 
-	it('refuses to archive a category that still holds a live item', async () => {
+	it('archiving a category moves its live items to no category, in one bump', async () => {
 		const r = await withItem();
-		expect(await db.transaction((tx) => archiveCategory(tx, r.restaurantId, r.categoryId))).toEqual(
-			{ ok: false, reason: 'not_empty' }
+		const second = await db.transaction((tx) =>
+			createItem(tx, r.restaurantId, { categoryId: r.categoryId, name: 'Coffee', priceMinor: 900n })
 		);
+		const archived = await db.transaction((tx) =>
+			createItem(tx, r.restaurantId, { categoryId: r.categoryId, name: 'Old', priceMinor: 100n })
+		);
+		if (!second.ok || !archived.ok) throw new Error('fixture items were not created');
+		await db.transaction((tx) => archiveItem(tx, r.restaurantId, archived.id));
+		const before = await version(r.restaurantId);
+
+		const result = await db.transaction((tx) => archiveCategory(tx, r.restaurantId, r.categoryId));
+
+		expect(result).toEqual({ ok: true, changed: true, movedItems: 2 });
+		const rows = await db
+			.select()
+			.from(menuItems)
+			.where(eq(menuItems.restaurantId, r.restaurantId));
+		const byId = new Map(rows.map((row) => [row.id, row]));
+		expect(byId.get(r.itemId)?.categoryId).toBeNull();
+		expect(byId.get(second.id)?.categoryId).toBeNull();
+		// The archived item is history: its category_id is untouched.
+		expect(byId.get(archived.id)?.categoryId).toBe(r.categoryId);
+		const [category] = await db
+			.select()
+			.from(menuCategories)
+			.where(eq(menuCategories.id, r.categoryId));
+		expect(category.archivedAt).toBeInstanceOf(Date);
+		expect(await version(r.restaurantId)).toBe(before + 1);
+	});
+});
+
+describe('optional categories (menu-and-printing T-06)', () => {
+	it('creates an item with no category', async () => {
+		const r = await makeRestaurant();
+		const before = await version(r.restaurantId);
+
+		const created = await db.transaction((tx) =>
+			createItem(tx, r.restaurantId, { name: 'Water', priceMinor: 150n })
+		);
+
+		expect(created.ok).toBe(true);
+		if (!created.ok) return;
+		const menu = await listMenu(db, r.restaurantId);
+		const item = menu.items.find((i) => i.id === created.id);
+		expect(item?.categoryId).toBeNull();
+		expect(await version(r.restaurantId)).toBe(before + 1);
+	});
+
+	it('moves an item between categories and to no category, bumping once per real change', async () => {
+		const r = await withItem();
+		const other = await db.transaction((tx) =>
+			createCategory(tx, r.restaurantId, { name: 'Food' })
+		);
+		const start = await version(r.restaurantId);
+
+		expect(
+			await db.transaction((tx) =>
+				updateItem(tx, r.restaurantId, r.itemId, { categoryId: other.id }, r.ctx)
+			)
+		).toEqual({ ok: true, changed: true });
+		expect(await version(r.restaurantId)).toBe(start + 1);
+
+		expect(
+			await db.transaction((tx) =>
+				updateItem(tx, r.restaurantId, r.itemId, { categoryId: null }, r.ctx)
+			)
+		).toEqual({ ok: true, changed: true });
+		expect(await version(r.restaurantId)).toBe(start + 2);
+		const [row] = await db.select().from(menuItems).where(eq(menuItems.id, r.itemId));
+		expect(row.categoryId).toBeNull();
+
+		// Already no category: a no-op, no bump.
+		expect(
+			await db.transaction((tx) =>
+				updateItem(tx, r.restaurantId, r.itemId, { categoryId: null }, r.ctx)
+			)
+		).toEqual({ ok: true, changed: false });
+		expect(await version(r.restaurantId)).toBe(start + 2);
+	});
+
+	it("refuses another restaurant's category, inserting nothing and bumping nothing", async () => {
+		const a = await withItem();
+		const b = await makeRestaurant('Cafe Two');
+		const before = await version(a.restaurantId);
+
+		expect(
+			await db.transaction((tx) =>
+				createItem(tx, a.restaurantId, { categoryId: b.restaurantId, name: 'X', priceMinor: 1n })
+			)
+		).toEqual({ ok: false, reason: 'not_found' });
+		const other = await db.transaction((tx) =>
+			createCategory(tx, b.restaurantId, { name: 'Theirs' })
+		);
+		expect(
+			await db.transaction((tx) =>
+				createItem(tx, a.restaurantId, { categoryId: other.id, name: 'X', priceMinor: 1n })
+			)
+		).toEqual({ ok: false, reason: 'not_found' });
+
+		const rows = await db
+			.select()
+			.from(menuItems)
+			.where(eq(menuItems.restaurantId, a.restaurantId));
+		expect(rows).toHaveLength(1);
+		expect(await version(a.restaurantId)).toBe(before);
 	});
 });
 

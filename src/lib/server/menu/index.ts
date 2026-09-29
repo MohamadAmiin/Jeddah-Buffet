@@ -36,6 +36,12 @@ import { writeAudit } from '../audit';
 // ARCHIVE, NEVER DELETE (invariant 2). The one DELETE in this file removes an item
 // ↔ group LINK — a configuration row, not a posted record; an order line will
 // snapshot the modifiers a guest actually chose.
+//
+// A CATEGORY IS OPTIONAL. menu_items.category_id NULL means "No category" (the
+// till's "Other" tab). Archiving one MOVES its live items to no category in the
+// same transaction and version bump (decided 2026-09-29, tasks/menu-and-printing
+// assumption 4); createItem and updateItem lock the target category FOR UPDATE
+// so an item cannot land in a category that is being archived.
 
 export type MenuWriteContext = {
 	actorUserId: string | null;
@@ -180,44 +186,47 @@ export async function updateCategory(
 }
 
 /**
- * Archive a category. Refused while it still holds a LIVE item: an item in an
- * archived category would vanish from the page and the till while still being
- * sellable data. Archive or move the items first.
+ * Archive a category. Its LIVE items MOVE to no category (category_id NULL) in
+ * the same transaction and the same version bump, so nothing sellable vanishes
+ * from the till; archived items keep their old category_id — they are history.
+ * `movedItems` is how many live items moved.
  */
 export async function archiveCategory(
 	tx: DbTx,
 	restaurantId: string,
 	categoryId: string
-): Promise<Changed | NotFound | NotEmpty> {
+): Promise<{ ok: true; changed: true; movedItems: number } | NotFound> {
 	const current = await liveCategory(tx, restaurantId, categoryId, true);
 	if (!current) return NOT_FOUND;
-	const [liveChild] = await tx
-		.select({ id: menuItems.id })
-		.from(menuItems)
-		.where(
-			and(
-				eq(menuItems.restaurantId, restaurantId),
-				eq(menuItems.categoryId, categoryId),
-				isNull(menuItems.archivedAt)
-			)
-		)
-		.limit(1);
-	if (liveChild) return { ok: false, reason: 'not_empty' };
 
-	await withMenuVersionBump(tx, restaurantId, async (write) => {
+	return withMenuVersionBump(tx, restaurantId, async (write) => {
 		const now = new Date();
+		// eq() never matches a NULL category_id — exactly right: only this category's
+		// live items move.
+		const moved = await write
+			.update(menuItems)
+			.set({ categoryId: null, updatedAt: now })
+			.where(
+				and(
+					eq(menuItems.restaurantId, restaurantId),
+					eq(menuItems.categoryId, categoryId),
+					isNull(menuItems.archivedAt)
+				)
+			)
+			.returning({ id: menuItems.id });
 		await write
 			.update(menuCategories)
 			.set({ archivedAt: now, updatedAt: now })
 			.where(and(eq(menuCategories.restaurantId, restaurantId), eq(menuCategories.id, categoryId)));
+		return { ok: true as const, changed: true as const, movedItems: moved.length };
 	});
-	return CHANGED;
 }
 
 // ── Items ─────────────────────────────────────────────────────────────────────
 
 export type ItemInput = {
-	categoryId: string;
+	/** Absent or null = no category. */
+	categoryId?: string | null;
 	name: string;
 	priceMinor: bigint;
 	/** Integer basis points (825 = 8.25%), or null — "inherit the restaurant rate". */
@@ -232,14 +241,21 @@ export async function createItem(
 	input: ItemInput
 ): Promise<Created | NotFound> {
 	assertMinor(input.priceMinor, 'priceMinor');
-	if (!(await liveCategory(tx, restaurantId, input.categoryId))) return NOT_FOUND;
+	// FOR UPDATE: serialises this create against a concurrent archiveCategory of
+	// the same category, so the item cannot land in a category that is going away.
+	if (
+		typeof input.categoryId === 'string' &&
+		!(await liveCategory(tx, restaurantId, input.categoryId, true))
+	) {
+		return NOT_FOUND;
+	}
 
 	return withMenuVersionBump(tx, restaurantId, async (write) => {
 		const [row] = await write
 			.insert(menuItems)
 			.values({
 				restaurantId,
-				categoryId: input.categoryId,
+				categoryId: input.categoryId ?? null,
 				name: input.name,
 				priceMinor: input.priceMinor,
 				// Not given = inherit the restaurant's rate, which is what null means.
@@ -257,7 +273,8 @@ export type ItemChanges = {
 	priceMinor?: bigint;
 	/** null sets the item back to inheriting the restaurant's rate. */
 	taxRateBp?: number | null;
-	categoryId?: string;
+	/** null moves the item to no category. */
+	categoryId?: string | null;
 	sortOrder?: number;
 };
 
@@ -288,7 +305,14 @@ export async function updateItem(
 		set.sortOrder = changes.sortOrder;
 	}
 	if (changes.categoryId !== undefined && changes.categoryId !== current.categoryId) {
-		if (!(await liveCategory(tx, restaurantId, changes.categoryId))) return NOT_FOUND;
+		// null (no category) is always allowed; a string must be a live category of
+		// this restaurant, locked FOR UPDATE against a concurrent archive.
+		if (
+			changes.categoryId !== null &&
+			!(await liveCategory(tx, restaurantId, changes.categoryId, true))
+		) {
+			return NOT_FOUND;
+		}
 		set.categoryId = changes.categoryId;
 	}
 	if (Object.keys(set).length === 0) return UNCHANGED;
