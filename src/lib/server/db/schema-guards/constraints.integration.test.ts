@@ -308,6 +308,74 @@ describe('restaurant_settings constraints', () => {
 	});
 });
 
+describe('receipt header and kitchen note (menu-and-printing T-20)', () => {
+	async function makeSettings(): Promise<string> {
+		const restaurantId = await makeRestaurant();
+		await pool.query(
+			`insert into restaurant_settings (restaurant_id, time_zone) values ($1, 'Africa/Mogadishu')`,
+			[restaurantId]
+		);
+		return restaurantId;
+	}
+
+	const RECEIPT_COLUMNS = [
+		['receipt_address', 120, 'restaurant_settings_receipt_address_length'],
+		['receipt_phone', 40, 'restaurant_settings_receipt_phone_length'],
+		['tax_registration_number', 40, 'restaurant_settings_tax_registration_number_length'],
+		['receipt_footer', 120, 'restaurant_settings_receipt_footer_length']
+	] as const;
+
+	it.each(RECEIPT_COLUMNS)(
+		'%s: one over its limit and an empty string are refused; the limit and NULL pass',
+		async (column, limit, constraint) => {
+			const id = await makeSettings();
+			const over = await expectError(
+				`update restaurant_settings set ${column} = $2 where restaurant_id = $1`,
+				[id, 'x'.repeat(limit + 1)]
+			);
+			expect(over.code).toBe('23514');
+			expect(over.constraint).toBe(constraint);
+			const empty = await expectError(
+				`update restaurant_settings set ${column} = '' where restaurant_id = $1`,
+				[id]
+			);
+			expect(empty.constraint).toBe(constraint);
+			await pool.query(`update restaurant_settings set ${column} = $2 where restaurant_id = $1`, [
+				id,
+				'x'.repeat(limit)
+			]);
+			await pool.query(`update restaurant_settings set ${column} = null where restaurant_id = $1`, [
+				id
+			]);
+		}
+	);
+
+	it('orders.note: 141 characters and an empty string are refused; 140 and NULL pass', async () => {
+		const r = await makeRestaurant('note-cafe');
+		const o = await makeOwner(r, 'note@example.com');
+		const d = await makeDevice(r, o);
+		const s = await makeSession(r, d, o);
+		const orderId = await makeOrder(r, s, d, o);
+
+		const long = await expectError('update orders set note = $2 where id = $1', [
+			orderId,
+			'x'.repeat(141)
+		]);
+		expect(long.code).toBe('23514');
+		expect(long.constraint).toBe('orders_note_length');
+		const empty = await expectError("update orders set note = '' where id = $1", [orderId]);
+		expect(empty.constraint).toBe('orders_note_length');
+
+		await pool.query('update orders set note = $2 where id = $1', [orderId, 'x'.repeat(140)]);
+		await pool.query('update orders set note = null where id = $1', [orderId]);
+		const { rows } = await pool.query<{ note: string | null }>(
+			'select note from orders where id = $1',
+			[orderId]
+		);
+		expect(rows[0].note).toBeNull();
+	});
+});
+
 describe('menu constraints (T-37)', () => {
 	async function makeCategory(restaurantId: string, name = 'Drinks'): Promise<string> {
 		const { rows } = await pool.query<{ id: string }>(

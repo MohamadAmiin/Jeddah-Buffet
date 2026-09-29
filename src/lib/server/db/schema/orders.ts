@@ -82,6 +82,10 @@ export const orders = pgTable(
 			.references(() => users.id, { onDelete: 'restrict' }),
 		orderType: text('order_type').notNull(),
 		tableLabel: text('table_label'),
+		// An optional kitchen note (spec 11: kitchen tickets carry notes), at most
+		// 140 characters. NULL when the till sent none — and every till queued
+		// before menu-and-printing T-20 sends none (tasks/menu-and-printing T-20).
+		note: text('note'),
 		status: text('status').notNull(),
 		taxMode: text('tax_mode').notNull(),
 		currencyCode: text('currency_code').notNull(),
@@ -116,6 +120,7 @@ export const orders = pgTable(
 			'orders_table_label_length',
 			sql`${t.tableLabel} is null or char_length(${t.tableLabel}) between 1 and 32`
 		),
+		check('orders_note_length', sql`${t.note} is null or char_length(${t.note}) between 1 and 140`),
 		check(
 			'orders_status_valid',
 			sql`${t.status} in ('open', 'billed', 'paid', 'voided', 'refunded')`

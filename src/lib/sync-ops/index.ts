@@ -143,6 +143,9 @@ export type SaleCompletePayload = {
 	posSessionId: string;
 	orderType: OrderType;
 	tableLabel: string | null;
+	/** OPTIONAL: a kitchen note, at most 140 characters. Tills queued before
+	 * menu-and-printing omit the key; the server reads a missing key as null. */
+	note?: string | null;
 	taxMode: TaxMode;
 	currencyCode: string;
 	menuVersion: number;

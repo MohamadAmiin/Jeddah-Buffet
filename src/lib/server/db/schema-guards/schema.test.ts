@@ -109,7 +109,13 @@ const TENANT_COLUMN_EXEMPT: Record<string, string> = {
 // ADDING TO THIS LIST IS A PLAN'S DECISION, NEVER A CONVENIENCE. Keyed
 // `table.column`; each entry carries the reason that column may have a money-like
 // name without the `_minor` or `_bp` suffix.
-const MONEY_NAME_EXEMPT: Record<string, string> = {};
+const MONEY_NAME_EXEMPT: Record<string, string> = {
+	// A registration identifier printed on receipts, not money — the word "tax"
+	// trips MONEY_NAME (tasks/menu-and-printing T-20). It is text, so the numeric
+	// guard would not fire anyway; the entry records the decision.
+	'restaurant_settings.tax_registration_number':
+		"a registration identifier, not money — the word 'tax' trips MONEY_NAME"
+};
 
 const MONEY_NAME =
 	/(^|_)(price|amount|total|subtotal|cost|fee|tax|discount|charge|tip|balance|cash)(_|$)/;
