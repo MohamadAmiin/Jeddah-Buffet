@@ -12,6 +12,10 @@ import {
 	SESSION_STATUSES
 } from '$lib/sync-ops';
 import { testDb, closeTestDb } from '../test/db';
+// The ledger writer's own lists (tasks/inventory-cogs T-16), imported rather
+// than restated so a new movement type is spelled in one place; the test below
+// pins them to the stock_movements CHECK literals.
+import { MOVEMENT_TYPES, MOVEMENT_SOURCES } from '../../inventory/movements';
 import { menuItems } from '../schema/menu';
 import { orders, payments } from '../schema/orders';
 import { posSessions } from '../schema/pos-sessions';
@@ -2004,27 +2008,6 @@ describe('accounting constraints (T-08)', () => {
 	});
 });
 
-// tasks/inventory-cogs T-16 exports MOVEMENT_TYPES and MOVEMENT_SOURCES from
-// src/lib/server/inventory/movements.ts; restated here so the schema tests do
-// not depend on the ledger writer, and pinned to the CHECK literals below.
-const MOVEMENT_TYPES = [
-	'purchase',
-	'purchase_reversal',
-	'opening_stock',
-	'sale_consumption',
-	'waste',
-	'count_adjustment',
-	'comp',
-	'revaluation'
-] as const;
-const MOVEMENT_SOURCES = [
-	'purchase',
-	'order',
-	'waste_entry',
-	'stock_count',
-	'opening_stock'
-] as const;
-
 async function makeIngredient(
 	restaurantId: string,
 	name = 'Flour',
@@ -2075,7 +2058,7 @@ function insertMovement(
 }
 
 describe('inventory constraints (inventory-cogs T-07)', () => {
-	it('MOVEMENT_TYPES and MOVEMENT_SOURCES restated locally match the wire literals', () => {
+	it("the ledger writer's MOVEMENT_TYPES and MOVEMENT_SOURCES match the CHECK literals", () => {
 		expect([...MOVEMENT_TYPES]).toEqual([
 			'purchase',
 			'purchase_reversal',
