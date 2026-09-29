@@ -43,7 +43,9 @@
 			>
 				{#snippet cell(row, key)}
 					{#if key === 'supplierName'}
-						<span class="text-ink font-medium">{row.supplierName}</span>
+						<a href={resolve(`/purchases/${row.id}`)} class="text-ink font-medium underline">
+							{row.supplierName}
+						</a>
 					{:else if key === 'businessDate'}
 						<span class="text-ink">{row.businessDate}</span>
 					{:else if key === 'paidBy'}

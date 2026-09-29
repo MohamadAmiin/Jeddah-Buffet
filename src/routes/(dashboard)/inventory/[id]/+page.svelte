@@ -251,7 +251,13 @@
 					{:else if key === 'cost'}
 						<span class={row.costNegative ? 'text-danger' : 'text-ink'}>{row.cost ?? '—'}</span>
 					{:else if key === 'source'}
-						<span class="text-ink-2">{row.source}</span>
+						{#if row.sourceType === 'purchase'}
+							<a class="text-ink underline" href={resolve(`/purchases/${row.sourceId}`)}>
+								{row.source}
+							</a>
+						{:else}
+							<span class="text-ink-2">{row.source}</span>
+						{/if}
 					{/if}
 				{/snippet}
 			</Table>
