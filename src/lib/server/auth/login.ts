@@ -5,6 +5,7 @@ import { writeAudit } from '../audit';
 import { verifyPassword, needsRehash, hashPassword } from './password';
 import { createSession } from './session';
 import { consume } from './throttle';
+import { LOGIN_THROTTLE_CAPACITY } from '../env';
 
 // SPEC 7 defines "after 5 wrong attempts, locked out for 5 minutes" for PINs
 // entered on a REGISTERED POS DEVICE. Applying it to a public email-and-password
@@ -60,7 +61,9 @@ export async function loginWithPassword(
 
 	// The throttle runs BEFORE any hashing — that is the whole point of it.
 	const throttleKey = `login:${ctx.ip ?? 'unknown'}`;
-	const throttled = consume(throttleKey, now.getTime());
+	// LOGIN_THROTTLE_CAPACITY is unset everywhere but the local e2e journey, and
+	// env.ts refuses it on any non-loopback ORIGIN; unset, consume() uses the real 10.
+	const throttled = consume(throttleKey, now.getTime(), LOGIN_THROTTLE_CAPACITY);
 	if (!throttled.ok) {
 		return { ok: false, reason: 'throttled', retryAfterMs: throttled.retryAfterMs };
 	}
