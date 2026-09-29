@@ -9,6 +9,7 @@
 	import { minor } from '$lib/money';
 	import { formatAmount, formatMoney, moneyFormatFor, type MoneyFormat } from '$lib/money/format';
 	import { TAX_MODES, type TaxMode } from '$lib/money/tax';
+	import { tillImageUrl } from '$lib/menu-images';
 	import { RESTORED_CONTEXT, signedIn } from '$lib/pos/employee.svelte';
 	import { readLocalSession } from '$lib/pos/session';
 	import { readBoundDeviceId, readMenu, syncMenu, type LocalMenu } from '$lib/pos/store';
@@ -38,6 +39,22 @@
 
 	type Segment = 'sit' | 'waiting' | 'takeaway';
 	type Modifier = MenuGroup['modifiers'][number];
+
+	// Photo cards (menu-and-printing T-16). A photo that fails to load — offline
+	// with a cold HTTP cache — falls back to the initials tile and NEVER disables
+	// the card: selling does not depend on a picture. The Set is replaced, not
+	// mutated, so $state notices.
+	let brokenPhotos = $state<ReadonlySet<string>>(new Set());
+	function markBroken(imageId: string) {
+		brokenPhotos = new Set([...brokenPhotos, imageId]);
+	}
+	const initials = (name: string) =>
+		name
+			.split(/\s+/)
+			.filter(Boolean)
+			.slice(0, 2)
+			.map((word) => word.charAt(0).toUpperCase())
+			.join('');
 
 	let deviceId = $state<string | null>(null);
 	// Raw, not deep: the cart and menu are replaced whole, and IndexedDB's
@@ -354,24 +371,27 @@
 					dashboard Settings page
 				</p>
 			{:else if menu && format}
-				<nav aria-label="Menu categories">
-					<div role="tablist" class="flex flex-wrap gap-2">
-						{#each tabs as tab (tab.id)}
-							<button
-								type="button"
-								role="tab"
-								id="tab-{tab.id}"
-								aria-selected={activeTab?.id === tab.id}
-								aria-controls="grid-{tab.id}"
-								class={pillClass(activeTab?.id === tab.id)}
-								onclick={() => {
-									selectedTab = tab.id;
-									panelItem = null;
-								}}>{tab.name}</button
-							>
-						{/each}
-					</div>
-				</nav>
+				<!-- One tab (or none) is not a choice: no tablist, just the grid. -->
+				{#if tabs.length > 1}
+					<nav aria-label="Menu categories">
+						<div role="tablist" class="flex flex-wrap gap-2">
+							{#each tabs as tab (tab.id)}
+								<button
+									type="button"
+									role="tab"
+									id="tab-{tab.id}"
+									aria-selected={activeTab?.id === tab.id}
+									aria-controls="grid-{tab.id}"
+									class={pillClass(activeTab?.id === tab.id)}
+									onclick={() => {
+										selectedTab = tab.id;
+										panelItem = null;
+									}}>{tab.name}</button
+								>
+							{/each}
+						</div>
+					</nav>
+				{/if}
 
 				{#if panelItem}
 					<section
@@ -440,33 +460,64 @@
 						{/if}
 					</section>
 				{:else if activeTab}
-					<div
-						role="tabpanel"
-						id="grid-{activeTab.id}"
-						aria-labelledby="tab-{activeTab.id}"
-						class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4"
-					>
-						{#each activeTab.items as item (item.id)}
+					{#snippet itemCards(items: MenuItem[], money: MoneyFormat)}
+						{#each items as item (item.id)}
 							{@const usable = item.isAvailable && !gridDisabled}
+							{@const photo = item.imageId}
 							<button
 								type="button"
 								disabled={!usable}
-								class="min-h-touch-lg rounded-card flex flex-col items-start justify-center gap-1 border p-4 text-left {usable
-									? 'bg-raise text-ink border-control-line'
-									: 'bg-disabled-bg text-disabled-ink border-control-line'}"
+								class="min-h-touch-lg rounded-card border-control-line flex flex-col items-stretch gap-2 border p-3 text-left {usable
+									? 'bg-raise text-ink'
+									: 'bg-disabled-bg text-disabled-ink'}"
 								onclick={() => tapItem(item)}
 							>
-								<span class="text-caption {usable ? 'text-ink-2' : ''}">{activeTab.name}</span>
+								{#if photo && !brokenPhotos.has(photo)}
+									<img
+										src={tillImageUrl(photo)}
+										alt=""
+										loading="lazy"
+										decoding="async"
+										class="rounded-control aspect-video w-full object-cover {usable
+											? ''
+											: 'opacity-50'}"
+										onerror={() => markBroken(photo)}
+									/>
+								{:else}
+									<span
+										aria-hidden="true"
+										class="bg-raise-2 text-ink-2 rounded-control text-title flex aspect-video w-full items-center justify-center font-semibold"
+										>{initials(item.name)}</span
+									>
+								{/if}
 								<span class="text-pos font-semibold">{item.name}</span>
 								<span class="font-mono tabular-nums {usable ? 'text-accent' : ''}"
-									>{formatAmount(minor(item.priceMinor), format)}</span
+									>{formatAmount(minor(item.priceMinor), money)}</span
 								>
 								{#if !item.isAvailable}<span>Unavailable</span>{/if}
 							</button>
 						{:else}
 							<p class="text-ink-2">No items</p>
 						{/each}
-					</div>
+					{/snippet}
+					{#if tabs.length <= 1}
+						<div
+							role="region"
+							aria-label="Menu items"
+							class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4"
+						>
+							{@render itemCards(activeTab.items, format)}
+						</div>
+					{:else}
+						<div
+							role="tabpanel"
+							id="grid-{activeTab.id}"
+							aria-labelledby="tab-{activeTab.id}"
+							class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4"
+						>
+							{@render itemCards(activeTab.items, format)}
+						</div>
+					{/if}
 				{/if}
 			{/if}
 		</div>
