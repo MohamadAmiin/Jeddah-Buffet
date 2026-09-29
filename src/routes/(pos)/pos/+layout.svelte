@@ -51,6 +51,7 @@
 	} from '$lib/pos/employee.svelte';
 	import { flush, lastSkewMs, onFlushResult, onSkew, parkedCount } from '$lib/pos/queue';
 	import { agentStatus, printerChip, type AgentState } from '$lib/pos/print-client';
+	import { startAutoPrint } from '$lib/pos/printing';
 	import { readLocalSession } from '$lib/pos/session';
 
 	let { children } = $props();
@@ -258,6 +259,10 @@
 		void page.url.pathname;
 		void refreshPrinter();
 	});
+	// THE AUTO-PRINTER (T-30): card and mobile sales print when the flush reports
+	// the server's acceptance; the catch-up on start reprints missing originals.
+	// Its return value is the unsubscribe.
+	onMount(() => startAutoPrint());
 
 	// CLOCK SKEW, measured by the flush from each response's Date header.
 	let skewMs = $state<number | null>(null);

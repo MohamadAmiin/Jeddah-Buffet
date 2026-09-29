@@ -376,12 +376,17 @@ export function flush(
 						lastResult: body,
 						lastError: undefined
 					}));
-					emit({ type: 'done', clientOpId: entry.clientOpId, kind: entry.kind, status, body });
 					const syncedAt = new Date(now()).toISOString();
 					if (entry.kind === 'sale.complete') {
+						// The order row is marked synced BEFORE 'done' is announced, so a
+						// listener that reads the order on the event — the auto-printer,
+						// whose canPrint needs the card sale's syncStatus — sees it
+						// (menu-and-printing T-30).
 						const orderId = (entry.envelope.payload as { orderId?: string }).orderId;
 						if (orderId) await markOrderSynced(orderId, status, syncedAt);
-					} else if (entry.kind === 'sale.abandoned') {
+					}
+					emit({ type: 'done', clientOpId: entry.clientOpId, kind: entry.kind, status, body });
+					if (entry.kind === 'sale.abandoned') {
 						// Do NOT overwrite the sale's syncStatus — the sale was already
 						// marked 'rejected' by the 403/422 handler when we chose to abandon it;
 						// only stamp syncedAt.
