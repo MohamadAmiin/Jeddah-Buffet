@@ -22,15 +22,25 @@ import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { DbTx } from '../db/client';
 import type { Executor } from '../auth/session';
 import { ingredientPurchaseUnits, ingredients } from '../db/schema/inventory';
-import { purchaseLines as purchaseLinesTable, purchases } from '../db/schema/purchases';
+import {
+	purchaseLines as purchaseLinesTable,
+	purchases,
+	supplierPayments
+} from '../db/schema/purchases';
 import { writeAudit } from '../audit';
-import { postEntry } from '../accounting/journal';
+import { postEntry, postReversal } from '../accounting/journal';
 import { purchaseEvent, purchaseLines, revaluationLines } from '../accounting/posting-rules';
 import { ROUNDING_RULE, minor, sum, toBigInt, type Minor } from '../../money';
 import { formatQty, mulQty, parseQty, type Qty } from '../../money/quantity';
 import { applyMovements } from './movements';
 import type { InventoryWriteContext } from './ingredients';
-import { outstandingMinor, paymentsFor, type SupplierPaymentView } from './payments';
+import {
+	outstandingMinor,
+	paymentsFor,
+	reversalReason,
+	type SupplierPaymentView
+} from './payments';
+import { todayInZone } from './business-date';
 
 export const MAX_PURCHASE_LINES = 50;
 export const PAID_BY = ['cash', 'bank', 'credit'] as const;
@@ -218,6 +228,159 @@ export async function recordPurchase(
 		}
 	});
 	return { ok: true, purchaseId, revaluationMinor };
+}
+
+// ── Reversal (T-22) ─────────────────────────────────────────────────────────
+
+/**
+ * Reverse a whole delivery (spec 22): the goods leave at their ORIGINAL line
+ * costs — never the current average — through the one ledger writer, and the
+ * delivery's entry is mirrored by postReversal, both dated TODAY in the
+ * restaurant's zone (CLAUDE.md, "Inventory 9"). Nothing is edited: the header
+ * gets its once-written reversal stamp, everything else is a new row.
+ *
+ * Order matters. The purchase row is locked FOR UPDATE, then the stamp is a
+ * conditional UPDATE that must affect exactly one row BEFORE any movement is
+ * written: a racing second call fails at the lock check or the stamp and never
+ * writes a movement. A credit delivery with an unreversed payment is refused;
+ * the owner reverses the payments first.
+ *
+ * If taking the goods out leaves stock the average cannot describe, the ledger
+ * returns a revaluation, posted as a NEW inventory_revaluation entry to 5000
+ * (CLAUDE.md, "Inventory 2"). The delivery's own earlier revaluation entry, if
+ * it had one, is deliberately NOT reversed: the new revaluation re-balances
+ * stock value against 1200 from the state the ledger is in NOW, which already
+ * includes that earlier one.
+ */
+export async function reversePurchase(
+	tx: DbTx,
+	ctx: InventoryWriteContext,
+	input: { purchaseId: string; reason: string }
+): Promise<
+	| { ok: true; revaluationMinor: Minor }
+	| { ok: false; reason: 'not_found' | 'already_reversed' | 'has_payments' | 'invalid_reason' }
+> {
+	const reason = reversalReason(input.reason);
+	if (reason === null) return { ok: false, reason: 'invalid_reason' };
+
+	const [purchase] = await tx
+		.select({
+			totalMinor: purchases.totalMinor,
+			reversedAt: purchases.reversedAt,
+			journalEntryId: purchases.journalEntryId
+		})
+		.from(purchases)
+		.where(and(eq(purchases.id, input.purchaseId), eq(purchases.restaurantId, ctx.restaurantId)))
+		.for('update');
+	if (!purchase) return { ok: false, reason: 'not_found' };
+	if (purchase.reversedAt !== null) return { ok: false, reason: 'already_reversed' };
+
+	const [openPayment] = await tx
+		.select({ id: supplierPayments.id })
+		.from(supplierPayments)
+		.where(
+			and(
+				eq(supplierPayments.purchaseId, input.purchaseId),
+				eq(supplierPayments.restaurantId, ctx.restaurantId),
+				isNull(supplierPayments.reversedAt)
+			)
+		)
+		.limit(1);
+	if (openPayment) return { ok: false, reason: 'has_payments' };
+
+	// The stamp claims the reversal before anything else is written.
+	const claimed = await tx
+		.update(purchases)
+		.set({ reversedAt: new Date(), reversedByUserId: ctx.actorUserId, reversalReason: reason })
+		.where(
+			and(
+				eq(purchases.id, input.purchaseId),
+				eq(purchases.restaurantId, ctx.restaurantId),
+				isNull(purchases.reversedAt)
+			)
+		)
+		.returning({ id: purchases.id });
+	if (claimed.length !== 1) return { ok: false, reason: 'already_reversed' };
+
+	const today = await todayInZone(tx, ctx.restaurantId);
+	const lines = await tx
+		.select({
+			ingredientId: purchaseLinesTable.ingredientId,
+			baseQty: purchaseLinesTable.baseQty,
+			lineCostMinor: purchaseLinesTable.lineCostMinor
+		})
+		.from(purchaseLinesTable)
+		.where(
+			and(
+				eq(purchaseLinesTable.purchaseId, input.purchaseId),
+				eq(purchaseLinesTable.restaurantId, ctx.restaurantId)
+			)
+		)
+		.orderBy(asc(purchaseLinesTable.lineNo));
+	const { revaluationMinor } = await applyMovements(
+		tx,
+		{
+			restaurantId: ctx.restaurantId,
+			sourceType: 'purchase',
+			sourceId: input.purchaseId,
+			businessDate: today,
+			occurredAt: new Date(),
+			recordedByUserId: ctx.actorUserId
+		},
+		lines.map((line) => ({
+			kind: 'reversal' as const,
+			type: 'purchase_reversal' as const,
+			ingredientId: line.ingredientId,
+			qty: parseQty(line.baseQty),
+			originalCostMinor: minor(line.lineCostMinor)
+		}))
+	);
+
+	if (purchase.journalEntryId !== null) {
+		const mirror = await postReversal(tx, {
+			restaurantId: ctx.restaurantId,
+			entryId: purchase.journalEntryId,
+			businessDate: today,
+			memo: `Reversal: ${reason}`
+		});
+		await tx
+			.update(purchases)
+			.set({ reversalEntryId: mirror.entryId })
+			.where(
+				and(
+					eq(purchases.id, input.purchaseId),
+					eq(purchases.restaurantId, ctx.restaurantId),
+					isNull(purchases.reversalEntryId)
+				)
+			);
+	}
+	if (revaluationMinor !== 0n) {
+		await postEntry(tx, {
+			restaurantId: ctx.restaurantId,
+			businessDate: today,
+			event: 'inventory_revaluation',
+			sourceType: 'purchase',
+			sourceId: input.purchaseId,
+			memo: 'Revaluation after delivery reversal',
+			lines: revaluationLines(revaluationMinor)
+		});
+	}
+
+	await writeAudit(tx, {
+		restaurantId: ctx.restaurantId,
+		actorUserId: ctx.actorUserId,
+		subjectUserId: null,
+		ip: ctx.ip,
+		userAgent: ctx.userAgent,
+		event: 'purchase.reversed',
+		details: {
+			purchaseId: input.purchaseId,
+			totalMinor: purchase.totalMinor.toString(),
+			reason,
+			revaluationMinor: revaluationMinor.toString()
+		}
+	});
+	return { ok: true, revaluationMinor };
 }
 
 // ── Readers ─────────────────────────────────────────────────────────────────

@@ -9,7 +9,8 @@ import { ingredients, stockMovements } from '../db/schema/inventory';
 import { purchases, purchaseLines } from '../db/schema/purchases';
 import { journalEntries } from '../db/schema/accounting';
 import { onRestaurantCreated } from '../restaurants';
-import { entryLines } from '../accounting/journal';
+import { entryLines, postEntry } from '../accounting/journal';
+import { cogsLines } from '../accounting/posting-rules';
 import { minor } from '../../money';
 import { qty } from '../../money/quantity';
 import { applyMovements } from './movements';
@@ -19,7 +20,9 @@ import {
 	createIngredient,
 	type InventoryWriteContext
 } from './ingredients';
-import { recordPurchase, type PaidBy } from './purchases';
+import { listPurchases, recordPurchase, reversePurchase, type PaidBy } from './purchases';
+import { paySupplier, reverseSupplierPayment } from './payments';
+import { todayInZone } from './business-date';
 
 // Deliveries (tasks/inventory-cogs T-20): the real path, from purchase units to
 // movements to journal entries. MANDATORY (spec 29 — one posting-rule test per
@@ -105,7 +108,7 @@ async function entriesFor(purchaseId: string) {
 		.select({ id: journalEntries.id, event: journalEntries.event })
 		.from(journalEntries)
 		.where(eq(journalEntries.sourceId, purchaseId))
-		.orderBy(journalEntries.event);
+		.orderBy(journalEntries.event, sql`${journalEntries.reversesEntryId} is not null`);
 	return Promise.all(
 		rows.map(async (r) => ({
 			event: r.event,
@@ -135,8 +138,14 @@ beforeEach(async () => {
 	ctx = await makeRestaurant('Delivery Cafe');
 });
 afterEach(async () => {
-	// After every case: 1200 Inventory equals the value the ledger holds.
+	// After every case: 1200 Inventory equals the value the ledger holds, and
+	// 2000 Accounts Payable equals what is still owed on credit deliveries.
 	expect(await balance(ctx.restaurantId, '1200')).toBe(await stockValue(ctx.restaurantId));
+	const owed = (await listPurchases(testDb(), ctx.restaurantId, { limit: 1000 })).reduce(
+		(total, p) => total + p.outstandingMinor,
+		0n
+	);
+	expect(-(await balance(ctx.restaurantId, '2000'))).toBe(owed);
 });
 
 describe('recordPurchase', () => {
@@ -356,5 +365,229 @@ describe('recordPurchase', () => {
 				.where(and(eq(table.restaurantId, ctx.restaurantId)));
 			expect(row.c).toBe(0);
 		}
+	});
+});
+
+describe('reversePurchase', () => {
+	const reverse = (purchaseId: string, reason = 'Entered by mistake') =>
+		db.transaction((tx) => reversePurchase(tx, ctx, { purchaseId, reason }));
+
+	async function mirrorOf(purchaseId: string) {
+		const [header] = await testDb()
+			.select({ entry: purchases.journalEntryId, reversal: purchases.reversalEntryId })
+			.from(purchases)
+			.where(eq(purchases.id, purchaseId));
+		const [mirror] = await testDb()
+			.select({
+				reverses: journalEntries.reversesEntryId,
+				businessDate: journalEntries.businessDate
+			})
+			.from(journalEntries)
+			.where(eq(journalEntries.id, header.reversal!));
+		return { header, mirror };
+	}
+
+	it('an unconsumed delivery into empty stock: back to zero, mirror Dr 1010 / Cr 1200', async () => {
+		const meat = await ingredientWithUnit(ctx, 'Meat');
+		const d = await deliver(ctx, 'bank', [
+			{ ingredientId: meat.id, purchaseUnitId: meat.unitId, unitQty: 10000n, cost: 6000n }
+		]);
+		if (!d.ok) throw new Error('refused');
+		expect(await reverse(d.purchaseId)).toEqual({ ok: true, revaluationMinor: 0n });
+
+		const moves = await testDb()
+			.select({
+				type: stockMovements.movementType,
+				qty: stockMovements.qty,
+				cost: stockMovements.costMinor
+			})
+			.from(stockMovements)
+			.where(
+				and(
+					eq(stockMovements.sourceId, d.purchaseId),
+					eq(stockMovements.movementType, 'purchase_reversal')
+				)
+			);
+		expect(moves).toEqual([{ type: 'purchase_reversal', qty: '-10000.000', cost: -6000n }]);
+		expect(await cache(meat.id)).toMatchObject({ qty: '0.000', value: 0n });
+
+		const { header, mirror } = await mirrorOf(d.purchaseId);
+		expect(mirror).toEqual({
+			reverses: header.entry,
+			businessDate: await todayInZone(testDb(), ctx.restaurantId)
+		});
+		expect(
+			(await entryLines(testDb(), header.reversal!)).map((l) => [
+				l.code,
+				l.debit > 0n ? 'Dr' : 'Cr',
+				l.debit > 0n ? l.debit : l.credit
+			])
+		).toEqual([
+			['1200', 'Cr', 6000n],
+			['1010', 'Dr', 6000n]
+		]);
+	});
+
+	it('after consumption (T-10(e)): cost −5000 at the original price, revaluation +3600', async () => {
+		const meat = await ingredientWithUnit(ctx, 'Meat');
+		const first = await deliver(ctx, 'bank', [
+			{ ingredientId: meat.id, purchaseUnitId: meat.unitId, unitQty: 20000n, cost: 2000n }
+		]);
+		const second = await deliver(ctx, 'bank', [
+			{ ingredientId: meat.id, purchaseUnitId: meat.unitId, unitQty: 5000n, cost: 5000n }
+		]);
+		if (!first.ok || !second.ok) throw new Error('refused');
+		expect(await cache(meat.id)).toEqual({ qty: '25000.000', value: 7000n, avg: 280000n });
+
+		// 15,000 g sold, with the COGS entry recordSale would post for it.
+		await db.transaction(async (tx) => {
+			const orderId = randomUUID();
+			const sale = await applyMovements(
+				tx,
+				{
+					restaurantId: ctx.restaurantId,
+					sourceType: 'order',
+					sourceId: orderId,
+					businessDate: '2026-09-28',
+					occurredAt: new Date(),
+					recordedByUserId: null
+				},
+				[{ kind: 'out', type: 'sale_consumption', ingredientId: meat.id, qty: qty(15000000n) }]
+			);
+			expect(sale.costMinor).toBe(-4200n);
+			await postEntry(tx, {
+				restaurantId: ctx.restaurantId,
+				businessDate: '2026-09-28',
+				event: 'cost_of_goods_sold',
+				sourceType: 'order',
+				sourceId: orderId,
+				memo: 'COGS',
+				lines: cogsLines(minor(4200n))
+			});
+		});
+
+		expect(await reverse(second.purchaseId)).toEqual({ ok: true, revaluationMinor: 3600n });
+		const moves = await testDb()
+			.select({
+				type: stockMovements.movementType,
+				qty: stockMovements.qty,
+				cost: stockMovements.costMinor
+			})
+			.from(stockMovements)
+			.where(eq(stockMovements.sourceId, second.purchaseId))
+			.orderBy(stockMovements.id);
+		expect(moves).toEqual([
+			{ type: 'purchase', qty: '5000.000', cost: 5000n },
+			{ type: 'purchase_reversal', qty: '-5000.000', cost: -5000n },
+			{ type: 'revaluation', qty: '0.000', cost: 3600n }
+		]);
+		expect(await cache(meat.id)).toEqual({ qty: '5000.000', value: 1400n, avg: 280000n });
+		const events = (await entriesFor(second.purchaseId)).map((e) => [e.event, e.lines]);
+		expect(events).toEqual([
+			[
+				'inventory_revaluation',
+				[
+					['1200', 'Dr', 3600n],
+					['5000', 'Cr', 3600n]
+				]
+			],
+			[
+				'purchase_paid',
+				[
+					['1200', 'Dr', 5000n],
+					['1010', 'Cr', 5000n]
+				]
+			],
+			[
+				'purchase_paid',
+				[
+					['1200', 'Cr', 5000n],
+					['1010', 'Dr', 5000n]
+				]
+			]
+		]);
+	});
+
+	it('a credit delivery with an open payment: has_payments until the payment is reversed', async () => {
+		const meat = await ingredientWithUnit(ctx, 'Meat');
+		const d = await deliver(ctx, 'credit', [
+			{ ingredientId: meat.id, purchaseUnitId: meat.unitId, unitQty: 10000n, cost: 11000n }
+		]);
+		if (!d.ok) throw new Error('refused');
+		const paid = await db.transaction((tx) =>
+			paySupplier(tx, ctx, {
+				purchaseId: d.purchaseId,
+				amountMinor: minor(5000n),
+				paidFrom: 'bank',
+				businessDate: '2026-09-28'
+			})
+		);
+		if (!paid.ok) throw new Error(paid.reason);
+		const [before] = await testDb()
+			.select({ c: sql<number>`count(*)::int` })
+			.from(stockMovements)
+			.where(eq(stockMovements.restaurantId, ctx.restaurantId));
+
+		expect(await reverse(d.purchaseId)).toEqual({ ok: false, reason: 'has_payments' });
+		const [after] = await testDb()
+			.select({ c: sql<number>`count(*)::int` })
+			.from(stockMovements)
+			.where(eq(stockMovements.restaurantId, ctx.restaurantId));
+		expect(after.c).toBe(before.c);
+
+		await db.transaction((tx) =>
+			reverseSupplierPayment(tx, ctx, { paymentId: paid.paymentId, reason: 'Paid in error' })
+		);
+		expect(await reverse(d.purchaseId)).toEqual({ ok: true, revaluationMinor: 0n });
+	});
+
+	it('two concurrent reversals: one ok, the other already_reversed; one mirror, one set of movements', async () => {
+		const meat = await ingredientWithUnit(ctx, 'Meat');
+		const d = await deliver(ctx, 'bank', [
+			{ ingredientId: meat.id, purchaseUnitId: meat.unitId, unitQty: 10000n, cost: 6000n }
+		]);
+		if (!d.ok) throw new Error('refused');
+		const results = await Promise.all([reverse(d.purchaseId), reverse(d.purchaseId)]);
+		expect(results.filter((r) => r.ok)).toHaveLength(1);
+		expect(results.filter((r) => !r.ok)).toEqual([{ ok: false, reason: 'already_reversed' }]);
+
+		const [mirrors] = await testDb()
+			.select({ c: sql<number>`count(*)::int` })
+			.from(journalEntries)
+			.where(
+				and(
+					eq(journalEntries.sourceId, d.purchaseId),
+					sql`${journalEntries.reversesEntryId} is not null`
+				)
+			);
+		expect(mirrors.c).toBe(1);
+		const [reversals] = await testDb()
+			.select({ c: sql<number>`count(*)::int` })
+			.from(stockMovements)
+			.where(
+				and(
+					eq(stockMovements.sourceId, d.purchaseId),
+					eq(stockMovements.movementType, 'purchase_reversal')
+				)
+			);
+		expect(reversals.c).toBe(1);
+	});
+
+	it('refuses a short reason, an unknown delivery, and a second reversal', async () => {
+		const meat = await ingredientWithUnit(ctx, 'Meat');
+		const d = await deliver(ctx, 'bank', [
+			{ ingredientId: meat.id, purchaseUnitId: meat.unitId, unitQty: 1000n, cost: 600n }
+		]);
+		if (!d.ok) throw new Error('refused');
+		expect(await reverse(d.purchaseId, 'no')).toEqual({ ok: false, reason: 'invalid_reason' });
+		expect(await reverse(randomUUID())).toEqual({ ok: false, reason: 'not_found' });
+		const other = await makeRestaurant('Other Cafe');
+		expect(
+			await db.transaction((tx) =>
+				reversePurchase(tx, other, { purchaseId: d.purchaseId, reason: 'not mine' })
+			)
+		).toEqual({ ok: false, reason: 'not_found' });
+		expect((await reverse(d.purchaseId)).ok).toBe(true);
+		expect(await reverse(d.purchaseId)).toEqual({ ok: false, reason: 'already_reversed' });
 	});
 });
