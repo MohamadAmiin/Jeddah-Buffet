@@ -53,7 +53,7 @@ export const load: ServerLoad = async (event) => {
 		})),
 		mismatch: differs
 			? {
-					difference: amountText(rec.differenceMinor, format) ?? rec.differenceMinor.toString(),
+					difference: amountText(rec.differenceMinor, format),
 					driftCount: rec.driftCount
 				}
 			: null

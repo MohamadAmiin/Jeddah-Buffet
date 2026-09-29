@@ -52,7 +52,7 @@
 	{#if data.mismatch}
 		<div class="max-w-form">
 			<Alert tone="danger">
-				The stock value differs from the books by {data.mismatch.difference} ({data.mismatch
+				The stock value differs from the books by {data.mismatch.difference ?? '—'} ({data.mismatch
 					.driftCount}
 				{data.mismatch.driftCount === 1 ? 'ingredient differs' : 'ingredients differ'} from the stock
 				book).
