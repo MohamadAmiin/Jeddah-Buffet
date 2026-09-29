@@ -1,15 +1,18 @@
-import { and, asc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, notExists, sql } from 'drizzle-orm';
 import type { DbTx } from '../db/client';
 import type { Executor } from '../auth/session';
 import { restaurantSettings } from '../db/schema/restaurant-settings';
 import {
 	menuCategories,
+	menuImages,
 	menuItemModifierGroups,
 	menuItems,
 	modifierGroups,
 	modifiers
 } from '../db/schema/menu';
 import { writeAudit } from '../audit';
+import { IMAGE_MAX_BYTES, type ImageContentType } from '../../menu-images';
+import { sniffImageType } from './images';
 
 // THE MENU MODULE (spec 3, 5, 15, 17).
 //
@@ -381,6 +384,91 @@ export async function setItemAvailability(
 	return CHANGED;
 }
 
+// ── Photos ────────────────────────────────────────────────────────────────────
+//
+// A photo row is NEVER updated: a new photo is a new row and a new id (which is
+// what lets the routes serve it as immutable). The one DELETE here drops a
+// photo row that no item references any more — menu configuration, never a
+// posted record, and never referenced by an order line (invariant 2 holds).
+
+/** Drop `imageId` if, and only if, no item still points at it. */
+async function deleteOrphanImage(write: DbTx, restaurantId: string, imageId: string) {
+	await write.delete(menuImages).where(
+		and(
+			eq(menuImages.restaurantId, restaurantId),
+			eq(menuImages.id, imageId),
+			notExists(
+				write
+					.select({ one: sql`1` })
+					.from(menuItems)
+					.where(eq(menuItems.imageId, imageId))
+			)
+		)
+	);
+}
+
+/**
+ * Attach a photo to a live item, replacing any previous one, in ONE version
+ * bump. The route validates first (size, sniffed type); a caller that gets it
+ * wrong has a programming error, hence TypeError rather than a result value.
+ */
+export async function setItemImage(
+	tx: DbTx,
+	restaurantId: string,
+	itemId: string,
+	image: { bytes: Uint8Array; contentType: ImageContentType }
+): Promise<{ ok: true; imageId: string } | NotFound> {
+	const current = await liveItem(tx, restaurantId, itemId, true);
+	if (!current) return NOT_FOUND;
+	if (image.bytes.byteLength === 0 || image.bytes.byteLength > IMAGE_MAX_BYTES) {
+		throw new TypeError(`a photo is 1..${IMAGE_MAX_BYTES} bytes; got ${image.bytes.byteLength}`);
+	}
+	if (sniffImageType(image.bytes) !== image.contentType) {
+		throw new TypeError(
+			`the bytes are not ${image.contentType} — sniff before calling setItemImage`
+		);
+	}
+
+	return withMenuVersionBump(tx, restaurantId, async (write) => {
+		const [photo] = await write
+			.insert(menuImages)
+			.values({
+				restaurantId,
+				contentType: image.contentType,
+				byteSize: image.bytes.byteLength,
+				bytes: image.bytes
+			})
+			.returning({ id: menuImages.id });
+		await write
+			.update(menuItems)
+			.set({ imageId: photo.id, updatedAt: new Date() })
+			.where(and(eq(menuItems.restaurantId, restaurantId), eq(menuItems.id, itemId)));
+		if (current.imageId !== null) await deleteOrphanImage(write, restaurantId, current.imageId);
+		return { ok: true as const, imageId: photo.id };
+	});
+}
+
+/** Detach (and drop) a live item's photo; nothing to remove is a no-op, no bump. */
+export async function removeItemImage(
+	tx: DbTx,
+	restaurantId: string,
+	itemId: string
+): Promise<Changed | NotFound> {
+	const current = await liveItem(tx, restaurantId, itemId, true);
+	if (!current) return NOT_FOUND;
+	if (current.imageId === null) return UNCHANGED;
+	const previous = current.imageId;
+
+	await withMenuVersionBump(tx, restaurantId, async (write) => {
+		await write
+			.update(menuItems)
+			.set({ imageId: null, updatedAt: new Date() })
+			.where(and(eq(menuItems.restaurantId, restaurantId), eq(menuItems.id, itemId)));
+		await deleteOrphanImage(write, restaurantId, previous);
+	});
+	return CHANGED;
+}
+
 // ── Modifier groups ───────────────────────────────────────────────────────────
 
 const validSelectRange = (minSelect: number, maxSelect: number) =>
@@ -679,7 +767,8 @@ export async function listMenu(database: Executor, restaurantId: string) {
 			priceMinor: menuItems.priceMinor,
 			taxRateBp: menuItems.taxRateBp,
 			isAvailable: menuItems.isAvailable,
-			sortOrder: menuItems.sortOrder
+			sortOrder: menuItems.sortOrder,
+			imageId: menuItems.imageId
 		})
 		.from(menuItems)
 		.where(and(eq(menuItems.restaurantId, restaurantId), isNull(menuItems.archivedAt)))

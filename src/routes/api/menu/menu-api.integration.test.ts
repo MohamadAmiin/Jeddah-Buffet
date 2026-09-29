@@ -16,7 +16,8 @@ import {
 	createModifier,
 	createModifierGroup,
 	linkModifierGroup,
-	setItemAvailability
+	setItemAvailability,
+	setItemImage
 } from '$lib/server/menu';
 import { GET } from './+server';
 import { GET as versionGet } from './version/+server';
@@ -38,7 +39,8 @@ type Snapshot = {
 	categories: Array<{ id: string; name: string; sortOrder: number }>;
 	items: Array<{
 		id: string;
-		categoryId: string;
+		categoryId: string | null;
+		imageId: string | null;
 		name: string;
 		priceMinor: string;
 		taxRateBp: number | null;
@@ -302,5 +304,27 @@ describe('GET /api/menu', () => {
 		);
 		expect(crossed.status).toBe(200);
 		expect((JSON.parse(crossed.text) as Snapshot).restaurantId).toBe(b.restaurantId);
+	});
+
+	it("ships each item's imageId — null or the photo's id — and never the bytes", async () => {
+		const a = await makeRestaurant('Cafe One');
+		const plain = await addItem(a, 'Tea', 850n);
+		const pictured = await addItem(a, 'Burger', 800n);
+		const set = await db.transaction((tx) =>
+			setItemImage(tx, a.restaurantId, pictured, {
+				bytes: Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0]),
+				contentType: 'image/png'
+			})
+		);
+		if (!set.ok) throw new Error('photo not set');
+
+		const result = await call(GET, '/api/menu', { [DEVICE_COOKIE]: a.token });
+		expect(result.status).toBe(200);
+		expect(result.text).not.toContain('"bytes"');
+		const payload = JSON.parse(result.text) as Snapshot;
+		const byId = new Map(payload.items.map((item) => [item.id, item]));
+		expect(payload.items.every((item) => 'imageId' in item)).toBe(true);
+		expect(byId.get(plain)!.imageId).toBeNull();
+		expect(byId.get(pictured)!.imageId).toBe(set.imageId);
 	});
 });

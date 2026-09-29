@@ -30,6 +30,9 @@ import { MENU_CACHE_HEADERS, ifNoneMatchMatches, menuEtag } from './etag';
 // never pre-resolves the fallback onto the item. The till shows prices and totals
 // nothing in this plan; the rates travel now so the sales plan can snapshot a
 // line's rate at the moment of sale (invariant 7) without a second round trip.
+//
+// PHOTOS: a photo travels as its id (imageId, or null); the till fetches the
+// bytes from /api/menu/images/[id]. The snapshot never carries bytes.
 
 export const GET: RequestHandler = async (event) => {
 	// FIRST: 403 for a missing, unknown or revoked device — before any read.
@@ -77,6 +80,7 @@ export const GET: RequestHandler = async (event) => {
 			items: snapshot.items.map((item) => ({
 				id: item.id,
 				categoryId: item.categoryId,
+				imageId: item.imageId,
 				name: item.name,
 				priceMinor: item.priceMinor.toString(),
 				taxRateBp: item.taxRateBp,
