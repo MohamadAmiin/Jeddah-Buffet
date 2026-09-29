@@ -169,6 +169,7 @@ describe('every /api route is guarded', () => {
 	it('finds exactly the /api routes the plan has shipped', () => {
 		expect(apiServerFiles.map(routeIdOf).sort()).toEqual([
 			'/api/menu',
+			'/api/menu/images/[id]',
 			'/api/menu/version',
 			'/api/pos/employees',
 			'/api/pos/pin',
