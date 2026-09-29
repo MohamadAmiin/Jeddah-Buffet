@@ -36,6 +36,7 @@ import { applyMovements } from './movements';
 import type { InventoryWriteContext } from './ingredients';
 import {
 	outstandingMinor,
+	owedOn,
 	paymentsFor,
 	reversalReason,
 	type SupplierPaymentView
@@ -411,17 +412,15 @@ export async function listPurchases(
 			totalMinor: purchases.totalMinor,
 			recordedAt: purchases.recordedAt,
 			reversedAt: purchases.reversedAt,
-			// Same rule as outstandingMinor (payments.ts), as a column so the list
-			// is one query. Qualified by hand: drizzle leaves columns unqualified in a
-			// single-table select, and "id" inside the subquery would be sp.id.
-			outstanding: sql<string>`(case
-				when "purchases"."paid_by" = 'credit' and "purchases"."reversed_at" is null
-				then "purchases"."total_minor" - coalesce((
-					select sum(sp.amount_minor) from supplier_payments sp
-					where sp.purchase_id = "purchases"."id"
-					  and sp.restaurant_id = "purchases"."restaurant_id"
-					  and sp.reversed_at is null), 0)
-				else 0 end)::text`
+			// The unreversed payments, summed in SQL (a sum() only); owedOn in
+			// payments.ts turns them into what is still owed. Qualified by hand:
+			// drizzle leaves columns unqualified in a single-table select, and "id"
+			// inside the subquery would be sp.id.
+			paid: sql<string>`coalesce((
+				select sum(sp.amount_minor) from supplier_payments sp
+				where sp.purchase_id = "purchases"."id"
+				  and sp.restaurant_id = "purchases"."restaurant_id"
+				  and sp.reversed_at is null), 0)::text`
 		})
 		.from(purchases)
 		.where(eq(purchases.restaurantId, restaurantId))
@@ -435,7 +434,12 @@ export async function listPurchases(
 		totalMinor: minor(r.totalMinor),
 		recordedAt: r.recordedAt,
 		reversed: r.reversedAt !== null,
-		outstandingMinor: minor(BigInt(r.outstanding))
+		outstandingMinor: owedOn({
+			paidBy: r.paidBy,
+			reversed: r.reversedAt !== null,
+			totalMinor: minor(r.totalMinor),
+			paidMinor: minor(BigInt(r.paid))
+		})
 	}));
 }
 

@@ -19,7 +19,7 @@ import { purchases, supplierPayments } from '../db/schema/purchases';
 import { writeAudit } from '../audit';
 import { postEntry, postReversal } from '../accounting/journal';
 import { supplierPaymentLines } from '../accounting/posting-rules';
-import { minor, toBigInt, type Minor } from '../../money';
+import { minor, subtract, toBigInt, type Minor } from '../../money';
 import { todayInZone } from './business-date';
 import type { InventoryWriteContext } from './ingredients';
 
@@ -27,27 +27,49 @@ export const PAID_FROM = ['cash', 'bank'] as const;
 export type PaidFrom = (typeof PAID_FROM)[number];
 
 /**
- * What is still owed on a delivery: total − Σ unreversed payments for a live
- * credit delivery; 0 for anything else (paid on delivery, or reversed). One query.
+ * THE rule for what is still owed on a delivery: total − Σ unreversed payments
+ * for a live credit delivery; 0 for anything else (paid on delivery, or
+ * reversed). SQL only sums the payments; the subtraction is the money module's
+ * (invariant 1). listPurchases applies the same function to its rows.
  */
+export function owedOn(row: {
+	paidBy: string;
+	reversed: boolean;
+	totalMinor: Minor;
+	paidMinor: Minor;
+}): Minor {
+	if (row.paidBy !== 'credit' || row.reversed) return minor(0n);
+	return subtract(row.totalMinor, row.paidMinor);
+}
+
+/** What is still owed on one delivery (owedOn). One query. */
 export async function outstandingMinor(
 	executor: Executor,
 	restaurantId: string,
 	purchaseId: string
 ): Promise<Minor> {
-	const result = await executor.execute<{ outstanding: string | null }>(sql`
-		select case
-		         when p.paid_by = 'credit' and p.reversed_at is null
-		         then p.total_minor - coalesce((
-		           select sum(sp.amount_minor) from supplier_payments sp
-		           where sp.purchase_id = p.id and sp.restaurant_id = p.restaurant_id
-		             and sp.reversed_at is null), 0)
-		         else 0
-		       end::text as outstanding
+	const result = await executor.execute<{
+		paid_by: string;
+		reversed: boolean;
+		total: string;
+		paid: string;
+	}>(sql`
+		select p.paid_by, p.reversed_at is not null as reversed, p.total_minor::text as total,
+		       coalesce((
+		         select sum(sp.amount_minor) from supplier_payments sp
+		         where sp.purchase_id = p.id and sp.restaurant_id = p.restaurant_id
+		           and sp.reversed_at is null), 0)::text as paid
 		from purchases p
 		where p.id = ${purchaseId} and p.restaurant_id = ${restaurantId}
 	`);
-	return minor(BigInt(result.rows[0]?.outstanding ?? '0'));
+	const row = result.rows[0];
+	if (!row) return minor(0n);
+	return owedOn({
+		paidBy: row.paid_by,
+		reversed: row.reversed,
+		totalMinor: minor(BigInt(row.total)),
+		paidMinor: minor(BigInt(row.paid))
+	});
 }
 
 async function lockPurchase(tx: DbTx, restaurantId: string, purchaseId: string) {
