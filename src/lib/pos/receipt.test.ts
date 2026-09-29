@@ -6,6 +6,7 @@ import {
 	formatDateTime,
 	renderKitchenTicket,
 	renderReceipt,
+	renderTestPage,
 	toPrintable,
 	type PrintLine,
 	type ReceiptInput
@@ -397,6 +398,37 @@ describe('renderKitchenTicket', () => {
 		expect(t.some((l) => /^\s*TAKEAWAY\s*$/.test(l))).toBe(true);
 		expect(t).not.toContain('** NOTE **');
 	});
+});
+
+describe('renderTestPage (T-29)', () => {
+	for (const width of [32, 48] as const) {
+		it(`at ${width}: every line fits, the ruler is exactly ${width} long, all printable ASCII`, () => {
+			const lines = renderTestPage({
+				width,
+				restaurantName: 'Café Zócalo — “Home”',
+				deviceCode: 'POS1',
+				now: '2026-09-29T07:15:00Z',
+				timeZone: 'Africa/Mogadishu',
+				printer: 'kitchen'
+			});
+			expect(lines.length).toBeGreaterThan(8);
+			for (const l of lines) {
+				expect(l.text.length, l.text).toBeLessThanOrEqual(width);
+				expect(l.text, l.text).toMatch(/^[\x20-\x7e]*$/);
+			}
+			const ruler = lines.find((l) => l.text.startsWith('1234567890'))!;
+			expect(ruler.text).toHaveLength(width);
+			expect(ruler.text).toBe('1234567890'.repeat(5).slice(0, width));
+			const t = lines.map((l) => l.text.trim());
+			expect(t).toContain('TEST PRINT');
+			expect(t).toContain('KITCHEN PRINTER');
+			expect(t).toContain(`${width} COLUMNS`);
+			expect(t).toContain('Cafe Zocalo - "Home"');
+			expect(t).toContain('TERMINAL POS1');
+			expect(t).toContain('29 Sep 2026 10:15');
+			expect(lines.find((l) => l.text.trim() === 'TEST PRINT')?.size).toBe('tall');
+		});
+	}
 });
 
 describe('dates', () => {

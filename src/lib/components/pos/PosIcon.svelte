@@ -17,7 +17,8 @@
 		| 'grid'
 		| 'utensils'
 		| 'chevron-down'
-		| 'delivery';
+		| 'delivery'
+		| 'printer';
 </script>
 
 <script lang="ts">
@@ -110,5 +111,11 @@
 		<path d="M15.5 17 13 8.5h-3" />
 		<path d="M13 8.5 15.5 5h3" />
 		<rect x="3" y="9" width="6" height="5" rx="1" />
+	{:else if name === 'printer'}
+		<!-- A receipt printer: the paper feeding in, the body, the printed slip coming out. -->
+		<path d="M7 8.5V4h10v4.5" />
+		<rect x="3.5" y="8.5" width="17" height="8" rx="2" />
+		<path d="M7 14h10v6H7z" />
+		<path d="M17 11.5h.01" />
 	{/if}
 </svg>

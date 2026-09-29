@@ -380,3 +380,42 @@ export function renderKitchenTicket(input: ReceiptInput, opts: RenderOptions): P
 	out.push(rule('=', w));
 	return out;
 }
+
+// ── The test page (T-29) ────────────────────────────────────────────────────
+
+export type TestPageInput = {
+	width: ReceiptWidth;
+	restaurantName: string;
+	deviceCode: string;
+	/** ISO instant of the test, printed in the restaurant's zone. */
+	now: string;
+	timeZone: string;
+	printer: 'receipt' | 'kitchen';
+};
+
+/**
+ * What the owner prints from /pos/printer to prove pairing works: the name,
+ * TEST PRINT, the printer's role and column count, the terminal, the time,
+ * and a ruler of exactly `width` characters so a wrong paper width is visible
+ * at a glance (a 48-column page on 58 mm paper wraps or clips the ruler).
+ */
+export function renderTestPage(input: TestPageInput): PrintLine[] {
+	const w = input.width;
+	const ruler = '1234567890'.repeat(5).slice(0, w);
+	const out: PrintLine[] = [
+		...lines(center('matcami', w), { bold: true, align: 'center' }),
+		...lines(center('TEST PRINT', w), { bold: true, size: 'tall', align: 'center' }),
+		rule('-', w),
+		...lines(center(`${input.printer.toUpperCase()} PRINTER`, w), { align: 'center' }),
+		...lines(center(`${w} COLUMNS`, w), { align: 'center' }),
+		...lines(center(toPrintable(input.restaurantName), w), { align: 'center' }),
+		...lines(center(`TERMINAL ${toPrintable(input.deviceCode)}`, w), { align: 'center' }),
+		...lines(center(formatDateTime(input.now, input.timeZone), w), { align: 'center' }),
+		rule('-', w),
+		line(ruler),
+		rule('-', w),
+		...lines(center('IF YOU CAN READ THIS,', w), { align: 'center' }),
+		...lines(center('PRINTING WORKS', w), { align: 'center' })
+	];
+	return out.map((l) => ({ ...l, text: toPrintable(l.text) }));
+}

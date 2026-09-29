@@ -50,6 +50,7 @@
 		touch
 	} from '$lib/pos/employee.svelte';
 	import { flush, lastSkewMs, onFlushResult, onSkew, parkedCount } from '$lib/pos/queue';
+	import { agentStatus, printerChip, type AgentState } from '$lib/pos/print-client';
 	import { readLocalSession } from '$lib/pos/session';
 
 	let { children } = $props();
@@ -224,6 +225,40 @@
 	});
 	onMount(() => onUnsyncedChange(() => void refreshSession()));
 
+	// THE PRINTER CHIP (menu-and-printing T-29): permanent chrome like the
+	// connection indicator, because a receipt that silently never printed is
+	// found by the customer. The agent is local, so this does not depend on the
+	// internet. Polled at mount, every 30 s and on every navigation (the owner
+	// pairs on /pos/printer and leaves); only the newest read may land. Nothing
+	// is shown before the first read completes.
+	let printer = $state<AgentState | null>(null);
+	let latestPrinterRead = 0;
+	async function refreshPrinter() {
+		const mine = ++latestPrinterRead;
+		try {
+			const state = await agentStatus();
+			if (mine === latestPrinterRead) printer = state;
+		} catch {
+			if (mine === latestPrinterRead) printer = { state: 'unreachable' };
+		}
+	}
+	const printerPill = $derived(printer === null ? null : printerChip(printer));
+	onMount(() => {
+		void refreshPrinter();
+		const every = setInterval(() => void refreshPrinter(), 30_000);
+		const changed = () => void refreshPrinter();
+		addEventListener('matcami:printer-changed', changed);
+		return () => {
+			clearInterval(every);
+			removeEventListener('matcami:printer-changed', changed);
+			latestPrinterRead++;
+		};
+	});
+	$effect(() => {
+		void page.url.pathname;
+		void refreshPrinter();
+	});
+
 	// CLOCK SKEW, measured by the flush from each response's Date header.
 	let skewMs = $state<number | null>(null);
 	const skewMinutes = $derived(
@@ -395,6 +430,17 @@
 								class="min-h-touch-min rounded-control hover:bg-raise-2 flex items-center px-3"
 								>Switch employee</a
 							>
+							{#if signedIn.current.isOwner}
+								<!-- Setup is owner-only, and it is enforced on the device — the only
+								     place printing exists (T-29; /pos/printer says so to anyone else). -->
+								<a
+									href={resolve('/pos/printer')}
+									class="min-h-touch-min rounded-control hover:bg-raise-2 flex items-center gap-2 px-3"
+								>
+									<PosIcon name="printer" class="text-ink-2 size-5" />
+									Printer
+								</a>
+							{/if}
 						</div>
 					</details>
 				{:else}
@@ -459,6 +505,21 @@
 						<span class="bg-st-offline-bg text-st-offline rounded-full px-3 py-1"
 							>◆ Menu update failed — reload the till</span
 						>
+					{/if}
+					{#if printerPill !== null}
+						<span
+							data-testid="printer-chip"
+							class="rounded-full px-3 py-1 font-semibold {printerPill.tone === 'ok'
+								? 'bg-ok-bg text-ok'
+								: printerPill.tone === 'offline'
+									? 'bg-st-offline-bg text-st-offline'
+									: printerPill.tone === 'danger'
+										? 'bg-danger-bg text-danger'
+										: 'bg-raise-2 text-ink-2'}"
+						>
+							<span aria-hidden="true" class="font-mono">{printerPill.glyph}</span>
+							{printerPill.text}
+						</span>
 					{/if}
 				</div>
 			</div>
