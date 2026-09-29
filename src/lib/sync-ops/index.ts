@@ -27,8 +27,11 @@ export const OP_KINDS = [
 ] as const;
 export type OpKind = (typeof OP_KINDS)[number];
 
-/** Order types (spec 13 MVP: dine-in and takeaway; home delivery is later). */
-export const ORDER_TYPES = ['dine_in', 'takeaway'] as const;
+/** Order types: dine-in and takeaway (spec 13) plus delivery — a TAG paid at
+ * the till like takeaway, decided 2026-09-29 as a deliberate departure from
+ * spec 13/31 (CLAUDE.md, decision (a)). Append only: a queued offline sale
+ * carries these strings. */
+export const ORDER_TYPES = ['dine_in', 'takeaway', 'delivery'] as const;
 export type OrderType = (typeof ORDER_TYPES)[number];
 
 /** Tenders (CLAUDE.md decision (b), 2026-09-28). */
