@@ -8,8 +8,7 @@
 // Zero dependencies: node: builtins and sibling files with .ts extensions only,
 // run directly by Node 24's type stripping (only erasable syntax — no enum, no
 // namespace, no parameter properties; tsconfig's erasableSyntaxOnly refuses them
-// first). `run` starts the server (T-25); the queue and the drawer behind it
-// arrive with T-26.
+// first). `run` wires the disk queue, the drawer and the server together.
 import { resolve } from 'node:path';
 import {
 	DEFAULT_AGENT_PORT,
@@ -18,7 +17,8 @@ import {
 	parsePrinterAddress,
 	type AgentConfig
 } from './config.ts';
-import { createAgentServer, listen, type AgentDeps } from './server.ts';
+import { createDrawer, createQueue } from './queue.ts';
+import { createAgentServer, listen } from './server.ts';
 
 const HERE = import.meta.dirname;
 export const DEFAULT_CONFIG_PATH = resolve(HERE, '..', 'config.json');
@@ -113,36 +113,28 @@ export function runInit(flags: Flags): { path: string; config: AgentConfig } {
 	return { path, config };
 }
 
-/**
- * The deps behind the routes. Until T-26 lands the queue and the drawer, a job
- * or a pulse is refused with 500 rather than acknowledged — nothing pretends to
- * have printed — and /status reports both printers unreachable with nothing
- * queued.
- */
-function pendingDeps(config: AgentConfig): AgentDeps {
-	const notWired = () => {
-		throw new Error('print queue not wired (T-26)');
-	};
-	return {
-		submitJob: notWired,
-		pulseDrawer: async () => notWired(),
-		status: async () => ({
-			agentVersion: 1,
-			printers: {
-				receipt: { width: config.printers.receipt.width, reachable: false, queued: 0 },
-				kitchen: config.printers.kitchen
-					? { width: config.printers.kitchen.width, reachable: false, queued: 0 }
-					: null
-			}
-		})
-	};
-}
-
 async function runServer(config: AgentConfig): Promise<void> {
-	const server = createAgentServer(config, pendingDeps(config));
+	const queue = createQueue({ dataDir: config.dataDir, printers: config.printers });
+	const drawer = createDrawer({
+		receipt: config.printers.receipt,
+		seen: queue.seen,
+		log: queue.log
+	});
+	const server = createAgentServer(config, {
+		submitJob: queue.submit,
+		pulseDrawer: drawer.pulse,
+		status: queue.status
+	});
 	const port = await listen(server, config.port);
 	// The URL, never the token.
 	process.stdout.write(`matcami print agent listening on http://127.0.0.1:${port}\n`);
+	const shutdown = () => {
+		queue.close();
+		server.close(() => process.exit(0));
+		setTimeout(() => process.exit(0), 2000).unref();
+	};
+	process.once('SIGINT', shutdown);
+	process.once('SIGTERM', shutdown);
 }
 
 function main(argv: string[]): number {
