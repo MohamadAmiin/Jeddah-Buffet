@@ -4,7 +4,8 @@
 // view). Every query names restaurant_id in its WHERE. Everything is grouped by
 // BUSINESS DATE, never by created_at::date (invariant 11). Nothing recomputes a
 // cost: a movement's cost_minor and the posted journal lines ARE the numbers;
-// the only arithmetic is sum(). bigint sums come back from pg as text (the
+// the only arithmetic in SQL is sum() — every difference and sign change is the
+// money module's subtract / negate (invariant 1). bigint sums come back from pg as text (the
 // client installs no type parsers) and are read with BigInt(), never Number().
 //
 // THE TRIPWIRE. The ingredient caches are a copy of the ledger (invariant 6).
@@ -17,8 +18,8 @@
 // ingredient has no purchase unit.
 import { sql } from 'drizzle-orm';
 import type { Executor } from '../auth/session';
-import { ROUNDING_RULE, minor, subtract, type Minor } from '../../money';
-import { parseQty, qty, type Qty } from '../../money/quantity';
+import { ROUNDING_RULE, minor, negate, subtract, type Minor } from '../../money';
+import { negQty, parseQty, qty, type Qty } from '../../money/quantity';
 import { valueAt } from '../../money/costing';
 
 function big(text: string | null | undefined): bigint {
@@ -123,22 +124,26 @@ export async function reconciliation(
 	executor: Executor,
 	restaurantId: string
 ): Promise<Reconciliation> {
-	const result = await executor.execute<{ stock: string; ledger: string }>(sql`
+	const result = await executor.execute<{ stock: string; debit: string; credit: string }>(sql`
 		select
 			(select coalesce(sum(inventory_value_minor), 0) from ingredients
 			 where restaurant_id = ${restaurantId})::text as stock,
-			(select coalesce(sum(l.debit_minor - l.credit_minor), 0)
+			(select coalesce(sum(l.debit_minor), 0)
 			 from journal_entry_lines l
 			 join accounts a on a.id = l.account_id and a.restaurant_id = l.restaurant_id
-			 where l.restaurant_id = ${restaurantId} and a.code = '1200')::text as ledger
+			 where l.restaurant_id = ${restaurantId} and a.code = '1200')::text as debit,
+			(select coalesce(sum(l.credit_minor), 0)
+			 from journal_entry_lines l
+			 join accounts a on a.id = l.account_id and a.restaurant_id = l.restaurant_id
+			 where l.restaurant_id = ${restaurantId} and a.code = '1200')::text as credit
 	`);
 	const stock = big(result.rows[0].stock);
-	const ledger = big(result.rows[0].ledger);
+	const ledger = subtract(minor(big(result.rows[0].debit)), minor(big(result.rows[0].credit)));
 	const drift = (await currentStock(executor, restaurantId)).filter((r) => r.drift).length;
 	return {
 		stockValueMinor: minor(stock),
-		ledger1200Minor: minor(ledger),
-		differenceMinor: subtract(minor(stock), minor(ledger)),
+		ledger1200Minor: ledger,
+		differenceMinor: subtract(minor(stock), ledger),
 		driftCount: drift
 	};
 }
@@ -236,7 +241,7 @@ export async function consumptionByDate(
 		cost: string;
 	}>(sql`
 		select m.business_date::text as business_date, m.ingredient_id, i.name, i.base_unit,
-		       (-sum(m.qty))::numeric(12,3)::text as qty, (-sum(m.cost_minor))::text as cost
+		       sum(m.qty)::numeric(12,3)::text as qty, sum(m.cost_minor)::text as cost
 		from stock_movements m
 		join ingredients i on i.id = m.ingredient_id and i.restaurant_id = m.restaurant_id
 		where m.restaurant_id = ${restaurantId} and m.movement_type = 'sale_consumption'
@@ -249,8 +254,8 @@ export async function consumptionByDate(
 		ingredientId: r.ingredient_id,
 		name: r.name,
 		baseUnit: r.base_unit,
-		qty: parseQty(r.qty),
-		costMinor: minor(big(r.cost))
+		qty: negQty(parseQty(r.qty)),
+		costMinor: negate(minor(big(r.cost)))
 	}));
 }
 
@@ -286,7 +291,7 @@ export async function wasteByDate(
 	}>(sql`
 		select w.id, w.business_date::text as business_date, w.ingredient_id, i.name, i.base_unit,
 		       w.qty::text as qty, w.reason, w.note,
-		       coalesce((select -sum(m.cost_minor) from stock_movements m
+		       coalesce((select sum(m.cost_minor) from stock_movements m
 		                 where m.restaurant_id = w.restaurant_id and m.source_type = 'waste_entry'
 		                   and m.source_id = w.id), 0)::text as cost
 		from waste_entries w
@@ -303,7 +308,7 @@ export async function wasteByDate(
 		qty: parseQty(r.qty),
 		reason: r.reason,
 		note: r.note,
-		costMinor: minor(big(r.cost))
+		costMinor: negate(minor(big(r.cost)))
 	}));
 }
 
@@ -316,12 +321,18 @@ export async function cogsByDate(
 	from: string,
 	to: string
 ): Promise<CogsRow[]> {
-	const result = await executor.execute<{ business_date: string; cogs: string; reval: string }>(sql`
+	const result = await executor.execute<{
+		business_date: string;
+		cogs_debit: string;
+		cogs_credit: string;
+		reval_debit: string;
+		reval_credit: string;
+	}>(sql`
 		select e.business_date::text as business_date,
-		       coalesce(sum(l.debit_minor - l.credit_minor)
-		                filter (where e.event = 'cost_of_goods_sold'), 0)::text as cogs,
-		       coalesce(sum(l.debit_minor - l.credit_minor)
-		                filter (where e.event = 'inventory_revaluation'), 0)::text as reval
+		       coalesce(sum(l.debit_minor) filter (where e.event = 'cost_of_goods_sold'), 0)::text as cogs_debit,
+		       coalesce(sum(l.credit_minor) filter (where e.event = 'cost_of_goods_sold'), 0)::text as cogs_credit,
+		       coalesce(sum(l.debit_minor) filter (where e.event = 'inventory_revaluation'), 0)::text as reval_debit,
+		       coalesce(sum(l.credit_minor) filter (where e.event = 'inventory_revaluation'), 0)::text as reval_credit
 		from journal_entries e
 		join journal_entry_lines l on l.entry_id = e.id and l.restaurant_id = e.restaurant_id
 		join accounts a on a.id = l.account_id and a.restaurant_id = l.restaurant_id
@@ -333,8 +344,8 @@ export async function cogsByDate(
 	`);
 	return result.rows.map((r) => ({
 		businessDate: r.business_date,
-		cogsMinor: minor(big(r.cogs)),
-		revaluationMinor: minor(big(r.reval))
+		cogsMinor: subtract(minor(big(r.cogs_debit)), minor(big(r.cogs_credit))),
+		revaluationMinor: subtract(minor(big(r.reval_debit)), minor(big(r.reval_credit)))
 	}));
 }
 
@@ -365,7 +376,7 @@ export async function listCounts(
 	}>(sql`
 		select c.id, c.business_date::text as business_date, c.counted_at, c.note,
 		       count(l.id)::int as line_count,
-		       coalesce(-sum(l.cost_minor) filter (where l.cost_minor < 0), 0)::text as shortfall,
+		       coalesce(sum(l.cost_minor) filter (where l.cost_minor < 0), 0)::text as shortfall,
 		       coalesce(sum(l.cost_minor) filter (where l.cost_minor > 0), 0)::text as surplus
 		from stock_counts c
 		left join stock_count_lines l on l.count_id = c.id and l.restaurant_id = c.restaurant_id
@@ -379,7 +390,7 @@ export async function listCounts(
 		countedAt: new Date(r.counted_at),
 		note: r.note,
 		lineCount: r.line_count,
-		shortfallMinor: minor(big(r.shortfall)),
+		shortfallMinor: negate(minor(big(r.shortfall))),
 		surplusMinor: minor(big(r.surplus))
 	}));
 }
