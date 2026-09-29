@@ -128,3 +128,36 @@ describe('the ui/ component boundary', () => {
 		}
 	);
 });
+
+// A markdown code fence pasted into a component's MARKUP is not a comment: Svelte
+// renders it as text, on every page that uses the component. Three primitives
+// shipped that way (Table, SelectField, CheckField), printing ```svelte and ```
+// around every table, select and checkbox. Every .svelte file under src/ is
+// checked, not just ui/ — a fence renders wherever it lands.
+describe('no .svelte file carries a pasted markdown fence', () => {
+	const SRC = fileURLToPath(new URL('../../', import.meta.url));
+	function findSvelte(dir: string, found: string[] = []): string[] {
+		for (const entry of readdirSync(dir)) {
+			const full = join(dir, entry);
+			if (statSync(full).isDirectory()) findSvelte(full, found);
+			else if (entry.endsWith('.svelte')) found.push(full);
+		}
+		return found;
+	}
+	const files = findSvelte(SRC);
+
+	it('finds .svelte files to check at all', () => {
+		expect(files.length).toBeGreaterThan(20);
+	});
+
+	it.each(files.map((file) => [relative(SRC, file), file]))(
+		'%s has no line starting with a markdown fence',
+		(_name, file) => {
+			const fences = readFileSync(file, 'utf8')
+				.split('\n')
+				.map((line, index) => ({ line: line.trimEnd(), number: index + 1 }))
+				.filter(({ line }) => line.startsWith('```'));
+			expect(fences, fences.map((f) => `line ${f.number}: ${f.line}`).join('; ')).toEqual([]);
+		}
+	);
+});
