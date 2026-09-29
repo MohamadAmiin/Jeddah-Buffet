@@ -17,7 +17,7 @@
 // ingredient has no purchase unit.
 import { sql } from 'drizzle-orm';
 import type { Executor } from '../auth/session';
-import { ROUNDING_RULE, minor, type Minor } from '../../money';
+import { ROUNDING_RULE, minor, subtract, type Minor } from '../../money';
 import { parseQty, qty, type Qty } from '../../money/quantity';
 import { valueAt } from '../../money/costing';
 
@@ -138,7 +138,7 @@ export async function reconciliation(
 	return {
 		stockValueMinor: minor(stock),
 		ledger1200Minor: minor(ledger),
-		differenceMinor: minor(stock - ledger),
+		differenceMinor: subtract(minor(stock), minor(ledger)),
 		driftCount: drift
 	};
 }
