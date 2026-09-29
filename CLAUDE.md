@@ -54,7 +54,7 @@ src/
     menu-images.ts  ISOMORPHIC photo limits and URLs (IMAGE_MAX_BYTES, IMAGE_CONTENT_TYPES, tillImageUrl, dashboardImageUrl) — imports nothing
     image-resize.ts browser-only photo resizer for the dashboard's /menu panel (targetSize, resizePhoto); no DOM access at import time
     sync-ops/       index.ts — ISOMORPHIC: op kinds, payloads, status and flag lists, invoice-number format (formatInvoiceNumber, parseInvoiceNumber) — imported by lib/server/**, lib/pos/ and (pos); imports nothing
-    pos/            store.ts (IndexedDB version 3), queue.ts (the flush), invoice-sequence.ts, orders.ts, session.ts, employee.svelte.ts, menu-view.ts, idle.ts, menu-snapshot.ts, photo-warmup.ts (photos into the HTTP cache after a sync), can-print.ts (THE rule for what may print) — and, in a later plan, the print-agent client
+    pos/            store.ts (IndexedDB version 3), queue.ts (the flush), invoice-sequence.ts, orders.ts, session.ts, employee.svelte.ts, menu-view.ts, idle.ts, menu-snapshot.ts, photo-warmup.ts (photos into the HTTP cache after a sync), can-print.ts (THE rule for what may print), receipt.ts (the receipt, kitchen-ticket and test-page formatter — the sale's STORED numbers, printable ASCII only), print-client.ts (the loopback agent client and the pairing settings), printing.ts (what prints when; the drawer rule; recent sales and reprints)
     components/ui/  shared dashboard primitives — Button, Field, CheckField, SelectField, PinField, Table, Card, PageHeader, Alert, StatusMark, ThemeToggle; they implement `docs/design-system.md` §7b
     styles/         tokens.css — THE design tokens; no colour, size or type literal lives anywhere else
   routes/
@@ -64,6 +64,7 @@ src/
     (dashboard)/    owner/admin: menu, purchases, expenses, reports (/reports, /reports/flagged) — online only
     (pos)/pos/      POS shell at the REAL /pos/... URL prefix: PIN login, orders, payment, session open/close — MUST work offline. The group name is not a URL segment; the inner pos/ directory is what creates the path. Client-rendered (+layout.ts: ssr = false) so the ONE cached shell routes by URL on an offline reload
     api/            JSON endpoints: POS sync (/api/pos/sync, one op per request, device + employee checked), menu version/snapshot — no printing endpoint, printing is local
+print-agent/        the local print agent (spec 11): zero-dependency Node 24 TypeScript run directly on the till PC; imports nothing from src/
 ```
 
 Migrations live in `src/lib/server/db/migrations` (point `drizzle.config.ts` there), are COMMITTED, and are NEVER hand-edited once they have run — add a new one instead. A GENERATED migration may be reordered by hand BEFORE its first run, only when drizzle-kit cannot express the change and only with the reason written at the top of the file; the one precedent is 0010's enum rebuild, which must drop and recreate the three users constraints drizzle-kit does not know depend on the type. generate --custom is for DATA (seeds, backfills): its snapshot is a copy of the previous one, so a schema change written that way leaves a drift the next db:generate re-emits.
@@ -111,6 +112,8 @@ pnpm db:generate                          # drizzle-kit — SQL from src/lib/ser
 pnpm db:migrate                           # runs db:backup FIRST, automatically (spec 29), then migrates
 pnpm db:backup                            # pg_dump into backups/ (gitignored)
 pnpm db:studio                            # row editor over the live DB — never edit a posted record
+pnpm print-agent init --origin <url> --receipt <ip> --width <32|48>   # on the till PC: writes print-agent/config.json, prints the pairing token ONCE
+pnpm print-agent run                      # the local print agent on 127.0.0.1 — see print-agent/README.md
 ```
 
 Three pins look wrong and are not: **Node 24.21.0** (`vitest@5` excludes Node 25 outright), **TypeScript 6.0.3** not 7.x (the only version `@sveltejs/kit`, `svelte-check` and `typescript-eslint` all accept), and **`@types/node` 24.13.4** (must match the Node 24 runtime, so neither the `latest` 22.x nor the `ts6.0` tag's 26.x). Every dependency is pinned exactly, with no `^` or `~`. `README.md` has the details.
@@ -126,7 +129,7 @@ Three pins look wrong and are not: **Node 24.21.0** (`vitest@5` excludes Node 25
 - **Clearing account** — 1020 card / 1030 mobile hold funds until they land in 1010 Bank; settlement posts fees to 6400.
 - **Cash Over/Short (6800)** — absorbs the expected-vs-counted cash difference at session close.
 - **Pay-out** — cash out of the drawer at the POS; it becomes an expense entry automatically.
-- **Print agent** — local ESC/POS service owning the printers and drawer; the browser NEVER talks to hardware. Queues jobs while a printer is down; reprints are marked COPY.
+- **Print agent** — local ESC/POS service owning the printers and drawer; the browser NEVER talks to hardware. Bound to 127.0.0.1, answers only the app's origin with a pairing token; queues jobs, never the drawer pulse. Queues jobs while a printer is down; reprints are marked COPY.
 - **Menu version** — integer the POS compares against `/api/menu/version`; on a mismatch it downloads the FULL snapshot and replaces its local copy. No change-only sync.
 - **Sync op** — one queued operation from the till (`session.open`, `session.close`, `sale.complete`, `sale.abandoned`, `pin.login`) in an `OpEnvelope` with a device-generated `clientOpId`; the server keys it on `(device_id, client_op_id)` in `pos_sync_ops` and replays the stored result on a retry. A sync op is a log row, not a posted record: its `status` may move on owner retry or dismiss; the records it produced never do.
 - **Flagged sale (recorded / unrecorded)** — a synced `sale.complete` that failed a check. RECORDED (`recorded_flagged`): a SOFT failure — employee inactive, unknown or not permitted, totals mismatch, stale-menu price, closed session, clock ahead — the sale is stored in full from the device's numbers, posted and invoiced, and the op row carries the flag and the `order_id`. UNRECORDED (`unrecorded`): a HARD failure — invalid payload, price tamper, unknown session, item or modifier, invoice collision, database error — nothing is posted; the payload stays on the op row for the owner's retry or dismiss on `/reports/flagged`, and session close is refused with 409 while one references the session. Never discarded (spec 6).
@@ -199,5 +202,5 @@ Delivery beyond an order-type tag (addresses, drivers, dispatch, delivery fees a
 | Order flow, payment, split/merge bills | `lib/server/orders` | 13, 14 | `order-payment` |
 | IndexedDB, sync queue, idempotency, menu version | `lib/pos` | 4, 5, 6 | `offline-sync` |
 | Who may do what, PIN approval, 403s | `lib/server/permissions` | 7, 8, 9, 14 | `permissions-approvals` |
-| Receipts, kitchen tickets, drawer kick | `lib/pos` print-agent client | 11 | `pos-printing` |
+| Receipts, kitchen tickets, drawer kick | `src/lib/pos/printing.ts` (with `receipt.ts`, `print-client.ts`) and `print-agent/` | 11 | `pos-printing` |
 | Reports, end-of-day, trial balance | `routes/(dashboard)` | 10, 26, 27 | `reporting` |

@@ -162,6 +162,44 @@ everything the application cannot. Treat it as a production database console.
 
 ---
 
+## 7. The print agent on the till PC
+
+Receipts, kitchen tickets and the cash drawer are handled by the **print agent**
+(`print-agent/`, spec 11). It is **not** part of the server deployment: it is not in
+the Docker image and Nginx never proxies to it. It runs on **each till PC**, beside
+the Chrome that shows the till, and listens on `127.0.0.1` only. Install, auto-start
+(systemd or Task Scheduler), pairing and troubleshooting are in
+[`print-agent/README.md`](../print-agent/README.md).
+
+Three things on the server side decide whether printing works:
+
+- **The app's `ORIGIN` must equal the agent's configured origin exactly.** The agent
+  answers only requests whose `Origin` header is the address given to `init --origin`
+  — scheme, host and port. If the app moves to another address, run `init --force` on
+  every till PC with the new one and pair each till again.
+- **HTTPS is required** (section 1). Chrome lets an `https:` page call
+  `http://127.0.0.1` — loopback is a trustworthy origin — and, from Chrome 142, asks
+  the owner once for "local network access" on the first call. That prompt appears
+  during **Printer → Save and test print**, not during a sale.
+- **The printers belong on a staff-only network.** A network ESC/POS printer accepts
+  anything sent to TCP port 9100: whoever can reach that port can print on it and open
+  the drawer without the agent. Guest Wi-Fi must not route to the printers, and they
+  must not be reachable from the internet.
+
+The printing rules the code enforces, for whoever operates the till:
+
+- **Printing never holds up a sale** (invariant 4). A cash sale is complete — `● Paid`
+  — whether or not the agent, the printer or the internet is up; an unprinted receipt is
+  reprinted from **Sales** on the till.
+- **A card or mobile sale prints nothing until the server has confirmed it**
+  (invariant 5, fail closed). Its receipt prints by itself when the confirmation
+  arrives.
+- **The drawer opens once, for a cash sale, within 30 seconds of it** (invariant 9). The
+  pulse is never queued, never retried and never sent by a reprint, so a printer that
+  comes back after an outage prints the waiting receipts and leaves the drawer shut.
+
+---
+
 ## Environment variables
 
 | Variable | Required | Notes |
