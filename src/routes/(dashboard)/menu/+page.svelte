@@ -331,8 +331,12 @@
 		<div bind:this={panel} class="self-start lg:sticky lg:top-6">
 			<Card>
 				{#key editing?.id ?? 'add'}
+					<!-- multipart: the form holds a file input, and SvelteKit's enhance refuses
+					     to submit such a form in dev without it. The photo is still deleted
+					     from the item's FormData in submitItem and uploaded separately. -->
 					<form
 						method="POST"
+						enctype="multipart/form-data"
 						action={mode === 'add' ? '?/createItem' : '?/updateItem'}
 						class="flex flex-col gap-4"
 						use:enhance={submitItem}
