@@ -92,22 +92,48 @@ export function parseOptionalRate(
 	return parsed.success ? { ok: true, value: parsed.data } : { ok: false, message: RATE_MESSAGE };
 }
 
+// 120, not 200: the sale validator caps itemName and modifierName at 120
+// (src/lib/server/orders/validate.ts), so a longer name would make every cash
+// sale of that item a HARD invalid_payload landing `unrecorded`. Control
+// characters are refused for the receipt: an ESC byte in a name could command
+// the printer (tasks/menu-and-printing, risk "bytes that are not text").
+// One rule for categories, items, modifier groups and modifiers alike.
 const name = z
 	.string()
 	.trim()
 	.min(1, 'Enter a name.')
-	.max(200, 'Keep the name under 200 characters.');
+	.max(120, 'Keep the name under 120 characters.')
+	// eslint-disable-next-line no-control-regex -- refusing control characters is the point
+	.refine(
+		(v) => !/[\u0000-\u001f\u007f-\u009f]/.test(v),
+		'Remove the control characters from the name.'
+	);
 const id = z.uuid('That entry no longer exists. Reload the page.');
+/** A blank select value is "No category" (null); anything else must be a uuid. */
+export const optionalCategory = z
+	.string()
+	.trim()
+	.transform((v) => (v === '' ? null : v))
+	.pipe(z.uuid('That category no longer exists. Reload the page.').nullable());
 const choices = z.coerce
 	.number({ error: 'Enter a whole number of choices.' })
 	.int('Enter a whole number of choices.')
 	.min(0, 'Enter a whole number of choices.');
 
 export const createCategorySchema = z.object({ name });
-export const createItemSchema = z.object({ categoryId: id, name, price: z.string() });
-/** A blank price on the edit form keeps the current one. */
-export const updateItemSchema = z.object({ itemId: id, name, price: z.string() });
+export const renameCategorySchema = z.object({ categoryId: id, name });
+export const archiveCategorySchema = z.object({ categoryId: id });
+export const createItemSchema = z.object({ categoryId: optionalCategory, name, price: z.string() });
+/** A blank price on the edit form keeps the current one; a blank category moves the item to none. */
+export const updateItemSchema = z.object({
+	itemId: id,
+	name,
+	price: z.string(),
+	categoryId: optionalCategory
+});
 export const archiveItemSchema = z.object({ itemId: id });
+export const itemIdSchema = z.object({ itemId: id });
+export const availabilitySchema = z.object({ itemId: id, available: z.enum(['yes', 'no']) });
 export const createModifierGroupSchema = z
 	.object({ name, minSelect: choices, maxSelect: choices })
 	.refine((group) => group.maxSelect >= group.minSelect, {

@@ -4,6 +4,7 @@ import { requirePermission } from '$lib/server/permissions';
 import { requestContext } from '$lib/server/audit';
 import { getRestaurantWithSettings } from '$lib/server/restaurants';
 import {
+	archiveCategory,
 	archiveItem,
 	createCategory,
 	createItem,
@@ -11,22 +12,32 @@ import {
 	createModifierGroup,
 	linkModifierGroup,
 	listMenu,
+	removeItemImage,
+	setItemAvailability,
+	setItemImage,
 	unlinkModifierGroup,
+	updateCategory,
 	updateItem
 } from '$lib/server/menu';
+import { sniffImageType } from '$lib/server/menu/images';
+import { IMAGE_MAX_BYTES, dashboardImageUrl } from '$lib/menu-images';
 import { minor, toBigInt } from '$lib/money';
 import { formatAmount, moneyFormatFor, type MoneyFormat } from '$lib/money/format';
 import {
+	archiveCategorySchema,
 	archiveItemSchema,
+	availabilitySchema,
 	createCategorySchema,
 	createItemSchema,
 	createModifierGroupSchema,
 	createModifierSchema,
 	firstMessage,
 	formatTaxRate,
+	itemIdSchema,
 	linkSchema,
 	parseOptionalRate,
 	parsePriceInput,
+	renameCategorySchema,
 	updateItemSchema
 } from './helpers';
 
@@ -78,10 +89,16 @@ export const load: ServerLoad = async (event) => {
 	const menu = await listMenu(db, restaurantId);
 	const amount = (value: bigint) => (format ? formatAmount(minor(value), format) : null);
 
-	// AN EXPLICIT LITERAL: every amount is the formatter's string, every rate a label.
+	// AN EXPLICIT LITERAL: every amount is the formatter's string, every rate a label,
+	// every photo a URL (the bytes are served by /menu/images/[id]).
 	return {
 		currency: format ? { code: format.code, exponent: format.exponent } : null,
-		categories: menu.categories.map((category) => ({ id: category.id, name: category.name })),
+		categories: menu.categories.map((category) => ({
+			id: category.id,
+			name: category.name,
+			itemCount: menu.items.filter((item) => item.categoryId === category.id).length
+		})),
+		uncategorisedCount: menu.items.filter((item) => item.categoryId === null).length,
 		items: menu.items.map((item) => ({
 			id: item.id,
 			categoryId: item.categoryId,
@@ -90,6 +107,7 @@ export const load: ServerLoad = async (event) => {
 			taxRate: formatTaxRate(item.taxRateBp),
 			taxRateBp: item.taxRateBp,
 			isAvailable: item.isAvailable,
+			imageUrl: item.imageId ? dashboardImageUrl(item.imageId) : null,
 			groupIds: menu.links
 				.filter((link) => link.menuItemId === item.id)
 				.map((link) => link.modifierGroupId)
@@ -151,6 +169,7 @@ export const actions: Actions = {
 
 		const result = await db.transaction((tx) =>
 			createItem(tx, restaurantId, {
+				// null = no category (the till's "Other" tab).
 				categoryId: parsed.data.categoryId,
 				name: parsed.data.name,
 				priceMinor: toBigInt(price.minor),
@@ -158,7 +177,8 @@ export const actions: Actions = {
 			})
 		);
 		if (!result.ok) return fail(400, { message: 'That category no longer exists.' });
-		return { message: `${parsed.data.name} added.` };
+		// The id lets the panel upload the photo in its own request, after the item exists.
+		return { message: `${parsed.data.name} added.`, itemId: result.id };
 	},
 
 	updateItem: async (event) => {
@@ -170,7 +190,8 @@ export const actions: Actions = {
 		const parsed = updateItemSchema.safeParse({
 			itemId: form.get('itemId') ?? '',
 			name: form.get('name') ?? '',
-			price: form.get('price') ?? ''
+			price: form.get('price') ?? '',
+			categoryId: form.get('categoryId') ?? ''
 		});
 		if (!parsed.success) return fail(400, { message: firstMessage(parsed.error) });
 		// A blank price keeps the current one.
@@ -190,7 +211,13 @@ export const actions: Actions = {
 				tx,
 				restaurantId,
 				parsed.data.itemId,
-				{ name: parsed.data.name, priceMinor, taxRateBp: rate.value },
+				// categoryId null moves the item to "No category".
+				{
+					name: parsed.data.name,
+					priceMinor,
+					taxRateBp: rate.value,
+					categoryId: parsed.data.categoryId
+				},
 				{ actorUserId: user.userId, ip, userAgent }
 			)
 		);
@@ -295,5 +322,118 @@ export const actions: Actions = {
 			unlinkModifierGroup(tx, restaurantId, parsed.data.itemId, parsed.data.groupId)
 		);
 		return { message: result.changed ? 'Modifier group detached.' : 'It was not attached.' };
+	},
+
+	// ── menu-and-printing T-11: the five actions the module had and the page lacked.
+	// None involves a price, so none is gated on the currency; each still checks
+	// admin.menu itself (invariant 8) and scopes by the session's restaurant.
+
+	renameCategory: async (event) => {
+		requirePermission(event, 'admin.menu');
+		const { restaurantId } = await menuScope(event.locals);
+
+		const form = await event.request.formData();
+		const parsed = renameCategorySchema.safeParse({
+			categoryId: form.get('categoryId') ?? '',
+			name: form.get('name') ?? ''
+		});
+		if (!parsed.success) return fail(400, { message: firstMessage(parsed.error) });
+
+		try {
+			const result = await db.transaction((tx) =>
+				updateCategory(tx, restaurantId, parsed.data.categoryId, { name: parsed.data.name })
+			);
+			if (!result.ok) return fail(400, { message: 'That category no longer exists.' });
+			return { message: result.changed ? 'Renamed.' : 'No change to save.' };
+		} catch (thrown) {
+			if (isUniqueViolation(thrown)) {
+				return fail(400, { message: 'A category with that name already exists.' });
+			}
+			throw thrown;
+		}
+	},
+
+	archiveCategory: async (event) => {
+		requirePermission(event, 'admin.menu');
+		const { restaurantId } = await menuScope(event.locals);
+
+		const form = await event.request.formData();
+		const parsed = archiveCategorySchema.safeParse({ categoryId: form.get('categoryId') ?? '' });
+		if (!parsed.success) return fail(400, { message: firstMessage(parsed.error) });
+
+		// ARCHIVE, never delete; its live items move to "No category" in the same
+		// transaction and version bump (CLAUDE.md, the gate defaults of 2026-09-29).
+		const result = await db.transaction((tx) =>
+			archiveCategory(tx, restaurantId, parsed.data.categoryId)
+		);
+		if (!result.ok) return fail(400, { message: 'That category no longer exists.' });
+		return { message: `Archived. ${result.movedItems} item(s) moved to No category.` };
+	},
+
+	setAvailability: async (event) => {
+		requirePermission(event, 'admin.menu');
+		const { restaurantId } = await menuScope(event.locals);
+
+		const form = await event.request.formData();
+		const parsed = availabilitySchema.safeParse({
+			itemId: form.get('itemId') ?? '',
+			available: form.get('available') ?? ''
+		});
+		if (!parsed.success) return fail(400, { message: firstMessage(parsed.error) });
+
+		const available = parsed.data.available === 'yes';
+		const result = await db.transaction((tx) =>
+			setItemAvailability(tx, restaurantId, parsed.data.itemId, available)
+		);
+		if (!result.ok) return fail(400, { message: 'That item no longer exists.' });
+		if (!result.changed) return { message: 'No change to save.' };
+		return { message: available ? 'Marked available.' : 'Marked sold out.' };
+	},
+
+	// multipart: the panel sends the photo in its OWN request, after the item is
+	// saved, so a refused photo never loses the typed name and price. The browser
+	// resized it (src/lib/image-resize.ts); this action trusts nothing about that.
+	setImage: async (event) => {
+		requirePermission(event, 'admin.menu');
+		const { restaurantId } = await menuScope(event.locals);
+
+		const form = await event.request.formData();
+		const parsed = itemIdSchema.safeParse({ itemId: form.get('itemId') ?? '' });
+		if (!parsed.success) return fail(400, { message: firstMessage(parsed.error) });
+		const file = form.get('image');
+		// File.size is a byte count, not money: compared directly.
+		if (!(file instanceof File) || file.size === 0) {
+			return fail(400, { message: 'Choose a photo.' });
+		}
+		if (file.size > IMAGE_MAX_BYTES) {
+			return fail(400, {
+				message: 'The photo is still larger than 400 KB after resizing. Try another photo.'
+			});
+		}
+		const bytes = new Uint8Array(await file.arrayBuffer());
+		// The type is what the bytes SAY, never what the browser declared.
+		const contentType = sniffImageType(bytes);
+		if (contentType === null) return fail(400, { message: 'Use a JPEG, PNG or WebP photo.' });
+
+		const result = await db.transaction((tx) =>
+			setItemImage(tx, restaurantId, parsed.data.itemId, { bytes, contentType })
+		);
+		if (!result.ok) return fail(400, { message: 'That item no longer exists.' });
+		return { message: 'Photo saved.', imageId: result.imageId };
+	},
+
+	removeImage: async (event) => {
+		requirePermission(event, 'admin.menu');
+		const { restaurantId } = await menuScope(event.locals);
+
+		const form = await event.request.formData();
+		const parsed = itemIdSchema.safeParse({ itemId: form.get('itemId') ?? '' });
+		if (!parsed.success) return fail(400, { message: firstMessage(parsed.error) });
+
+		const result = await db.transaction((tx) =>
+			removeItemImage(tx, restaurantId, parsed.data.itemId)
+		);
+		if (!result.ok) return fail(400, { message: 'That item no longer exists.' });
+		return { message: result.changed ? 'Photo removed.' : 'There was no photo.' };
 	}
 };
