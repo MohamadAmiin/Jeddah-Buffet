@@ -1,0 +1,19 @@
+# Every text file is LF in the repository AND in the working tree, on every
+# platform. Prettier (endOfLine: lf) checks the working tree, so without this a
+# Windows checkout with core.autocrlf=true gets CRLF files and `pnpm lint` fails
+# on every one of them.
+* text=auto eol=lf
+
+# Binary, never converted.
+*.pdf binary
+*.zip binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary

@@ -132,3 +132,49 @@ describe('SIGNUP, the operator switch for public sign-up', () => {
 		await expect(loadEnv()).rejects.toThrow(/SIGNUP/);
 	});
 });
+
+// LOGIN_THROTTLE_CAPACITY loosens the password-login throttle for the local e2e
+// journey only. It must never be able to loosen a real deployment.
+describe('env.ts LOGIN_THROTTLE_CAPACITY', () => {
+	it('is undefined when unset, so the real limit applies', async () => {
+		process.env.NODE_ENV = 'development';
+		delete process.env.LOGIN_THROTTLE_CAPACITY;
+
+		expect((await loadEnv()).LOGIN_THROTTLE_CAPACITY).toBeUndefined();
+	});
+
+	it('is accepted on a loopback ORIGIN, as the Playwright server sets it', async () => {
+		process.env.NODE_ENV = 'production';
+		process.env.ORIGIN = 'http://localhost:4173';
+		process.env.LOGIN_THROTTLE_CAPACITY = '100';
+
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		expect((await loadEnv()).LOGIN_THROTTLE_CAPACITY).toBe(100);
+		warn.mockRestore();
+	});
+
+	it('refuses to start on a real https ORIGIN, naming the variable', async () => {
+		process.env.NODE_ENV = 'production';
+		process.env.ORIGIN = 'https://pos.example.com';
+		process.env.ADDRESS_HEADER = 'x-forwarded-for';
+		process.env.LOGIN_THROTTLE_CAPACITY = '100';
+
+		await expect(loadEnv()).rejects.toThrow(/LOGIN_THROTTLE_CAPACITY/);
+	});
+
+	it('refuses to start with no ORIGIN at all, in development too', async () => {
+		process.env.NODE_ENV = 'development';
+		delete process.env.ORIGIN;
+		process.env.LOGIN_THROTTLE_CAPACITY = '100';
+
+		await expect(loadEnv()).rejects.toThrow(/LOGIN_THROTTLE_CAPACITY/);
+	});
+
+	it.each(['0', '-5', '1.5', 'lots', '10e3'])('refuses the value %s', async (value) => {
+		process.env.NODE_ENV = 'development';
+		process.env.ORIGIN = 'http://localhost:5173';
+		process.env.LOGIN_THROTTLE_CAPACITY = value;
+
+		await expect(loadEnv()).rejects.toThrow(/whole number/);
+	});
+});

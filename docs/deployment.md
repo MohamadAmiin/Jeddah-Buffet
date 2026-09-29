@@ -169,6 +169,7 @@ everything the application cannot. Treat it as a production database console.
 | `ADDRESS_HEADER` | production | `x-forwarded-for`. The app refuses to start without it, except on a localhost `ORIGIN`. |
 | `XFF_DEPTH` | behind a proxy | `1` for a single proxy. |
 | `SIGNUP` | optional | `open` (the default when unset) or `closed`. Anything else stops the app at boot. |
+| `LOGIN_THROTTLE_CAPACITY` | e2e only | Leave unset. Raises the per-address login throttle for the local Playwright journey; the app refuses to start with it on a non-localhost `ORIGIN`. |
 
 **One open question, recorded rather than decided.** `env.ts` currently *requires*
 `MIGRATE_DATABASE_URL` at application startup, which puts the **owner** credential
