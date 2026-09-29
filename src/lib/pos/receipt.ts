@@ -179,15 +179,23 @@ function center(text: string, width: number): string[] {
 	});
 }
 
+/** The fewest columns a label keeps beside a right-hand value before the value moves down. */
+const MIN_LABEL_ROOM = 8;
+
 /**
  * `left` on the left, `right` right-aligned to column `width`, on the FIRST line;
  * a left text too long for the room wraps onto continuation lines (prefixed by
- * `indent`) so the right side is never cut.
+ * `indent`) so the right side is never cut. A right text that leaves the label
+ * fewer than MIN_LABEL_ROOM columns — a long cashier name on 32 columns — goes
+ * on its own right-aligned line(s) under the label instead: no line is ever
+ * wider than `width`, whatever the inputs (the agent refuses a wider line).
  */
 function pair(left: string, right: string, width: number, indent = ''): string[] {
 	const room = width - right.length - 1;
-	const lines = room > 0 ? wrap(left, room, indent) : wrap(left, width, indent);
-	const [first = '', ...rest] = lines;
+	if (room < MIN_LABEL_ROOM) {
+		return [...wrap(left, width, indent), ...wrap(right, width).map((l) => l.padStart(width))];
+	}
+	const [first = '', ...rest] = wrap(left, room, indent);
 	return [first.padEnd(width - right.length) + right, ...rest];
 }
 

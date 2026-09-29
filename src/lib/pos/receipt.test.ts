@@ -299,18 +299,60 @@ describe('widths — 32 and 48, hostile input', () => {
 		note: 'no onions please, and pack the sauce separately because the guest is allergic'
 	});
 
+	// The right-hand column is free text too: an employee's display name is up to
+	// 200 characters (employees/+page.server.ts), and it lands on the receipt as
+	// the cashier and as the reprinter. Every combination must stay inside the width.
+	const LONG_NAME = 'Abdirahman Mohamed Abdullahi Hassan Ali Warsame Farah Nur Cabdi Xasan Yuusuf';
+	const names = ['Amina', 'Farhiya Abdullahi Yusuf', LONG_NAME, 'X'.repeat(200)];
+
 	it.each([32, 48] as const)('every line fits width %i and is printable ASCII', (width) => {
 		for (const render of [renderReceipt, renderKitchenTicket]) {
-			for (const copy of [undefined, { reprintedAt: '2026-09-14T17:05:00Z', by: 'Amina' }]) {
-				const lines = render(input(hostile), { width, copy });
-				expect(lines.length).toBeGreaterThan(5);
-				for (const l of lines) {
-					const max = l.size === 'double' ? Math.floor(width / 2) : width;
-					expect(l.text.length, l.text).toBeLessThanOrEqual(max);
-					expect(l.text, l.text).toMatch(/^[\x20-\x7e]*$/);
+			for (const cashierName of names) {
+				for (const by of [undefined, ...names]) {
+					const copy = by === undefined ? undefined : { reprintedAt: '2026-09-14T17:05:00Z', by };
+					const lines = render(input({ ...hostile, cashierName }), { width, copy });
+					expect(lines.length).toBeGreaterThan(5);
+					for (const l of lines) {
+						const max = l.size === 'double' ? Math.floor(width / 2) : width;
+						expect(
+							l.text.length,
+							`${width}/${cashierName.length}/${by?.length}: ${l.text}`
+						).toBeLessThanOrEqual(max);
+						expect(l.text, l.text).toMatch(/^[\x20-\x7e]*$/);
+					}
 				}
 			}
 		}
+	});
+
+	it('a long cashier name moves to its own right-aligned line and no label is ever split', () => {
+		const name = 'Farhiya Abdullahi Yusuf';
+		// Dine-in: the table label keeps its line; "Cashier <name>" (31 chars) goes below it, right-aligned.
+		const dineIn = text(renderReceipt(input({ ...hostile, cashierName: name }), { width: 32 }));
+		expect(dineIn).toContain(`Cashier ${name}`.padStart(32));
+		expect(dineIn.some((l) => l.startsWith('Table Window seat'))).toBe(true);
+		// Takeaway, 23 characters: the label still shares the line (8 columns are left for it).
+		const takeaway = (cashierName: string) =>
+			text(
+				renderReceipt(
+					input({
+						...hostile,
+						cashierName,
+						payload: { ...hostile.payload, orderType: 'takeaway', tableLabel: null }
+					}),
+					{ width: 32 }
+				)
+			);
+		expect(takeaway(name)).toContain(`Cashier  ${name}`);
+		// Takeaway, 28 characters: the bare label on its own line, the name right-aligned under it.
+		const longer = 'Mohamed Abdullahi Hassan Ali';
+		const lines = takeaway(longer);
+		const at = lines.indexOf('Cashier');
+		expect(at).toBeGreaterThan(-1);
+		expect(lines[at + 1]).toBe(longer.padStart(32));
+		expect(lines.some((l) => /^Cas\b/.test(l) || /^hie/.test(l))).toBe(false);
+		// A short name shares the label's line as before.
+		expect(takeaway('Amina').some((l) => /^Cashier\s+Amina$/.test(l))).toBe(true);
 	});
 
 	it('a 40-character table label still keeps the cashier on the paper', () => {
