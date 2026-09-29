@@ -6,12 +6,20 @@ import { getRestaurantWithSettings } from '$lib/server/restaurants';
 import { defaultReportDate, salesReport } from '$lib/server/reports/sales';
 import type { Minor } from '$lib/money';
 import { formatAmount, formatMoney, moneyFormatFor, type MoneyFormat } from '$lib/money/format';
+import type { OrderType } from '$lib/sync-ops';
 
 // The LOAD formats; the page does no money work. Every amount leaves here as the
 // money formatter's string, and a negative difference carries its sign as a
 // boolean from a comparison, so the page never inspects a number (invariants 1, 7).
 
 const TENDER_LABELS = { cash: 'Cash', card: 'Card', mobile: 'Mobile' } as const;
+// A Record over the wire contract's type: a fourth order type with no label here
+// fails to compile, instead of being mislabelled as the "other" one.
+const ORDER_TYPE_LABELS: Record<OrderType, string> = {
+	dine_in: 'Dine-in',
+	takeaway: 'Takeaway',
+	delivery: 'Delivery'
+};
 
 function isCalendarDate(value: string): boolean {
 	const [y, m, d] = value.split('-').map(Number);
@@ -97,7 +105,7 @@ export const load: ServerLoad = async (event) => {
 		})),
 		byOrderType: report.byOrderType.map((r) => ({
 			orderType: r.orderType,
-			label: r.orderType === 'dine_in' ? 'Dine-in' : 'Takeaway',
+			label: ORDER_TYPE_LABELS[r.orderType],
 			count: r.count,
 			amount: column(r.amount)
 		})),
