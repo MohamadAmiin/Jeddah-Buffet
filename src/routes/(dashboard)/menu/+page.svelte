@@ -30,6 +30,11 @@
 	// A native <select> styled like Field's control (border-control-line: a control
 	// edge, never the decorative border-line).
 	const selectClass = 'border-control-line bg-bg text-ink rounded-control border px-3 py-2';
+
+	// The recipe editor for one item or modifier (tasks/inventory-cogs T-34).
+	function recipeHref(kind: 'item' | 'modifier', id: string): string {
+		return resolve('/inventory/recipes') + '?' + new URLSearchParams({ [kind]: id }).toString();
+	}
 </script>
 
 <svelte:head>
@@ -80,6 +85,36 @@
 									<span class="text-ink text-right font-mono tabular-nums">
 										{item.price ?? '—'}
 									</span>
+								</div>
+								<!-- Cost and margin are READ-ONLY here: the recipe's cost at the stock
+								     book's current averages, and the price net of tax minus it. -->
+								<div class="text-ink-2 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm">
+									<span>
+										Cost
+										<span
+											class={`font-mono tabular-nums ${item.cost?.negative ? 'text-danger' : 'text-ink'}`}
+										>
+											{item.cost ? (item.cost.text ?? '—') : '—'}
+										</span>
+									</span>
+									<span>
+										Margin
+										{#if item.margin?.unset}
+											<span class="text-ink-2">Set the tax mode in Settings</span>
+										{:else}
+											<span
+												class={`font-mono tabular-nums ${item.margin?.negative ? 'text-danger' : 'text-ink'}`}
+											>
+												{item.margin ? (item.margin.text ?? '—') : '—'}
+											</span>
+										{/if}
+									</span>
+									{#if !item.cost}
+										<span class="text-ink-2">No recipe yet</span>
+									{/if}
+									<!-- eslint-disable svelte/no-navigation-without-resolve -- the path IS resolve()d; the rule only accepts a bare resolve() call, and the owner id has to travel as a query string -->
+									<a class="text-ink underline" href={recipeHref('item', item.id)}>Edit recipe</a>
+									<!-- eslint-enable svelte/no-navigation-without-resolve -->
 								</div>
 								{#if item.groupIds.length > 0}
 									<ul class="flex flex-wrap gap-2">
@@ -242,6 +277,19 @@
 								>
 									{modifier.delta ?? '—'}
 								</span>
+								<span class="text-ink-2 text-sm">
+									Cost
+									<span
+										class={`font-mono tabular-nums ${modifier.cost?.negative ? 'text-danger' : 'text-ink'}`}
+									>
+										{modifier.cost ? (modifier.cost.text ?? '—') : '—'}
+									</span>
+								</span>
+								<!-- eslint-disable svelte/no-navigation-without-resolve -- the path IS resolve()d; the rule only accepts a bare resolve() call, and the owner id has to travel as a query string -->
+								<a class="text-ink text-sm underline" href={recipeHref('modifier', modifier.id)}>
+									Edit recipe
+								</a>
+								<!-- eslint-enable svelte/no-navigation-without-resolve -->
 							</li>
 						{/each}
 					</ul>

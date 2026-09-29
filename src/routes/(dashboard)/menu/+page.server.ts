@@ -14,7 +14,9 @@ import {
 	unlinkModifierGroup,
 	updateItem
 } from '$lib/server/menu';
-import { minor, toBigInt } from '$lib/money';
+import { ROUNDING_RULE, minor, toBigInt } from '$lib/money';
+import { dishMargin } from '$lib/money/costing';
+import { recipeCosts } from '$lib/server/inventory';
 import { formatAmount, moneyFormatFor, type MoneyFormat } from '$lib/money/format';
 import {
 	archiveItemSchema,
@@ -63,7 +65,12 @@ async function menuScope(locals: App.Locals) {
 			error(500, 'The stored currency cannot be formatted');
 		}
 	}
-	return { restaurantId, format };
+	return {
+		restaurantId,
+		format,
+		taxMode: restaurant.taxMode,
+		taxRateBp: restaurant.taxRateBp
+	};
 }
 
 /** A duplicate live category name reaches us as the partial unique index's 23505. */
@@ -74,9 +81,31 @@ function isUniqueViolation(thrown: unknown): boolean {
 
 export const load: ServerLoad = async (event) => {
 	requirePermission(event, 'admin.menu');
-	const { restaurantId, format } = await menuScope(event.locals);
+	const { restaurantId, format, taxMode, taxRateBp } = await menuScope(event.locals);
 	const menu = await listMenu(db, restaurantId);
 	const amount = (value: bigint) => (format ? formatAmount(minor(value), format) : null);
+
+	// COST AND MARGIN (tasks/inventory-cogs T-34), read-only: the recipe's cost at
+	// the ledger's current averages, from a SEPARATE reader — listMenu and the POS
+	// snapshot never carry a cost. The cost and the net price are each rounded
+	// once by dishMargin, and the margin is their difference (invariant 7). With no
+	// tax mode or rate set the margin cannot be known, and the page says why.
+	const costs = await recipeCosts(db, restaurantId);
+	const costOf = (id: string) => {
+		const cost = costs.get(id);
+		return cost ? { text: amount(cost.costMinor), negative: cost.costMinor < 0n } : null;
+	};
+	const marginOf = (item: { id: string; priceMinor: bigint; taxRateBp: number | null }) => {
+		const cost = costs.get(item.id);
+		const rate = item.taxRateBp ?? taxRateBp;
+		if (!cost) return null;
+		if (taxMode === null || rate === null) return { text: null, negative: false, unset: true };
+		const m = dishMargin(
+			{ priceMinor: minor(item.priceMinor), taxRateBp: rate, taxMode, costExact: cost.costExact },
+			ROUNDING_RULE
+		);
+		return { text: amount(m.marginMinor), negative: m.marginMinor < 0n, unset: false };
+	};
 
 	// AN EXPLICIT LITERAL: every amount is the formatter's string, every rate a label.
 	return {
@@ -90,6 +119,8 @@ export const load: ServerLoad = async (event) => {
 			taxRate: formatTaxRate(item.taxRateBp),
 			taxRateBp: item.taxRateBp,
 			isAvailable: item.isAvailable,
+			cost: costOf(item.id),
+			margin: marginOf(item),
 			groupIds: menu.links
 				.filter((link) => link.menuItemId === item.id)
 				.map((link) => link.modifierGroupId)
@@ -105,7 +136,8 @@ export const load: ServerLoad = async (event) => {
 					id: modifier.id,
 					name: modifier.name,
 					delta: amount(modifier.priceDeltaMinor),
-					negative: modifier.priceDeltaMinor < 0n
+					negative: modifier.priceDeltaMinor < 0n,
+					cost: costOf(modifier.id)
 				}))
 		}))
 	};
