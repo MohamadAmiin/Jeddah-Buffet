@@ -5,6 +5,7 @@
 	// that differs from its movements shows ✕ and the words.
 	import { enhance } from '$app/forms';
 	import { page } from '$app/state';
+	import { resolve } from '$app/paths';
 	import { Alert, Button, Card, Field, PageHeader, Table } from '$lib/components/ui';
 
 	let { data, form } = $props();
@@ -29,7 +30,17 @@
 	eyebrow="Catalogue"
 	title="Inventory"
 	description="What is on the shelf and what it is worth, from the stock book. Every delivery, sale, waste entry and count moves it; nothing is typed over."
-/>
+>
+	{#snippet actions()}
+		<nav class="flex flex-wrap gap-2" aria-label="Inventory sections">
+			<Button variant="secondary" href={resolve('/inventory/recipes')}>Recipes</Button>
+			<Button variant="secondary" href={resolve('/purchases')}>Deliveries</Button>
+			<Button variant="secondary" href={resolve('/inventory/waste')}>Waste</Button>
+			<Button variant="secondary" href={resolve('/inventory/counts')}>Counts</Button>
+			<Button variant="secondary" href={resolve('/inventory/reports')}>Reports</Button>
+		</nav>
+	{/snippet}
+</PageHeader>
 
 <div class="flex flex-col gap-5 px-4 pt-8 pb-16 lg:px-7">
 	{#if form?.message}
@@ -60,9 +71,12 @@
 			>
 				{#snippet cell(row, key)}
 					{#if key === 'name'}
-						<span class={`font-medium ${row.archived ? 'text-ink-2' : 'text-ink'}`}>
+						<a
+							class={`font-medium underline-offset-2 hover:underline ${row.archived ? 'text-ink-2' : 'text-ink'}`}
+							href={resolve(`/inventory/${row.id}`)}
+						>
 							{row.name}{row.archived ? ' (archived)' : ''}
-						</span>
+						</a>
 					{:else if key === 'onHand'}
 						<span class={row.negative ? 'text-danger' : 'text-ink'}>{row.onHand}</span>
 					{:else if key === 'perUnit'}
