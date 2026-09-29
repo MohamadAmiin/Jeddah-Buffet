@@ -57,18 +57,19 @@ export default ts.config(
 		}
 	},
 
-	// src/lib/money and src/lib/sync-ops are ISOMORPHIC: the server, lib/pos and
-	// the (pos) routes all import them, so they must import nothing from
-	// lib/server. The pattern list is copied verbatim from the (pos) block above
-	// rather than invented anew. None of those patterns matches $lib/money or
-	// $lib/sync-ops, which is why lib/pos and the (pos) routes may import both
-	// with no allowance — do not add one, and do not add either module to the
-	// (pos) restriction: those imports are the whole point. The finer rule —
-	// $lib/sync-ops imports NOTHING at all, no sibling and no $lib/* — is
-	// enforced by the source-text test in src/lib/sync-ops/index.test.ts, the
-	// same division of labour src/lib/money uses.
+	// src/lib/money, src/lib/sync-ops and src/lib/menu-images.ts are ISOMORPHIC:
+	// the server, lib/pos and the (pos) routes all import them, so they must
+	// import nothing from lib/server. The pattern list is copied verbatim from
+	// the (pos) block above rather than invented anew. None of those patterns
+	// matches $lib/money, $lib/sync-ops or $lib/menu-images, which is why lib/pos
+	// and the (pos) routes may import them with no allowance — do not add one,
+	// and do not add any of them to the (pos) restriction: those imports are the
+	// whole point. The finer rule — $lib/sync-ops and $lib/menu-images import
+	// NOTHING at all, no sibling and no $lib/* — is enforced by the source-text
+	// tests in src/lib/sync-ops/index.test.ts and src/lib/menu-images.test.ts,
+	// the same division of labour src/lib/money uses.
 	{
-		files: ['src/lib/money/**/*.ts', 'src/lib/sync-ops/**/*.ts'],
+		files: ['src/lib/money/**/*.ts', 'src/lib/sync-ops/**/*.ts', 'src/lib/menu-images.ts'],
 		rules: {
 			'no-restricted-imports': [
 				'error',
