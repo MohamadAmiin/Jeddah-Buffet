@@ -5,7 +5,7 @@
 	"start_url": "/pos",
 	"display": "fullscreen",
 	"orientation": "landscape",
-	"background_color": "#e4e9ee",
-	"theme_color": "#e4e9ee",
+	"background_color": "#eef3f2",
+	"theme_color": "#eef3f2",
 	"icons": [{ "src": "/pos-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
 }

@@ -32,6 +32,7 @@
 		type MenuGroup,
 		type MenuItem
 	} from '$lib/pos/menu-view';
+	import PosIcon from '$lib/components/pos/PosIcon.svelte';
 
 	const restored = getContext<Promise<void>>(RESTORED_CONTEXT) ?? Promise.resolve();
 
@@ -248,311 +249,425 @@
 		void goto(resolve('/pos/pay'));
 	}
 
-	const segmentClass = (on: boolean) =>
-		`min-h-touch-min border border-control-line rounded-control px-4 text-pos ${
-			on ? 'bg-accent text-accent-ink' : 'bg-raise text-ink'
+	// Every pressable surface keeps a border-control-line edge (a white card on the
+	// till ground is not a boundary on its own); the selected one takes the accent.
+	const choiceClass = (on: boolean) =>
+		`border rounded-card flex items-center gap-3 px-4 text-left font-semibold text-pos ${
+			on ? 'bg-accent text-accent-ink border-accent' : 'bg-raise text-ink border-control-line'
+		}`;
+	const pillClass = (on: boolean) =>
+		`min-h-touch-min border rounded-full px-5 font-semibold ${
+			on ? 'bg-accent text-accent-ink border-accent' : 'bg-raise text-ink border-control-line'
 		}`;
 	const lineKey =
-		'min-h-touch-min min-w-touch-min border border-control-line rounded-control bg-raise text-ink px-3';
+		'min-h-touch-min min-w-touch-min border border-control-line rounded-control bg-raise text-ink px-3 whitespace-nowrap';
+	const segments: { id: Segment; label: string; icon: 'table' | 'clock' | 'bag' }[] = [
+		{ id: 'sit', label: 'Sit now', icon: 'table' },
+		{ id: 'waiting', label: 'Waiting for a table', icon: 'clock' },
+		{ id: 'takeaway', label: 'Takeaway', icon: 'bag' }
+	];
 </script>
 
 <svelte:head><title>Order · matcami</title></svelte:head>
 
-<main class="text-pos flex flex-col gap-4 overflow-x-hidden px-4 py-4 md:flex-row md:items-start">
-	<section aria-label="Order entry" class="flex min-w-0 flex-1 flex-col gap-4">
-		<div class="flex flex-col gap-2">
-			<h3 id="ordertype-label" class="text-section text-ink">Order type</h3>
-			<div role="group" aria-labelledby="ordertype-label" class="flex flex-wrap gap-2">
-				<button
-					type="button"
-					aria-pressed={segment === 'sit'}
-					class={segmentClass(segment === 'sit')}
-					onclick={() => chooseSegment('sit')}>Sit now</button
-				>
-				<button
-					type="button"
-					aria-pressed={segment === 'waiting'}
-					class={segmentClass(segment === 'waiting')}
-					onclick={() => chooseSegment('waiting')}>Waiting for a table</button
-				>
-				<button
-					type="button"
-					aria-pressed={segment === 'takeaway'}
-					class={segmentClass(segment === 'takeaway')}
-					onclick={() => chooseSegment('takeaway')}>Takeaway</button
-				>
+<main
+	class="text-pos flex flex-col gap-4 overflow-x-hidden p-4 md:flex-row md:items-stretch lg:px-6"
+>
+	<section
+		aria-label="Order entry"
+		class="bg-raise border-line rounded-card shadow-flat flex min-w-0 flex-1 flex-col gap-6 border p-5"
+	>
+		<div class="flex flex-col gap-3">
+			<h3 id="ordertype-label" class="text-section text-ink flex items-center gap-3">
+				<PosIcon name="grid" class="text-accent size-6" />
+				Order type
+			</h3>
+			<div role="group" aria-labelledby="ordertype-label" class="grid gap-3 sm:grid-cols-3">
+				{#each segments as seg (seg.id)}
+					{@const on = segment === seg.id}
+					<button
+						type="button"
+						aria-pressed={on}
+						class="min-h-touch-lg {choiceClass(on)}"
+						onclick={() => chooseSegment(seg.id)}
+					>
+						<PosIcon name={seg.icon} class="size-6" />
+						<span>{seg.label}</span>
+						{#if on}<PosIcon name="check-circle" class="ml-auto size-6" />{/if}
+					</button>
+				{/each}
 			</div>
-			{#if segment === 'sit'}
-				<label class="flex flex-col gap-1">
-					<span class="text-ink">Table</span>
+		</div>
+
+		{#if segment === 'sit'}
+			<label class="flex flex-col gap-3">
+				<span class="text-section text-ink flex items-center gap-3">
+					<PosIcon name="table" class="text-accent size-6" />
+					Table
+				</span>
+				<span class="relative block">
+					<PosIcon
+						name="search"
+						class="text-ink-2 pointer-events-none absolute top-1/2 left-4 size-5 -translate-y-1/2"
+					/>
 					<input
 						type="text"
 						maxlength="32"
+						placeholder="Table number or name, e.g. 4"
 						bind:value={tableInput}
 						onchange={tableChanged}
-						class="border-control-line rounded-control min-h-touch bg-raise text-ink border px-3"
+						class="border-control-line rounded-card min-h-touch bg-raise text-ink placeholder:text-ink-2 w-full border pr-4 pl-12"
 					/>
-				</label>
-			{/if}
-		</div>
+				</span>
+			</label>
+		{/if}
 
 		{#if error}
 			<p class="bg-danger-bg text-danger rounded-control px-3 py-2">{error}</p>
 		{/if}
 
-		{#if menuState === 'loading'}
-			<p class="text-ink-2">Loading the menu…</p>
-		{:else if menuState === 'missing'}
-			<p class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">
-				◆ No menu on this device yet — connect once so the till can download it
-			</p>
-			<button
-				type="button"
-				class="min-h-touch-lg border-control-line rounded-control bg-raise text-ink border px-4"
-				onclick={retryMenu}>Retry</button
-			>
-		{:else if menuState === 'unset'}
-			<p class="bg-danger-bg text-danger rounded-control px-3 py-2">
-				✕ The restaurant's currency or tax mode is not set yet — the owner sets both on the
-				dashboard Settings page
-			</p>
-		{:else if menu && format}
-			<nav aria-label="Menu categories">
-				<div role="tablist" class="flex flex-wrap gap-2">
-					{#each tabs as tab (tab.id)}
-						<button
-							type="button"
-							role="tab"
-							id="tab-{tab.id}"
-							aria-selected={activeTab?.id === tab.id}
-							aria-controls="grid-{tab.id}"
-							class={segmentClass(activeTab?.id === tab.id)}
-							onclick={() => {
-								selectedTab = tab.id;
-								panelItem = null;
-							}}>{tab.name}</button
-						>
-					{/each}
-				</div>
-			</nav>
-			<p class="text-caption text-ink-2">snapshot v{menu.version} · {menu.items.length} items</p>
+		<div class="flex flex-col gap-3">
+			<h3 class="text-section text-ink flex items-center gap-3">
+				<PosIcon name="utensils" class="text-accent size-6" />
+				Menu
+				{#if menu}
+					<span class="text-caption text-ink-2 ml-auto font-normal"
+						>snapshot v{menu.version} · {menu.items.length} items</span
+					>
+				{/if}
+			</h3>
 
-			{#if panelItem}
-				<section aria-label="{panelItem.name} options" class="flex flex-col gap-3">
-					<h3 class="text-section text-ink">{panelItem.name} — options</h3>
-					{#each panelGroups as group (group.id)}
-						{@const picked = chosen[group.id] ?? []}
-						{@const full = group.maxSelect > 1 && picked.length >= group.maxSelect}
-						<fieldset class="flex flex-col gap-2">
-							<legend class="text-ink">
-								{group.name} ·
-								{#if group.minSelect === 1 && group.maxSelect === 1}choose exactly 1{:else if group.minSelect === 0}optional,
-									up to {group.maxSelect}{:else}choose {group.minSelect}–{group.maxSelect}{/if}
-							</legend>
-							<div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
-								{#each group.modifiers as m (m.id)}
-									{@const on = picked.includes(m.id)}
-									{@const blocked = full && !on}
-									<button
-										type="button"
-										aria-pressed={on}
-										disabled={blocked}
-										class="min-h-touch-lg border-control-line rounded-control flex flex-col items-start border px-3 py-2 text-left {on
-											? 'bg-accent text-accent-ink'
-											: blocked
-												? 'bg-disabled-bg text-disabled-ink'
-												: 'bg-raise text-ink'}"
-										onclick={() => toggleModifier(group, m)}
-									>
-										<span>{m.name}</span>
-										<span
-											class="font-mono tabular-nums {m.priceDeltaMinor < 0n && !on
-												? 'text-danger'
-												: ''}">{formatAmount(minor(m.priceDeltaMinor), format)}</span
-										>
-									</button>
-								{/each}
-							</div>
-							{#if full}
-								<p class="text-caption text-ink-2">Choose up to {group.maxSelect}</p>
-							{/if}
-						</fieldset>
-					{/each}
-					<div class="flex gap-2">
-						<button
-							type="button"
-							disabled={unmetGroup !== null}
-							aria-describedby={unmetGroup ? 'why-add' : undefined}
-							class="min-h-touch-lg border-control-line rounded-control flex-1 border px-4 {unmetGroup
-								? 'bg-disabled-bg text-disabled-ink'
-								: 'bg-accent text-accent-ink'}"
-							onclick={addFromPanel}>Add</button
-						>
-						<button
-							type="button"
-							class="min-h-touch-lg border-control-line rounded-control bg-raise text-ink border px-4"
-							onclick={() => (panelItem = null)}>Cancel</button
-						>
-					</div>
-					{#if unmetGroup}
-						<p id="why-add" class="text-ink-2">
-							Choose at least {unmetGroup.minSelect} in {unmetGroup.name}
-						</p>
-					{/if}
-				</section>
-			{:else if activeTab}
-				<div
-					role="tabpanel"
-					id="grid-{activeTab.id}"
-					aria-labelledby="tab-{activeTab.id}"
-					class="grid grid-cols-2 gap-2 sm:grid-cols-3"
+			{#if menuState === 'loading'}
+				<p class="text-ink-2">Loading the menu…</p>
+			{:else if menuState === 'missing'}
+				<p class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">
+					◆ No menu on this device yet — connect once so the till can download it
+				</p>
+				<button
+					type="button"
+					class="min-h-touch-lg border-control-line rounded-control bg-raise text-ink self-start border px-4"
+					onclick={retryMenu}>Retry</button
 				>
-					{#each activeTab.items as item (item.id)}
-						<button
-							type="button"
-							disabled={!item.isAvailable || gridDisabled}
-							class="min-h-touch-lg border-control-line rounded-control flex flex-col items-start justify-center border px-3 py-2 text-left {item.isAvailable &&
-							!gridDisabled
-								? 'bg-raise text-ink'
-								: 'bg-disabled-bg text-disabled-ink'}"
-							onclick={() => tapItem(item)}
-						>
-							<span class="text-caption">{activeTab.name}</span>
-							<span class="text-pos font-semibold">{item.name}</span>
-							<span class="font-mono tabular-nums"
-								>{formatAmount(minor(item.priceMinor), format)}</span
+			{:else if menuState === 'unset'}
+				<p class="bg-danger-bg text-danger rounded-control px-3 py-2">
+					✕ The restaurant's currency or tax mode is not set yet — the owner sets both on the
+					dashboard Settings page
+				</p>
+			{:else if menu && format}
+				<nav aria-label="Menu categories">
+					<div role="tablist" class="flex flex-wrap gap-2">
+						{#each tabs as tab (tab.id)}
+							<button
+								type="button"
+								role="tab"
+								id="tab-{tab.id}"
+								aria-selected={activeTab?.id === tab.id}
+								aria-controls="grid-{tab.id}"
+								class={pillClass(activeTab?.id === tab.id)}
+								onclick={() => {
+									selectedTab = tab.id;
+									panelItem = null;
+								}}>{tab.name}</button
 							>
-							{#if !item.isAvailable}<span>Unavailable</span>{/if}
-						</button>
-					{:else}
-						<p class="text-ink-2">No items</p>
-					{/each}
-				</div>
+						{/each}
+					</div>
+				</nav>
+
+				{#if panelItem}
+					<section
+						aria-label="{panelItem.name} options"
+						class="bg-raise-2 border-line rounded-card flex flex-col gap-4 border p-4"
+					>
+						<h4 class="text-section text-ink">{panelItem.name} — options</h4>
+						{#each panelGroups as group (group.id)}
+							{@const picked = chosen[group.id] ?? []}
+							{@const full = group.maxSelect > 1 && picked.length >= group.maxSelect}
+							<fieldset class="flex flex-col gap-2">
+								<legend class="text-ink mb-2 font-semibold">
+									{group.name} ·
+									{#if group.minSelect === 1 && group.maxSelect === 1}choose exactly 1{:else if group.minSelect === 0}optional,
+										up to {group.maxSelect}{:else}choose {group.minSelect}–{group.maxSelect}{/if}
+								</legend>
+								<div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+									{#each group.modifiers as m (m.id)}
+										{@const on = picked.includes(m.id)}
+										{@const blocked = full && !on}
+										<button
+											type="button"
+											aria-pressed={on}
+											disabled={blocked}
+											class="min-h-touch-lg rounded-card flex flex-col items-start justify-center border px-3 py-2 text-left {on
+												? 'bg-accent text-accent-ink border-accent'
+												: blocked
+													? 'bg-disabled-bg text-disabled-ink border-control-line'
+													: 'bg-raise text-ink border-control-line'}"
+											onclick={() => toggleModifier(group, m)}
+										>
+											<span class="font-semibold">{m.name}</span>
+											<span
+												class="font-mono tabular-nums {m.priceDeltaMinor < 0n && !on
+													? 'text-danger'
+													: ''}">{formatAmount(minor(m.priceDeltaMinor), format)}</span
+											>
+										</button>
+									{/each}
+								</div>
+								{#if full}
+									<p class="text-caption text-ink-2">Choose up to {group.maxSelect}</p>
+								{/if}
+							</fieldset>
+						{/each}
+						<div class="flex gap-2">
+							<button
+								type="button"
+								disabled={unmetGroup !== null}
+								aria-describedby={unmetGroup ? 'why-add' : undefined}
+								class="min-h-touch-lg border-control-line rounded-control flex-1 border px-4 font-semibold {unmetGroup
+									? 'bg-disabled-bg text-disabled-ink'
+									: 'bg-accent text-accent-ink'}"
+								onclick={addFromPanel}>Add</button
+							>
+							<button
+								type="button"
+								class="min-h-touch-lg border-control-line rounded-control bg-raise text-ink border px-4"
+								onclick={() => (panelItem = null)}>Cancel</button
+							>
+						</div>
+						{#if unmetGroup}
+							<p id="why-add" class="text-ink-2">
+								Choose at least {unmetGroup.minSelect} in {unmetGroup.name}
+							</p>
+						{/if}
+					</section>
+				{:else if activeTab}
+					<div
+						role="tabpanel"
+						id="grid-{activeTab.id}"
+						aria-labelledby="tab-{activeTab.id}"
+						class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4"
+					>
+						{#each activeTab.items as item (item.id)}
+							{@const usable = item.isAvailable && !gridDisabled}
+							<button
+								type="button"
+								disabled={!usable}
+								class="min-h-touch-lg rounded-card flex flex-col items-start justify-center gap-1 border p-4 text-left {usable
+									? 'bg-raise text-ink border-control-line'
+									: 'bg-disabled-bg text-disabled-ink border-control-line'}"
+								onclick={() => tapItem(item)}
+							>
+								<span class="text-caption {usable ? 'text-ink-2' : ''}">{activeTab.name}</span>
+								<span class="text-pos font-semibold">{item.name}</span>
+								<span class="font-mono tabular-nums {usable ? 'text-accent' : ''}"
+									>{formatAmount(minor(item.priceMinor), format)}</span
+								>
+								{#if !item.isAvailable}<span>Unavailable</span>{/if}
+							</button>
+						{:else}
+							<p class="text-ink-2">No items</p>
+						{/each}
+					</div>
+				{/if}
 			{/if}
-		{/if}
+		</div>
 	</section>
 
 	<section
 		aria-labelledby="check-h"
-		class="bg-raise border-line rounded-card flex w-full flex-col gap-3 border p-4 md:w-96 md:shrink-0"
+		class="bg-raise border-line rounded-card shadow-raised flex w-full flex-col overflow-hidden border md:w-96 md:shrink-0 xl:w-md"
 	>
-		<div class="flex items-center justify-between gap-2">
-			<h2 id="check-h" class="text-title text-ink">{heading}</h2>
-			<span class="bg-st-new-bg text-st-new rounded-control px-2">○ OPEN</span>
+		<div class="bg-accent text-accent-ink flex items-center gap-3 px-5 py-4">
+			<PosIcon name="clipboard" class="size-7" />
+			<div class="flex min-w-0 flex-col">
+				<h2 id="check-h" class="text-title">Current Order</h2>
+				<p class="text-caption">{heading}</p>
+			</div>
+			<span
+				class="border-accent-ink text-caption ml-auto rounded-full border px-3 py-1 font-semibold"
+				>○ OPEN</span
+			>
 		</div>
 
-		{#if cart && figures && format}
-			<div class="max-h-96 overflow-y-auto">
-				<table class="w-full">
-					<thead class="sr-only">
-						<tr>
-							<th>Status</th>
-							<th>Item</th>
-							<th>Amount ({format.code})</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each cart.lines as line, i (line.lineId)}
-							<tr class="border-line border-t align-top">
-								<td class="py-2 pr-2">
-									<span class="bg-st-new-bg text-st-new rounded-control px-1">◇ NEW</span>
-								</td>
-								<td class="py-2">
-									<span class="font-mono">{line.quantity}×</span>
-									<span class="text-ink">{line.itemName}</span>
-									{#each line.modifiers as m (m.modifierId)}
-										<div class="pl-4">
-											+ {m.modifierName}
+		<div class="flex flex-col gap-4 p-5">
+			{#if cart && figures && format}
+				{#if cart.lines.length === 0}
+					<div class="flex flex-col items-center gap-3 py-6 text-center">
+						<span
+							class="bg-accent-soft text-accent inline-flex size-28 items-center justify-center rounded-full"
+						>
+							<svg
+								viewBox="0 0 64 64"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="2.4"
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								aria-hidden="true"
+								class="size-16"
+							>
+								<path d="M8 47h48" />
+								<path d="M13 43h38" />
+								<path d="M15 43a17 17 0 0 1 34 0" />
+								<path d="M32 26v-3" />
+								<circle cx="32" cy="20.5" r="2.5" />
+								<path d="M22 37a10 10 0 0 1 6-6" />
+								<path d="M47 13l1.5-3M52 18l3-1.5M44 9l-.5-2.5" />
+							</svg>
+						</span>
+						<p class="text-section text-ink">Ready to take an order?</p>
+						<p class="text-ink-2">Choose an order type, then tap an item to add it.</p>
+					</div>
+				{:else}
+					<div class="max-h-96 overflow-y-auto">
+						<table class="w-full">
+							<thead class="sr-only">
+								<tr>
+									<th>Status</th>
+									<th>Item</th>
+									<th>Amount ({format.code})</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each cart.lines as line, i (line.lineId)}
+									<tr class="border-line border-b align-top last:border-b-0">
+										<td class="py-3 pr-2">
 											<span
-												class="font-mono tabular-nums {m.priceDeltaMinor < 0n ? 'text-danger' : ''}"
-												>{formatAmount(minor(m.priceDeltaMinor), format)}</span
+												class="bg-st-new-bg text-st-new text-caption rounded-full px-2 py-0.5 whitespace-nowrap"
+												>◇ NEW</span
 											>
-										</div>
-									{/each}
-									<div class="text-caption text-ink-2">
-										@ {formatAmount(minor(line.unitPriceMinor), format)} · tax {formatTaxRate(
-											line.taxRateBp
-										)}
-									</div>
-									<div class="mt-1 flex gap-2">
-										<button
-											type="button"
-											class={lineKey}
-											onclick={() => fewer(line.lineId, line.quantity)}
-											><span aria-hidden="true">−</span><span class="sr-only">One fewer</span
-											></button
+										</td>
+										<td class="py-3">
+											<span class="font-mono">{line.quantity}×</span>
+											<span class="text-ink font-semibold">{line.itemName}</span>
+											{#each line.modifiers as m (m.modifierId)}
+												<div class="text-ink-2 pl-4">
+													+ {m.modifierName}
+													<span
+														class="font-mono tabular-nums {m.priceDeltaMinor < 0n
+															? 'text-danger'
+															: ''}">{formatAmount(minor(m.priceDeltaMinor), format)}</span
+													>
+												</div>
+											{/each}
+											<div class="text-caption text-ink-2">
+												@ {formatAmount(minor(line.unitPriceMinor), format)} · tax {formatTaxRate(
+													line.taxRateBp
+												)}
+											</div>
+											<div class="mt-2 flex gap-2">
+												<button
+													type="button"
+													class={lineKey}
+													onclick={() => fewer(line.lineId, line.quantity)}
+													><span aria-hidden="true">−</span><span class="sr-only">One fewer</span
+													></button
+												>
+												<button
+													type="button"
+													class={lineKey}
+													onclick={() => more(line.lineId, line.quantity)}
+													><span aria-hidden="true">+</span><span class="sr-only">One more</span
+													></button
+												>
+												<button type="button" class={lineKey} onclick={() => remove(line.lineId)}
+													>✕ Remove</button
+												>
+											</div>
+										</td>
+										<td class="py-3 text-right font-mono tabular-nums"
+											>{formatAmount(figures.amounts[i], format)}</td
 										>
-										<button
-											type="button"
-											class={lineKey}
-											onclick={() => more(line.lineId, line.quantity)}
-											><span aria-hidden="true">+</span><span class="sr-only">One more</span
-											></button
-										>
-										<button type="button" class={lineKey} onclick={() => remove(line.lineId)}
-											>✕ Remove</button
-										>
-									</div>
-								</td>
-								<td class="py-2 text-right font-mono tabular-nums"
-									>{formatAmount(figures.amounts[i], format)}</td
-								>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-
-			<dl class="grid grid-cols-2 gap-y-1 text-right font-mono tabular-nums">
-				<dt class="text-ink-2 text-left">Subtotal</dt>
-				<dd class="text-ink-2">{formatMoney(figures.totals.subtotal, format)}</dd>
-				{#if figures.totals.discount !== 0n}
-					<dt class="text-ink-2 text-left">Discount</dt>
-					<dd class="text-ink-2">{formatMoney(figures.totals.discount, format)}</dd>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
 				{/if}
-				<dt class="text-ink-2 text-left">Tax</dt>
-				<dd class="text-ink-2">{formatMoney(figures.totals.tax, format)}</dd>
-				<dt class="text-ink text-left">Total</dt>
-				<dd class="text-total text-ink">{formatMoney(figures.totals.total, format)}</dd>
-			</dl>
-			<p class="text-caption text-ink-2">tax {taxMode} at the rate stored on each line</p>
 
-			<button
-				type="button"
-				disabled={cart.lines.length === 0}
-				class="min-h-touch-xl border-control-line rounded-control text-pos w-full border font-semibold {cart
-					.lines.length === 0
-					? 'bg-disabled-bg text-disabled-ink'
-					: 'bg-accent text-accent-ink'}"
-				onclick={pay}
-			>
-				{#if cart.lines.length === 0}Add an item first{:else}Pay {formatMoney(
-						figures.totals.total,
-						format
-					)}{/if}
-			</button>
-
-			{#if confirmingClear}
-				<p class="text-ink">Clear all {cart.lines.length} lines?</p>
-				<div class="flex gap-2">
-					<button type="button" class={lineKey} onclick={clearAll}>Yes, clear</button>
-					<button type="button" class={lineKey} onclick={() => (confirmingClear = false)}
-						>Keep</button
+				<dl class="flex flex-col gap-2">
+					<div class="flex items-baseline justify-between gap-4">
+						<dt class="text-ink-2">Subtotal</dt>
+						<dd class="text-ink-2 text-right font-mono tabular-nums">
+							{formatMoney(figures.totals.subtotal, format)}
+						</dd>
+					</div>
+					{#if figures.totals.discount !== 0n}
+						<div class="flex items-baseline justify-between gap-4">
+							<dt class="text-ink-2">Discount</dt>
+							<dd class="text-ink-2 text-right font-mono tabular-nums">
+								{formatMoney(figures.totals.discount, format)}
+							</dd>
+						</div>
+					{/if}
+					<div class="flex items-baseline justify-between gap-4">
+						<dt class="text-ink-2">Tax</dt>
+						<dd class="text-ink-2 text-right font-mono tabular-nums">
+							{formatMoney(figures.totals.tax, format)}
+						</dd>
+					</div>
+					<div
+						class="border-line mt-2 flex flex-wrap items-baseline justify-between gap-x-4 border-t pt-4"
 					>
-				</div>
-			{:else}
+						<dt class="text-title text-ink">Total</dt>
+						<dd class="text-title text-accent text-right font-mono font-bold tabular-nums">
+							{formatMoney(figures.totals.total, format)}
+						</dd>
+					</div>
+				</dl>
+
+				<p
+					class="bg-raise-2 text-ink-2 text-caption rounded-control flex items-center gap-3 px-4 py-3"
+				>
+					<PosIcon name="info" />
+					Tax {taxMode} at the rate stored on each line
+				</p>
+
 				<button
 					type="button"
 					disabled={cart.lines.length === 0}
-					class="min-h-touch-min border-control-line rounded-control border px-3 {cart.lines
-						.length === 0
+					class="min-h-touch-xl border-control-line rounded-card text-pos flex w-full items-center justify-center gap-3 border font-semibold {cart
+						.lines.length === 0
 						? 'bg-disabled-bg text-disabled-ink'
-						: 'bg-raise text-ink'}"
-					onclick={() => (confirmingClear = true)}>Clear</button
+						: 'bg-accent text-accent-ink'}"
+					onclick={pay}
 				>
+					{#if cart.lines.length === 0}
+						<PosIcon name="plus-circle" class="size-6" />
+						Add an item first
+					{:else}
+						Pay {formatMoney(figures.totals.total, format)}
+					{/if}
+				</button>
+
+				{#if confirmingClear}
+					<div class="flex flex-col gap-2">
+						<p class="text-ink">Clear all {cart.lines.length} lines?</p>
+						<div class="flex gap-2">
+							<button type="button" class="{lineKey} flex-1" onclick={clearAll}>Yes, clear</button>
+							<button
+								type="button"
+								class="{lineKey} flex-1"
+								onclick={() => (confirmingClear = false)}>Keep</button
+							>
+						</div>
+					</div>
+				{:else}
+					<button
+						type="button"
+						disabled={cart.lines.length === 0}
+						class="min-h-touch border-control-line rounded-card flex w-full items-center justify-center gap-2 border font-semibold {cart
+							.lines.length === 0
+							? 'bg-disabled-bg text-disabled-ink'
+							: 'bg-raise text-ink'}"
+						onclick={() => (confirmingClear = true)}
+					>
+						<PosIcon name="trash" />
+						Clear
+					</button>
+				{/if}
+			{:else}
+				<p class="text-ink-2">The check appears once the menu and the order are loaded.</p>
 			{/if}
-		{:else}
-			<p class="text-ink-2">The check appears once the menu and the order are loaded.</p>
-		{/if}
+		</div>
 	</section>
 </main>

@@ -210,6 +210,7 @@ describe('GET /api/pos/employees', () => {
 		// the owner chooses; the time zone is set at registration and travels
 		// through so the till can render the business date.
 		expect(before.body!.settings).toEqual({
+			restaurantName: 'Cafe A',
 			posIdleLockSeconds: null,
 			timeZone: 'UTC',
 			acceptsCard: null,
@@ -226,6 +227,7 @@ describe('GET /api/pos/employees', () => {
 		);
 		const after = await get({ [DEVICE_COOKIE]: a.token });
 		expect(after.body!.settings).toEqual({
+			restaurantName: 'Cafe A',
 			posIdleLockSeconds: 120,
 			timeZone: 'UTC',
 			acceptsCard: null,

@@ -242,7 +242,10 @@ export async function chooseOrderType(
 	}
 	const expected =
 		type === 'Sit now' && options.tableLabel ? `Sit now · Table ${options.tableLabel}` : type;
-	await expect(tillPage.getByRole('heading', { level: 2 })).toHaveText(expected);
+	// The check's heading is "Current Order"; the order type sits right under it.
+	await expect(
+		tillPage.getByRole('region', { name: 'Current Order' }).getByText(expected, { exact: true })
+	).toBeVisible();
 }
 
 export async function payCash(tillPage: Page, tenderedMinor: bigint): Promise<void> {

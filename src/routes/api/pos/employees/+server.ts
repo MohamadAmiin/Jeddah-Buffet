@@ -41,6 +41,8 @@ export const GET: RequestHandler = async (event) => {
 	// answer the setting for every restaurant whose owner never chose one.
 	const restaurant = await getRestaurantWithSettings(db, device.restaurantId);
 	const settings = {
+		// Shown in the till's context strip; not a secret — it is on every receipt.
+		restaurantName: restaurant?.name ?? null,
 		posIdleLockSeconds: restaurant?.posIdleLockSeconds ?? null,
 		timeZone: restaurant?.timeZone ?? null,
 		acceptsCard: restaurant?.acceptsCard ?? null,

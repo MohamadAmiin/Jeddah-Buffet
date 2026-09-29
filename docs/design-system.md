@@ -61,7 +61,7 @@ Light is the default. The viewer has **three** states, not two:
 
 **Aliases must be re-declared inside the scope.** A custom property's `var()` is substituted at **computed-value time on the element that declares it**, and the resolved literal is what inherits. The dark blocks need no copy — they target `:root`, the same element. `[data-surface="pos"]` is an element inside `<body>`, so an alias declared above it never recomputes there: without its own line, `--c-ring` inside the till stays the *page* accent.
 
-**A white key on the POS ground is 1.22:1**, so elevation alone cannot carry a control's edge. Every pressable POS surface takes a `border-control-line` boundary; `--c-line` is decorative only. WCAG 1.4.11.
+**A white key on the POS ground is 1.12:1**, so elevation alone cannot carry a control's edge. Every pressable POS surface takes a `border-control-line` boundary; `--c-line` is decorative only. WCAG 1.4.11.
 
 ---
 

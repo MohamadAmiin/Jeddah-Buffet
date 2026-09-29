@@ -191,21 +191,23 @@
  * dashboard puts white cards on a light ground for reading; the POS uses a DEEPER
  * ground so the white key faces read as the raised, pressable thing.
  *
- * ONE HARD CONSEQUENCE, MEASURED: a white key on that ground is 1.22:1, so
+ * ONE HARD CONSEQUENCE, MEASURED: a white key on that ground is 1.12:1, so
  * elevation ALONE cannot carry a control's edge. Every pressable POS surface takes
- * a --c-control-line border (4.73 on the ground). --c-line is 1.55 here and is for
+ * a --c-control-line border (5.16 on the ground). --c-line is 1.38 here and is for
  * decorative rules only. A shadow-only key is pretty and non-compliant.
  *
- * Audited: 182 ink x ground pairs, 0 failures, tightest 4.60 (ink-3 on bg-2). */
+ * Audited: 182 ink x ground pairs, 0 failures, tightest 4.73 (ink-3 on bg-2). */
 [data-surface="pos"] {
   color-scheme: light;
 
-  --c-bg:#e4e9ee; --c-bg-2:#e1e6eb; --c-raise:#ffffff; --c-raise-2:#f4f7f9;
+  /* The till's greens (2026-09-29): a pale green-grey ground and a deep green
+     accent, taken from the owner's till mockup. The dashboard keeps its teal. */
+  --c-bg:#eef3f2; --c-bg-2:#e3eae8; --c-raise:#ffffff; --c-raise-2:#f4f8f7;
   --c-line:#c8d1d8; --c-line-soft:#dce3e8;
 
   --c-ink:#161b20; --c-ink-2:#4a5661; --c-ink-3:#5c6771;
 
-  --c-accent:#0f6b7e; --c-accent-ink:#ffffff; --c-accent-soft:#ddeef2;
+  --c-accent:#0f5c50; --c-accent-ink:#ffffff; --c-accent-soft:#e0efe9;
 
   --c-ok:#2c6a48;     --c-ok-bg:#e2efe7;
   --c-warn:#855a12;   --c-warn-bg:#f7ecd8;
@@ -228,13 +230,11 @@
   --c-shadow-raised:   0 1px 0 rgb(255 255 255 / .8), 0 6px 20px -14px rgb(22 27 32 / .45);
   --c-shadow-floating: 0 1px 0 rgb(255 255 255 / .9), 0 18px 44px -22px rgb(22 27 32 / .55);
   --c-shadow: var(--c-shadow-raised);
-  /* The rail at its LIGHT values. No POS screen has a navigation rail today, but
-     the pinning rule is mechanical on purpose: if a dark block themes a token, this
-     scope declares it. An exemption list is a list someone forgets to update, and
-     the failure mode is a dark-theme viewer inheriting a dark value into a surface
-     that is pinned light. */
-  --c-rail:#1c2b33; --c-rail-active:#0f6b7e; --c-rail-raise:#26363f;
-  --c-rail-ink:#ffffff; --c-rail-ink-2:#8fa0aa; --c-rail-line:#707f87;
+  /* The rail family is the till's TOP BAR: a deep green bar, the current screen's
+     tab on --c-rail-active, and the rail inks on both. Pinned here like every other
+     token, so a dark-theme viewer never inherits a dark value into the till. */
+  --c-rail:#0b3b36; --c-rail-active:#16775f; --c-rail-raise:#134a43;
+  --c-rail-ink:#ffffff; --c-rail-ink-2:#a8c8c1; --c-rail-line:#5f8d85;
 }
 
 /* ── 2. themeable tokens → Tailwind utilities (bg-raise, text-ink-2, …) ─── */
