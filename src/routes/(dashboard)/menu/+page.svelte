@@ -23,7 +23,7 @@
 	);
 
 	const itemsIn = (categoryId: string) =>
-		data.items.filter((item: { categoryId: string }) => item.categoryId === categoryId);
+		data.items.filter((item: { categoryId: string | null }) => item.categoryId === categoryId);
 	const groupName = (id: string) =>
 		data.groups.find((group: { id: string }) => group.id === id)?.name ?? '';
 

@@ -12,7 +12,8 @@ import {
 	unique,
 	check,
 	foreignKey,
-	primaryKey
+	primaryKey,
+	customType
 } from 'drizzle-orm/pg-core';
 import { restaurants } from './restaurants';
 
@@ -31,13 +32,32 @@ import { restaurants } from './restaurants';
 // rate" (CLAUDE.md, "Decisions already made": one rate per restaurant in integer
 // basis points, plus this per-item override). 825 is 8.25%, never a fraction.
 //
-// ARCHIVE, NEVER DELETE (invariant 2). There are NO ORDER LINES YET. archived_at
-// exists now so that the sales plan, whose order lines will reference
-// menu_items.id and modifiers.id, never has to alter a populated table: a read
-// excludes archived rows, and nothing issues a DELETE against categories, items,
-// groups or modifiers. The one plain DELETE is unlinking a group from an item —
-// a configuration link, not a posted record, and an order line will snapshot the
-// modifiers a guest actually chose (invariant 7).
+// ARCHIVE, NEVER DELETE (invariant 2). archived_at exists so that the sales
+// plan's order lines, which reference menu_items.id and modifiers.id, never
+// force an alteration of a populated table: a read excludes archived rows, and
+// nothing issues a DELETE against categories, items, groups or modifiers. The
+// plain DELETEs are two: unlinking a group from an item, and dropping a REPLACED
+// (or removed) menu_images row — both configuration, not posted records; an
+// order line snapshots the modifiers a guest actually chose (invariant 7) and
+// never references a photo.
+//
+// CATEGORIES ARE OPTIONAL (tasks/menu-and-printing, 2026-09-29):
+// menu_items.category_id is NULLABLE and NULL means "No category" — the till
+// shows such items under its synthetic "Other" tab. The composite FK still
+// applies whenever the column is set (PostgreSQL's default MATCH SIMPLE skips
+// the check when any referencing column is NULL), so a non-NULL category must
+// still belong to the same restaurant. Archiving a category MOVES its live items
+// to NULL in the menu module, in one transaction and one version bump.
+//
+// PHOTOS live in menu_images as bytea — in PostgreSQL rather than on disk or in
+// object storage, so the spec 29 pg_dump backups cover them and no new service
+// or credential exists. byte_size is capped at 409,600 so one multipart upload
+// stays under adapter-node's default 512K body limit (src/lib/menu-images.ts
+// owns that number). A photo row is NEVER edited: a new photo is a new row and
+// a new id, which is what lets the routes serve it as immutable. It is read
+// ONLY through a restaurant-scoped lookup (readImage in
+// src/lib/server/menu/images.ts) and referenced by menu_items.image_id through
+// the composite FK below.
 //
 // NO RECIPE COLUMN, deliberately. Spec 15's recipes link items to ingredients in
 // numeric(12,3) base units and belong to the inventory plan, which has no tables
@@ -50,8 +70,8 @@ import { restaurants } from './restaurants';
 // through a COMPOSITE (restaurant_id, id) foreign key, so the database refuses an
 // item in another restaurant's category — a single-column FK would accept it.
 // PostgreSQL needs a unique index on exactly that pair in every TARGET table, or
-// it refuses the FK at migrate time; menu_categories, modifier_groups and
-// menu_items are the three targets, and each carries one — declared as a UNIQUE
+// it refuses the FK at migrate time; menu_categories, modifier_groups,
+// menu_items and menu_images are the four targets, and each carries one — declared as a UNIQUE
 // CONSTRAINT (unique()), not a uniqueIndex(). The difference is statement ORDER:
 // drizzle-kit writes a constraint inside CREATE TABLE but every CREATE INDEX after
 // all the foreign keys, so a unique INDEX would not exist yet when the composite FK
@@ -88,18 +108,56 @@ export const menuCategories = pgTable(
 	]
 );
 
+// bytea has no builder in drizzle-orm 0.45 (pg-core/columns holds none), so the
+// column is a customType: the pg driver hands bytea back as a Buffer and takes
+// one on the way in; the module boundary is a plain Uint8Array.
+const byteaColumn = customType<{ data: Uint8Array; driverData: Buffer }>({
+	dataType: () => 'bytea',
+	toDriver: (value) => Buffer.from(value),
+	fromDriver: (value) => new Uint8Array(value)
+});
+
+// A menu item's photo. No updated_at and no archived_at: a row is never edited
+// or archived — a replaced photo's row is deleted by the menu module once no
+// item references it (menu configuration, never referenced by an order line).
+export const menuImages = pgTable(
+	'menu_images',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		restaurantId: tenant(),
+		contentType: text('content_type').notNull(),
+		byteSize: integer('byte_size').notNull(),
+		bytes: byteaColumn('bytes').notNull(),
+		createdAt: createdAt()
+	},
+	(table) => [
+		index('menu_images_restaurant_id_idx').on(table.restaurantId),
+		// Target of menu_items_image_fk.
+		unique('menu_images_id_restaurant_unique').on(table.id, table.restaurantId),
+		check(
+			'menu_images_content_type_valid',
+			sql`${table.contentType} in ('image/jpeg', 'image/png', 'image/webp')`
+		),
+		check('menu_images_byte_size_range', sql`${table.byteSize} between 1 and 409600`),
+		check('menu_images_byte_size_matches', sql`octet_length(${table.bytes}) = ${table.byteSize}`)
+	]
+);
+
 export const menuItems = pgTable(
 	'menu_items',
 	{
 		id: uuid('id').primaryKey().defaultRandom(),
 		restaurantId: tenant(),
-		categoryId: uuid('category_id').notNull(),
+		// NULL = "No category" (the till's "Other" tab).
+		categoryId: uuid('category_id'),
 		name: text('name').notNull(),
 		priceMinor: bigint('price_minor', { mode: 'bigint' }).notNull(),
 		// NULL = inherit the restaurant's rate.
 		taxRateBp: integer('tax_rate_bp'),
 		isAvailable: boolean('is_available').notNull().default(true),
 		sortOrder: integer('sort_order').notNull().default(0),
+		// NULL = no photo. A photo row is never edited; a new photo is a new id.
+		imageId: uuid('image_id'),
 		archivedAt: archivedAt(),
 		createdAt: createdAt(),
 		updatedAt: updatedAt()
@@ -113,6 +171,12 @@ export const menuItems = pgTable(
 			foreignColumns: [menuCategories.restaurantId, menuCategories.id],
 			name: 'menu_items_category_fk'
 		}).onDelete('restrict'),
+		foreignKey({
+			columns: [table.restaurantId, table.imageId],
+			foreignColumns: [menuImages.restaurantId, menuImages.id],
+			name: 'menu_items_image_fk'
+		}).onDelete('restrict'),
+		index('menu_items_image_idx').on(table.imageId),
 		// A menu price is never negative; a discount is its own concept with its own
 		// approval rule (spec 14).
 		check('menu_items_price_minor_non_negative', sql`${table.priceMinor} >= 0`),
