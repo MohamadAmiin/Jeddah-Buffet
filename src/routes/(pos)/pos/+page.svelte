@@ -117,6 +117,7 @@
 				openedAt: string;
 			} | null;
 			settings: {
+				restaurantName: string | null;
 				posIdleLockSeconds: number | null;
 				timeZone: string | null;
 				acceptsCard: boolean | null;
@@ -143,6 +144,7 @@
 				{ key: 'acceptsCard', value: body.settings.acceptsCard },
 				{ key: 'acceptsMobile', value: body.settings.acceptsMobile },
 				{ key: 'timeZone', value: body.settings.timeZone },
+				{ key: 'restaurantName', value: body.settings.restaurantName },
 				{ key: 'deviceCode', value: body.device.code }
 			]);
 			// T-30: fold the server's invoice hint into the till's counter and
