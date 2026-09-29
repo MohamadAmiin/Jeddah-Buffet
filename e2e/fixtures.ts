@@ -193,17 +193,37 @@ export async function createCategory(page: Page, name: string): Promise<void> {
 }
 
 /** The Price field takes MAJOR units as text, built from the digits — never by division. */
+/**
+ * Add an item through the /menu panel (menu-and-printing T-14): the header's
+ * "Add item" opens add mode, "Save item" submits. `category: null` leaves the
+ * item with no category; an optional `photo` goes through the panel's picker,
+ * which resizes it in the browser and uploads it in its own request after the
+ * item is saved — the success alert appears only once both are done.
+ */
 export async function createMenuItem(
 	page: Page,
-	item: { category: string; name: string; priceMinor: bigint }
+	item: {
+		category: string | null;
+		name: string;
+		priceMinor: bigint;
+		photo?: { name: string; mimeType: string; buffer: Buffer };
+	}
 ): Promise<void> {
 	await page.getByRole('link', { name: 'Menu', exact: true }).click();
 	await expect(page).toHaveURL(/\/menu$/);
-	await page.getByLabel('Category', { exact: true }).selectOption({ label: item.category });
+	await page.getByRole('button', { name: 'Add item', exact: true }).click();
 	await page.getByLabel('Item name').fill(item.name);
 	const d = String(item.priceMinor).padStart(3, '0');
 	await page.getByLabel('Price', { exact: true }).fill(d.slice(0, -2) + '.' + d.slice(-2));
-	await page.getByRole('button', { name: 'Add item' }).click();
+	await page
+		.getByLabel('Category', { exact: true })
+		.selectOption(item.category === null ? { value: '' } : { label: item.category });
+	if (item.photo) {
+		await page.getByLabel('Photo').setInputFiles(item.photo);
+		// The picker resizes first; the preview is the sign it is ready to upload.
+		await expect(page.getByRole('img', { name: '' }).first()).toBeVisible();
+	}
+	await page.getByRole('button', { name: 'Save item' }).click();
 	await expect(page.getByRole('alert')).toContainText(`${item.name} added.`);
 }
 
@@ -223,25 +243,26 @@ export async function openSession(tillPage: Page, openingCashMinor: bigint): Pro
 }
 
 export async function addItem(tillPage: Page, name: string): Promise<void> {
-	await tillPage
+	// One category (or none) renders the grid as a region, not a tabpanel (T-16).
+	const grid = tillPage
 		.getByRole('tabpanel')
-		.getByRole('button', { name: new RegExp(name) })
-		.click();
+		.or(tillPage.getByRole('region', { name: 'Menu items' }));
+	await grid.getByRole('button', { name: new RegExp(name) }).click();
 	await expect(tillPage.getByRole('table')).toContainText(name);
 }
 
 export async function chooseOrderType(
 	tillPage: Page,
-	type: 'Sit now' | 'Waiting for a table' | 'Takeaway',
+	type: 'Dine in' | 'Takeaway' | 'Delivery',
 	options: { tableLabel?: string } = {}
 ): Promise<void> {
 	await tillPage.getByRole('button', { name: type, exact: true }).click();
 	if (options.tableLabel !== undefined) {
-		await tillPage.getByLabel('Table', { exact: true }).fill(options.tableLabel);
+		await tillPage.getByLabel('Table (optional)').fill(options.tableLabel);
 		await tillPage.keyboard.press('Tab');
 	}
 	const expected =
-		type === 'Sit now' && options.tableLabel ? `Sit now · Table ${options.tableLabel}` : type;
+		type === 'Dine in' && options.tableLabel ? `Dine in · Table ${options.tableLabel}` : type;
 	// The check's heading is "Current Order"; the order type sits right under it.
 	await expect(
 		tillPage.getByRole('region', { name: 'Current Order' }).getByText(expected, { exact: true })

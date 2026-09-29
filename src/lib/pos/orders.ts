@@ -14,6 +14,7 @@ import type { TaxMode } from '../money/tax';
 import {
 	PAYMENT_METHODS,
 	type OpEnvelope,
+	type OrderType,
 	type SaleAbandonedPayload,
 	type SaleCompletePayload
 } from '../sync-ops';
@@ -41,7 +42,8 @@ export type CartLine = {
 export type Cart = {
 	orderId: string;
 	deviceId: string;
-	orderType: 'dine_in' | 'takeaway';
+	/** From the wire contract: dine_in (the default), takeaway or delivery. */
+	orderType: OrderType;
 	tableLabel: string | null;
 	lines: CartLine[];
 	openedAt: string;
@@ -69,23 +71,29 @@ function secureId(): string {
 	return crypto.randomUUID();
 }
 
+/**
+ * The table label as the till stores it: control characters removed (a pasted
+ * ESC byte must never reach the receipt — the printer would obey it), trimmed,
+ * at most 32 characters, and null when nothing is left.
+ */
+function cleanLabel(value: string | null): string | null {
+	if (typeof value !== 'string') return null;
+	const trimmed = value.replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim();
+	if (trimmed.length > 32) throw new Error('table label is at most 32 characters');
+	return trimmed.length === 0 ? null : trimmed;
+}
+
 export function newCart(
 	deviceId: string,
-	orderType: Cart['orderType'],
+	orderType: OrderType,
 	tableLabel: string | null = null,
 	now = new Date()
 ): Cart {
-	let label: string | null = null;
-	if (typeof tableLabel === 'string') {
-		const trimmed = tableLabel.trim();
-		if (trimmed.length > 32) throw new Error('table label is at most 32 characters');
-		label = trimmed.length === 0 ? null : trimmed;
-	}
 	return {
 		orderId: secureId(),
 		deviceId,
 		orderType,
-		tableLabel: label,
+		tableLabel: orderType === 'dine_in' ? cleanLabel(tableLabel) : null,
 		lines: [],
 		openedAt: now.toISOString()
 	};
@@ -209,19 +217,13 @@ export function cartTotals(cart: Cart, taxMode: TaxMode): OrderTotals {
 }
 
 /** A new cart with the order type and table replaced; lines untouched.
- * Takeaway always drops the table. */
-export function setOrderType(
-	cart: Cart,
-	orderType: Cart['orderType'],
-	tableLabel: string | null
-): Cart {
-	let label: string | null = null;
-	if (orderType === 'dine_in' && typeof tableLabel === 'string') {
-		const trimmed = tableLabel.trim();
-		if (trimmed.length > 32) throw new Error('table label is at most 32 characters');
-		label = trimmed.length === 0 ? null : trimmed;
-	}
-	return { ...cart, orderType, tableLabel: label };
+ * Takeaway and delivery always drop the table. */
+export function setOrderType(cart: Cart, orderType: OrderType, tableLabel: string | null): Cart {
+	return {
+		...cart,
+		orderType,
+		tableLabel: orderType === 'dine_in' ? cleanLabel(tableLabel) : null
+	};
 }
 
 /** Each line's (unit price + Σ modifier deltas) × quantity, exact, unrounded.

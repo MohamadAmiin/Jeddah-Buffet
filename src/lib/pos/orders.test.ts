@@ -169,6 +169,30 @@ describe('completeSale', () => {
 		});
 	});
 
+	// menu-and-printing T-17: delivery rides in the queued payload unchanged.
+	it("a delivery cart completes with orderType 'delivery' and tableLabel null in the queued payload", async () => {
+		let cart = newCart('device-A', 'delivery', 'ignored', NOW);
+		cart = addLine(cart, tea, 825);
+		const result = await completeSale({
+			cart,
+			payment: { method: 'cash', tenderedMinor: 5000n },
+			employeeId: 'emp-1',
+			deviceId: 'device-A',
+			deviceCode: 'POS1',
+			posSessionId: 'ses-1',
+			taxMode: 'exclusive',
+			currencyCode: 'USD',
+			menuVersion: 1,
+			now: NOW
+		});
+		const queue = await readQueue();
+		expect(queue).toHaveLength(1);
+		const payload = queue[0].envelope.payload as { orderType: string; tableLabel: string | null };
+		expect(payload.orderType).toBe('delivery');
+		expect(payload.tableLabel).toBeNull();
+		expect((await readOrder(cart.orderId))?.invoiceNumber).toBe(result.invoiceNumber);
+	});
+
 	it('abortForTest leaves nothing behind — no order, no queue, no counter movement', async () => {
 		const cart = await buildCart();
 		await expect(
@@ -414,6 +438,31 @@ describe('T-33 cart helpers', () => {
 		const summed = lineAmounts(cart).reduce((acc, v) => acc + v, 0n);
 		expect(summed).toBe(exclusive.subtotal);
 		expect(summed).toBe(inclusive.total);
+	});
+
+	// menu-and-printing T-17.
+	it('setOrderType drops the table for takeaway and delivery, keeps it for dine in, and leaves lines alone', () => {
+		const cart = doneWhenCart();
+		const seated = setOrderType(cart, 'dine_in', ' 4 ');
+		expect(seated).toMatchObject({ orderType: 'dine_in', tableLabel: '4' });
+		expect(seated.lines).toBe(cart.lines);
+
+		const takeaway = setOrderType(seated, 'takeaway', '4');
+		expect(takeaway).toMatchObject({ orderType: 'takeaway', tableLabel: null });
+		const delivery = setOrderType(seated, 'delivery', '4');
+		expect(delivery).toMatchObject({ orderType: 'delivery', tableLabel: null });
+		expect(delivery.lines).toBe(cart.lines);
+		expect(delivery.orderId).toBe(cart.orderId);
+
+		expect(() => setOrderType(cart, 'dine_in', 'x'.repeat(33))).toThrow(/32/);
+	});
+
+	it('newCart and setOrderType strip control characters from the table label', () => {
+		expect(newCart('device-A', 'dine_in', '4\u001b', NOW).tableLabel).toBe('4');
+		expect(newCart('device-A', 'dine_in', '\u0000\u001b', NOW).tableLabel).toBeNull();
+		expect(newCart('device-A', 'delivery', '4', NOW).tableLabel).toBeNull();
+		const cart = doneWhenCart();
+		expect(setOrderType(cart, 'dine_in', 'Win\u007fdow').tableLabel).toBe('Window');
 	});
 
 	it('two taps are two lines; quantity is absolute; removal renumbers', () => {

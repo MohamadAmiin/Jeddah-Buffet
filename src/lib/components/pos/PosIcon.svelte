@@ -16,7 +16,8 @@
 		| 'wifi-off'
 		| 'grid'
 		| 'utensils'
-		| 'chevron-down';
+		| 'chevron-down'
+		| 'delivery';
 </script>
 
 <script lang="ts">
@@ -101,5 +102,13 @@
 		<path d="M18 21V3c-2.2 0-3.5 2.4-3.5 5.5V13H18" />
 	{:else if name === 'chevron-down'}
 		<path d="m6 9 6 6 6-6" />
+	{:else if name === 'delivery'}
+		<!-- A scooter: two wheels, the deck, the steering column and a box on the back. -->
+		<circle cx="6" cy="17" r="2.5" />
+		<circle cx="18" cy="17" r="2.5" />
+		<path d="M8.5 17h7" />
+		<path d="M15.5 17 13 8.5h-3" />
+		<path d="M13 8.5 15.5 5h3" />
+		<rect x="3" y="9" width="6" height="5" rx="1" />
 	{/if}
 </svg>
