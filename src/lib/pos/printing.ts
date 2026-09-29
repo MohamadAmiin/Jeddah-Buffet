@@ -343,3 +343,63 @@ export function startAutoPrint(opts: PrintOptions = {}): () => void {
 		})().catch(() => {});
 	});
 }
+
+// ── Recent sales (T-31) ─────────────────────────────────────────────────────
+
+/** This device's completed and abandoned sales, newest first, for /pos/sales. */
+export async function listRecentSales(deviceId: string, limit = 100): Promise<LocalOrder<Cart>[]> {
+	const orders = await readAllOrders();
+	return orders
+		.filter(
+			(order) =>
+				order.deviceId === deviceId && (order.state === 'completed' || order.state === 'abandoned')
+		)
+		.sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))
+		.slice(0, limit);
+}
+
+export type SaleStatusMark = {
+	glyph: '●' | '◆' | '◐' | '✕' | '↩' | '○';
+	text: string;
+	tone: 'ok' | 'pending' | 'danger' | 'neutral';
+};
+
+/** One glyph AND one sentence per sale: colour never carries the meaning alone. */
+export function saleStatusMark(order: LocalOrder<Cart>): SaleStatusMark {
+	if (order.syncStatus === 'rejected') {
+		return { glyph: '✕', text: 'Refused — no receipt', tone: 'danger' };
+	}
+	if (order.state === 'abandoned') return { glyph: '↩', text: 'Cancelled', tone: 'neutral' };
+	if (!order.sale) {
+		return { glyph: '○', text: 'Sold before printing was set up', tone: 'neutral' };
+	}
+	const method = order.sale.payload.payments[0]?.method;
+	if (method === 'cash') {
+		// A completed cash sale is a fact, whatever the server said: still printable.
+		return order.syncStatus === 'unrecorded'
+			? { glyph: '◆', text: "Recorded for the owner's review", tone: 'pending' }
+			: { glyph: '●', text: 'Paid', tone: 'ok' };
+	}
+	if (order.syncStatus === 'accepted' || order.syncStatus === 'recorded_flagged') {
+		return { glyph: '●', text: 'Paid', tone: 'ok' };
+	}
+	return { glyph: '◐', text: 'Awaiting confirmation — no receipt yet', tone: 'pending' };
+}
+
+/** Why a sale cannot be reprinted, in the words the disabled button shows; null when it can. */
+export function reprintRefusal(order: LocalOrder<Cart>): string | null {
+	const can = canPrint(order);
+	if (can.ok) return null;
+	switch (can.reason) {
+		case 'awaiting_confirmation':
+			return "Awaiting the server's confirmation";
+		case 'refused':
+			return 'Refused — no receipt';
+		case 'no_snapshot':
+			return 'Sold before printing was set up';
+		case 'abandoned':
+			return order.syncStatus === 'rejected' ? 'Refused — no receipt' : 'Cancelled — no receipt';
+		case 'not_completed':
+			return 'Not a completed sale';
+	}
+}

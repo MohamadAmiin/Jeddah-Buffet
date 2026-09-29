@@ -128,6 +128,8 @@ describe('MANDATORY (spec 29) — the till screens hold no number conversion of 
 		'src/routes/(pos)/pos/session/+page.svelte',
 		'src/routes/(pos)/pos/order/+page.svelte',
 		'src/routes/(pos)/pos/pay/+page.svelte',
+		'src/routes/(pos)/pos/sales/+page.svelte',
+		'src/routes/(pos)/pos/printer/+page.svelte',
 		'src/lib/pos/menu-view.ts'
 	];
 	const FORBIDDEN = [

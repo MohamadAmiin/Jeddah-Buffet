@@ -6,15 +6,25 @@ import 'fake-indexeddb/auto';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { addLine, completeSale, newCart, type Cart, type MenuItemForCart } from './orders';
+import {
+	abandonSale,
+	addLine,
+	completeSale,
+	newCart,
+	type Cart,
+	type MenuItemForCart
+} from './orders';
 import { saveAgentSettings } from './print-client';
 import {
 	CATCH_UP_WINDOW_MS,
 	catchUp,
+	listRecentSales,
 	printOriginals,
 	readOrder,
 	readReceiptHeader,
 	reprint,
+	reprintRefusal,
+	saleStatusMark,
 	startAutoPrint
 } from './printing';
 import { flush } from './queue';
@@ -310,6 +320,104 @@ describe('startAutoPrint and the catch-up', () => {
 		expect(agent.drawers()).toHaveLength(0);
 		expect((await readOrder(old.orderId))?.printed).toBeUndefined();
 		expect(CATCH_UP_WINDOW_MS).toBe(600_000);
+	});
+});
+
+describe('listRecentSales and saleStatusMark (T-31)', () => {
+	it("lists only this device's completed and abandoned sales, newest first, at most limit", async () => {
+		const first = await sell('cash', { now: new Date(NOW_MS - 3000) });
+		const second = await sell('card', { now: new Date(NOW_MS - 2000) });
+		const third = await sell('cash', { now: new Date(NOW_MS - 1000) });
+		const other = await sell('cash', { deviceId: 'device-B', now: new Date(NOW_MS) });
+		await abandonSale(second.orderId, 'cancelled', new Date(NOW_MS));
+		// A cart in progress is not a sale.
+		await withDb(
+			(db) =>
+				new Promise<void>((resolve, reject) => {
+					const tx = db.transaction('orders', 'readwrite');
+					tx.objectStore('orders').put({
+						id: 'cart-1',
+						deviceId: 'device-A',
+						state: 'cart',
+						cart: newCart('device-A', 'dine_in', null, new Date(NOW_MS))
+					} satisfies LocalOrder<Cart>);
+					tx.oncomplete = () => resolve();
+					tx.onerror = () => reject(tx.error);
+				})
+		);
+
+		const all = await listRecentSales('device-A');
+		expect(all.map((o) => o.id)).toEqual([third.orderId, second.orderId, first.orderId]);
+		expect(all.map((o) => o.state)).toEqual(['completed', 'abandoned', 'completed']);
+		expect((await listRecentSales('device-A', 2)).map((o) => o.id)).toEqual([
+			third.orderId,
+			second.orderId
+		]);
+		expect((await listRecentSales('device-B')).map((o) => o.id)).toEqual([other.orderId]);
+		expect(await listRecentSales('device-C')).toEqual([]);
+	});
+
+	it('gives every sale its glyph, sentence and tone — and the reason a reprint is refused', async () => {
+		const cash = await sell('cash');
+		const order = (await readOrder(cash.orderId))!;
+		expect(saleStatusMark(order)).toEqual({ glyph: '●', text: 'Paid', tone: 'ok' });
+		expect(saleStatusMark({ ...order, syncStatus: 'accepted' })).toEqual({
+			glyph: '●',
+			text: 'Paid',
+			tone: 'ok'
+		});
+		const review = { ...order, syncStatus: 'unrecorded' as const };
+		expect(saleStatusMark(review)).toEqual({
+			glyph: '◆',
+			text: "Recorded for the owner's review",
+			tone: 'pending'
+		});
+		// Still printable: the customer paid.
+		expect(reprintRefusal(review)).toBeNull();
+		expect(reprintRefusal(order)).toBeNull();
+
+		const card = (await readOrder((await sell('card')).orderId))!;
+		expect(saleStatusMark(card)).toEqual({
+			glyph: '◐',
+			text: 'Awaiting confirmation — no receipt yet',
+			tone: 'pending'
+		});
+		expect(reprintRefusal(card)).toBe("Awaiting the server's confirmation");
+		for (const syncStatus of ['accepted', 'recorded_flagged'] as const) {
+			expect(saleStatusMark({ ...card, syncStatus })).toEqual({
+				glyph: '●',
+				text: 'Paid',
+				tone: 'ok'
+			});
+			expect(reprintRefusal({ ...card, syncStatus })).toBeNull();
+		}
+		// A card sale the server could not record waits: closed, not printed.
+		expect(saleStatusMark({ ...card, syncStatus: 'unrecorded' }).glyph).toBe('◐');
+		expect(reprintRefusal({ ...card, syncStatus: 'unrecorded' })).toBe(
+			"Awaiting the server's confirmation"
+		);
+
+		const refused = { ...card, syncStatus: 'rejected' as const };
+		expect(saleStatusMark(refused)).toEqual({
+			glyph: '✕',
+			text: 'Refused — no receipt',
+			tone: 'danger'
+		});
+		expect(reprintRefusal(refused)).toBe('Refused — no receipt');
+		expect(saleStatusMark({ ...refused, state: 'abandoned' }).glyph).toBe('✕');
+		expect(reprintRefusal({ ...refused, state: 'abandoned' })).toBe('Refused — no receipt');
+
+		const cancelled = { ...card, state: 'abandoned' as const };
+		expect(saleStatusMark(cancelled)).toEqual({ glyph: '↩', text: 'Cancelled', tone: 'neutral' });
+		expect(reprintRefusal(cancelled)).toBe('Cancelled — no receipt');
+
+		const old = { ...order, sale: undefined };
+		expect(saleStatusMark(old)).toEqual({
+			glyph: '○',
+			text: 'Sold before printing was set up',
+			tone: 'neutral'
+		});
+		expect(reprintRefusal(old)).toBe('Sold before printing was set up');
 	});
 });
 

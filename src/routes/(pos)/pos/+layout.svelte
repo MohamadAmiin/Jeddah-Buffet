@@ -336,6 +336,7 @@
 			now
 		)
 	);
+	const onSales = $derived(page.url.pathname.startsWith('/pos/sales'));
 	const roleLabel = $derived(
 		signedIn.current === null ? '' : signedIn.current.isOwner ? 'Owner' : signedIn.current.roleName
 	);
@@ -395,15 +396,31 @@
 				</span>
 			</div>
 
-			<nav aria-label="Till">
+			<nav aria-label="Till" class="flex flex-wrap items-center gap-2">
 				<a
 					href={resolve(signedIn.current !== null ? '/pos/order' : '/pos')}
-					aria-current="page"
-					class="bg-rail-active text-rail-ink min-h-touch-min inline-flex items-center gap-2 rounded-full px-5 font-semibold"
+					aria-current={onSales ? undefined : 'page'}
+					class="text-rail-ink min-h-touch-min inline-flex items-center gap-2 rounded-full px-5 font-semibold {onSales
+						? 'border-rail-line border'
+						: 'bg-rail-active'}"
 				>
 					<PosIcon name="bag" />
 					POS
 				</a>
+				{#if signedIn.current !== null}
+					<!-- Recent sales and reprints (T-31). Same tab styling; the current one
+					     is filled AND carries aria-current, the other is outlined. -->
+					<a
+						href={resolve('/pos/sales')}
+						aria-current={onSales ? 'page' : undefined}
+						class="text-rail-ink min-h-touch-min inline-flex items-center gap-2 rounded-full px-5 font-semibold {onSales
+							? 'bg-rail-active'
+							: 'border-rail-line border'}"
+					>
+						<PosIcon name="clipboard" />
+						Sales
+					</a>
+				{/if}
 			</nav>
 
 			<div class="ml-auto flex items-center gap-4">
