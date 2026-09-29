@@ -103,7 +103,6 @@ const name = z
 	.trim()
 	.min(1, 'Enter a name.')
 	.max(120, 'Keep the name under 120 characters.')
-	// eslint-disable-next-line no-control-regex -- refusing control characters is the point
 	.refine(
 		(v) => !/[\u0000-\u001f\u007f-\u009f]/.test(v),
 		'Remove the control characters from the name.'

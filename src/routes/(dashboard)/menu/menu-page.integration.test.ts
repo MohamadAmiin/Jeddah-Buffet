@@ -8,7 +8,7 @@ import { users } from '$lib/server/db/schema/users';
 import { menuCategories, menuImages, menuItems } from '$lib/server/db/schema/menu';
 import type { Principal } from '$lib/server/auth/session';
 import { onRestaurantCreated, updateSettings } from '$lib/server/restaurants';
-import { createCategory, createItem, listMenu } from '$lib/server/menu';
+import { createCategory, listMenu } from '$lib/server/menu';
 import { load, actions } from './+page.server';
 
 const db = testDb();
