@@ -39,8 +39,6 @@
 	const controlClass = 'border-control-line bg-bg text-ink rounded-control border px-3 py-2';
 </script>
 
-```svelte
-
 <div class="flex flex-col gap-1">
 	<label for={id} class="text-ink-2 text-sm font-medium">{label}</label>
 
@@ -75,4 +73,3 @@
 		<span id={reasonId} class="text-ink-2 text-xs">{disabledReason}</span>
 	{/if}
 </div>
-```

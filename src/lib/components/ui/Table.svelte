@@ -14,8 +14,6 @@
 	} = $props();
 </script>
 
-```svelte id="5x9m2k"
-
 <table class="w-full">
 	<caption class="sr-only">{caption}</caption>
 
@@ -58,4 +56,3 @@
 		</tbody>
 	{/if}
 </table>
-```

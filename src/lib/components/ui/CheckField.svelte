@@ -30,8 +30,6 @@
 	);
 </script>
 
-```svelte
-
 <div class="flex flex-col gap-1">
 	<label for={id} class="text-ink-2 text-sm font-medium">
 		<input
@@ -59,4 +57,3 @@
 		</span>
 	{/if}
 </div>
-```
