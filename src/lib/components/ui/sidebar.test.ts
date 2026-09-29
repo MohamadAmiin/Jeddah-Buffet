@@ -44,9 +44,14 @@ describe('the dashboard rail', () => {
 
 	// Every task that turns a rail row on must decrement this number in the same
 	// commit. T-31 turns `Employees` on (6 → 5) and T-39 turns `Menu` on (5 → 4);
-	// tasks/inventory-cogs T-27 turns `Inventory` on (3 → 2).
+	// tasks/inventory-cogs T-27 turns `Inventory` on (3 → 2) and T-30 turns
+	// `Purchases` on (2 → 1).
 	it('counts the rows that are not built yet', () => {
-		expect(source.match(/href: null/g)?.length).toBe(2);
+		expect(source.match(/href: null/g)?.length).toBe(1);
+	});
+
+	it('has a live Purchases row', () => {
+		expect(source).toMatch(/label:\s*'Purchases',\s*href:\s*'\/purchases'/);
 	});
 
 	it('has a live Inventory row', () => {

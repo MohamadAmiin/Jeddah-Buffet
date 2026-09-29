@@ -36,6 +36,7 @@
 			| '/employees'
 			| '/menu'
 			| '/inventory'
+			| '/purchases'
 			| '/reports'
 			| null;
 		icon: IconName;
@@ -107,7 +108,7 @@
 			id: 'nav-money',
 			label: 'Money',
 			items: [
-				{ label: 'Purchases', href: null, icon: 'purchases' },
+				{ label: 'Purchases', href: '/purchases', icon: 'purchases' },
 				{ label: 'Expenses', href: null, icon: 'expenses' },
 				{ label: 'Reports', href: '/reports', icon: 'reports' }
 			]
