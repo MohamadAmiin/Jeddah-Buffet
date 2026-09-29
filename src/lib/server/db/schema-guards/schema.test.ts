@@ -194,6 +194,7 @@ describe('schema guards every future aggregate inherits', () => {
 			'journal_entries',
 			'journal_entry_lines',
 			'menu_categories',
+			'menu_images',
 			'menu_item_modifier_groups',
 			'menu_items',
 			'modifier_groups',

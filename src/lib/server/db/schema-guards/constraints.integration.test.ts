@@ -438,6 +438,141 @@ describe('menu constraints (T-37)', () => {
 	});
 });
 
+describe('menu photos, optional categories and order types (menu-and-printing T-05)', () => {
+	async function makeCategory(restaurantId: string, name = 'Drinks'): Promise<string> {
+		const { rows } = await pool.query<{ id: string }>(
+			'insert into menu_categories (restaurant_id, name) values ($1, $2) returning id',
+			[restaurantId, name]
+		);
+		return rows[0].id;
+	}
+
+	// Four bytes that claim to be a PNG: the database checks size and type text,
+	// never the content — sniffing is the menu module's job (T-07).
+	async function makeImage(
+		restaurantId: string,
+		bytes: Buffer = Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+		contentType = 'image/png'
+	): Promise<string> {
+		const { rows } = await pool.query<{ id: string }>(
+			`insert into menu_images (restaurant_id, content_type, byte_size, bytes)
+			 values ($1, $2, $3, $4) returning id`,
+			[restaurantId, contentType, bytes.byteLength, bytes]
+		);
+		return rows[0].id;
+	}
+
+	async function itemCount(restaurantId: string): Promise<number> {
+		const { rows } = await pool.query<{ n: string }>(
+			'select count(*)::text as n from menu_items where restaurant_id = $1',
+			[restaurantId]
+		);
+		return Number(rows[0].n);
+	}
+
+	it('accepts an item with no category', async () => {
+		const r = await makeRestaurant();
+		const { rows } = await pool.query<{ category_id: string | null }>(
+			`insert into menu_items (restaurant_id, category_id, name, price_minor)
+			 values ($1, null, 'Water', 150) returning category_id`,
+			[r]
+		);
+		expect(rows[0].category_id).toBeNull();
+		expect(await itemCount(r)).toBe(1);
+	});
+
+	it("still rejects an item in another restaurant's category (MATCH SIMPLE only skips NULL)", async () => {
+		const a = await makeRestaurant('Restaurant A');
+		const b = await makeRestaurant('Restaurant B');
+		const categoryOfA = await makeCategory(a);
+		const error = await expectError(
+			`insert into menu_items (restaurant_id, category_id, name, price_minor)
+			 values ($1, $2, 'Tea', 850)`,
+			[b, categoryOfA]
+		);
+		expect(error.code).toBe('23503');
+		expect(error.constraint).toBe('menu_items_category_fk');
+		expect(await itemCount(b)).toBe(0);
+	});
+
+	it('rejects an SVG photo by content type', async () => {
+		const r = await makeRestaurant();
+		const error = await expectError(
+			`insert into menu_images (restaurant_id, content_type, byte_size, bytes)
+			 values ($1, 'image/svg+xml', 4, $2)`,
+			[r, Buffer.from('<svg')]
+		);
+		expect(error.code).toBe('23514');
+		expect(error.constraint).toBe('menu_images_content_type_valid');
+	});
+
+	it('rejects an empty photo and one over 409,600 bytes', async () => {
+		const r = await makeRestaurant();
+		const empty = await expectError(
+			`insert into menu_images (restaurant_id, content_type, byte_size, bytes)
+			 values ($1, 'image/png', 0, $2)`,
+			[r, Buffer.alloc(0)]
+		);
+		expect(empty.code).toBe('23514');
+		expect(empty.constraint).toBe('menu_images_byte_size_range');
+
+		const oversize = await expectError(
+			`insert into menu_images (restaurant_id, content_type, byte_size, bytes)
+			 values ($1, 'image/jpeg', 409601, $2)`,
+			[r, Buffer.alloc(409601)]
+		);
+		expect(oversize.code).toBe('23514');
+		expect(oversize.constraint).toBe('menu_images_byte_size_range');
+	});
+
+	it('rejects a byte_size that disagrees with the bytes', async () => {
+		const r = await makeRestaurant();
+		const error = await expectError(
+			`insert into menu_images (restaurant_id, content_type, byte_size, bytes)
+			 values ($1, 'image/webp', 5, $2)`,
+			[r, Buffer.from([1, 2, 3, 4])]
+		);
+		expect(error.code).toBe('23514');
+		expect(error.constraint).toBe('menu_images_byte_size_matches');
+	});
+
+	it("rejects another restaurant's photo on an item", async () => {
+		const a = await makeRestaurant('Restaurant A');
+		const b = await makeRestaurant('Restaurant B');
+		const photoOfB = await makeImage(b);
+		const error = await expectError(
+			`insert into menu_items (restaurant_id, category_id, name, price_minor, image_id)
+			 values ($1, null, 'Tea', 850, $2)`,
+			[a, photoOfB]
+		);
+		expect(error.code).toBe('23503');
+		expect(error.constraint).toBe('menu_items_image_fk');
+	});
+
+	it('refuses to delete a photo an item still references (ON DELETE RESTRICT)', async () => {
+		const r = await makeRestaurant();
+		const photo = await makeImage(r);
+		await pool.query(
+			`insert into menu_items (restaurant_id, category_id, name, price_minor, image_id)
+			 values ($1, null, 'Tea', 850, $2)`,
+			[r, photo]
+		);
+		const error = await expectError('delete from menu_images where id = $1', [photo]);
+		expect(error.code).toBe('23503');
+		expect(error.constraint).toBe('menu_items_image_fk');
+	});
+
+	it('the orders.order_type CHECK lists exactly ORDER_TYPES', async () => {
+		const { rows } = await pool.query<{ def: string }>(
+			`select pg_get_constraintdef(oid) as def from pg_constraint
+			 where conname = 'orders_order_type_valid'`
+		);
+		expect(rows).toHaveLength(1);
+		const literals = [...rows[0].def.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort();
+		expect(literals).toEqual([...ORDER_TYPES].sort());
+	});
+});
+
 describe('referential integrity', () => {
 	it('refuses to delete a restaurant that has a user', async () => {
 		const restaurantId = await makeRestaurant();
@@ -1107,7 +1242,7 @@ async function makeEntry(client: pg.PoolClient, restaurantId: string): Promise<s
 
 describe('value sets are pinned to the isomorphic constants (T-08)', () => {
 	it('lists match the wire contract, verbatim', () => {
-		expect([...ORDER_TYPES]).toEqual(['dine_in', 'takeaway']);
+		expect([...ORDER_TYPES]).toEqual(['dine_in', 'takeaway', 'delivery']);
 		expect([...PAYMENT_METHODS]).toEqual(['cash', 'card', 'mobile']);
 		expect([...ORDER_STATUSES]).toEqual(['open', 'billed', 'paid', 'voided', 'refunded']);
 		expect([...LINE_STATUSES]).toEqual(['new', 'sent', 'voided']);
@@ -1133,7 +1268,7 @@ describe('value sets are pinned to the isomorphic constants (T-08)', () => {
 				restaurant_id, pos_session_id, device_id, employee_user_id, order_type, status,
 				tax_mode, currency_code, menu_version, subtotal_minor, tax_minor, total_minor,
 				opened_at, paid_at
-			) values ($1, $2, $3, $4, 'delivery', 'paid', 'exclusive', 'USD', 1, 1000, 100, 1100,
+			) values ($1, $2, $3, $4, 'drive_thru', 'paid', 'exclusive', 'USD', 1, 1000, 100, 1100,
 				now(), now())`,
 			[r, s, d, o]
 		);
