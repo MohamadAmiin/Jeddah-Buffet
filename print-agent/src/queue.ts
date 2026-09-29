@@ -169,6 +169,15 @@ export function createQueue(options: QueueOptions): Queue {
 	let closed = false;
 	let seq = 0;
 
+	/** Delete a queue file; one that is already gone, or held by another process, is not an error. */
+	function discard(file: string): void {
+		try {
+			unlinkSync(file);
+		} catch {
+			// Left on disk: the id is in `seen`, so the next start drops it again.
+		}
+	}
+
 	// Resume whatever the last run left on disk, FIFO by file name.
 	for (const name of readdirSync(queueDir).sort()) {
 		const match = FILE_RE.exec(name);
@@ -177,9 +186,18 @@ export function createQueue(options: QueueOptions): Queue {
 		const file = join(queueDir, name);
 		try {
 			const job = JSON.parse(readFileSync(file, 'utf8')) as QueuedJob;
-			if (typeof job.id === 'string' && (job.target === 'receipt' || job.target === 'kitchen')) {
-				workers[job.target].jobs.push({ file, job });
+			if (typeof job.id !== 'string' || (job.target !== 'receipt' && job.target !== 'kitchen')) {
+				continue;
 			}
+			if (seen.has(job.id)) {
+				// Printed by the last run, which recorded the id and then could not
+				// delete the file (a crash, or a scanner holding it on Windows). It
+				// must NOT print again: a second original is an unmarked duplicate.
+				discard(file);
+				log(`dropped ${job.id}: already printed`);
+				continue;
+			}
+			workers[job.target].jobs.push({ file, job });
 		} catch {
 			// A half-written file cannot exist (atomic rename); an unreadable one is left for the owner.
 		}
@@ -211,6 +229,13 @@ export function createQueue(options: QueueOptions): Queue {
 			while (!closed && worker.jobs.length > 0) {
 				const head = worker.jobs[0];
 				if (!head) break;
+				if (seen.has(head.job.id)) {
+					// The second wall behind the resume check: whatever put a printed
+					// id back in the list, it is dropped, never sent.
+					discard(head.file);
+					worker.jobs.shift();
+					continue;
+				}
 				const paper = await paperStatus(worker.printer, paperTimeout);
 				if (closed) break;
 				if (paper === 'paper_out') {
@@ -224,13 +249,12 @@ export function createQueue(options: QueueOptions): Queue {
 					await backOff(worker, `${worker.target} unreachable: ${(error as Error).message}`);
 					continue;
 				}
+				// The id is recorded BEFORE the file is deleted: if the delete fails or
+				// the PC loses power in between, the next start finds the file, finds
+				// the id in `seen`, and drops it instead of printing it again.
 				seen.record(head.job.id);
 				log(`printed ${head.job.id}`);
-				try {
-					unlinkSync(head.file);
-				} catch {
-					// Already gone — the id is in seen, so a resume cannot print it twice.
-				}
+				discard(head.file);
 				worker.jobs.shift();
 				worker.delayMs = retry.baseMs;
 			}
