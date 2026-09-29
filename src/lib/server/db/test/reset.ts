@@ -5,7 +5,10 @@ import pg from 'pg';
 // with the code under test.
 //
 // Current tables, child-first for readability (the single statement below makes
-// the order irrelevant): journal_entry_lines, journal_entries, accounts,
+// the order irrelevant): stock_count_lines, stock_counts, waste_entries,
+// opening_stock_entries, stock_movements, supplier_payments, purchase_lines,
+// purchases, recipe_lines, ingredient_purchase_units, ingredients,
+// journal_entry_lines, journal_entries, accounts,
 // pos_sync_ops, invoices, payments, order_line_modifiers, order_lines, orders,
 // pos_sessions, audit_log, sessions, pos_devices, menu_item_modifier_groups,
 // modifiers, menu_items, modifier_groups, menu_categories, users,
@@ -16,10 +19,21 @@ import pg from 'pg';
 // and payments block UPDATE and DELETE but not TRUNCATE (TRUNCATE fires only
 // statement-level triggers), so this single TRUNCATE ... RESTART IDENTITY CASCADE
 // remains the one way to clear them. RESTART IDENTITY also resets the identity
-// sequences of journal_entry_lines and pos_sync_ops.
+// sequences of journal_entry_lines, pos_sync_ops and stock_movements.
 export const TABLES = [
 	'audit_log',
 	'sessions',
+	'stock_count_lines',
+	'stock_counts',
+	'waste_entries',
+	'opening_stock_entries',
+	'stock_movements',
+	'supplier_payments',
+	'purchase_lines',
+	'purchases',
+	'recipe_lines',
+	'ingredient_purchase_units',
+	'ingredients',
 	'journal_entry_lines',
 	'journal_entries',
 	'accounts',

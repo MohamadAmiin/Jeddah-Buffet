@@ -16,7 +16,17 @@ export const POSTING_EVENTS = [
 	'mobile_sale',
 	'cost_of_goods_sold',
 	'cash_shortage_at_close',
-	'cash_overage_at_close'
+	'cash_overage_at_close',
+	// tasks/inventory-cogs (T-13): deliveries, supplier payments, waste, counts,
+	// revaluation and opening stock. Spelled exactly as journal_entries_event_valid.
+	'purchase_paid',
+	'purchase_on_credit',
+	'supplier_paid',
+	'waste',
+	'stock_count_shortfall',
+	'stock_count_surplus',
+	'inventory_revaluation',
+	'opening_stock'
 ] as const;
 export type PostingEvent = (typeof POSTING_EVENTS)[number];
 
@@ -35,13 +45,17 @@ export type SaleTotals = {
 
 const CODE = {
 	CASH_ON_HAND: '1000',
+	BANK: '1010',
 	CLEARING_CARD: '1020',
 	CLEARING_MOBILE: '1030',
 	INVENTORY: '1200',
+	ACCOUNTS_PAYABLE: '2000',
 	TAX_PAYABLE: '2100',
+	OWNERS_CAPITAL: '3000',
 	SALES_REVENUE: '4000',
 	SALES_DISCOUNTS: '4100',
 	COGS: '5000',
+	WASTE_ADJUSTMENTS: '5100',
 	CASH_OVER_SHORT: '6800'
 } as const;
 
@@ -127,6 +141,114 @@ export function overShortEvent(difference: Minor): PostingEvent | null {
 	if (difference < 0n) return 'cash_shortage_at_close';
 	if (difference > 0n) return 'cash_overage_at_close';
 	return null;
+}
+
+// ── tasks/inventory-cogs (T-13): the inventory and purchasing rows ──────────
+// Every amount is a non-negative Minor except revaluationLines'. Zero lines are
+// kept (postEntry drops them); nothing here reads the database.
+
+export type PaidBy = 'cash' | 'bank' | 'credit';
+export type PaidFrom = 'cash' | 'bank';
+
+function nonNegative(amount: Minor, what: string): void {
+	if (typeof amount !== 'bigint' || amount < 0n) {
+		throw new TypeError(`${what} must be a non-negative bigint of minor units`);
+	}
+}
+
+function cashOrBank(from: PaidFrom): string {
+	if (from === 'cash') return CODE.CASH_ON_HAND;
+	if (from === 'bank') return CODE.BANK;
+	throw new TypeError(`paid from must be cash or bank, got ${String(from)}`);
+}
+
+/** Spec 24 "Purchase paid immediately" vs "Purchase on credit". */
+export function purchaseEvent(paidBy: PaidBy): PostingEvent {
+	if (paidBy === 'cash' || paidBy === 'bank') return 'purchase_paid';
+	if (paidBy === 'credit') return 'purchase_on_credit';
+	throw new TypeError(`paid by must be cash, bank or credit, got ${String(paidBy)}`);
+}
+
+/** Spec 24 "Purchase paid immediately | Inventory | Cash on Hand or Bank" and
+ * "Purchase on credit | Inventory | Accounts Payable": Dr 1200 / Cr 1000, 1010
+ * or 2000. Cash means cash kept outside the till (CLAUDE.md, "Inventory 3"). */
+export function purchaseLines(paidBy: PaidBy, total: Minor): RuleLine[] {
+	nonNegative(total, 'a purchase total');
+	const credit = paidBy === 'credit' ? CODE.ACCOUNTS_PAYABLE : cashOrBank(paidBy);
+	return [
+		{ code: CODE.INVENTORY, debit: total },
+		{ code: credit, credit: total }
+	];
+}
+
+/** Spec 24 "Supplier paid | Accounts Payable | Cash on Hand or Bank". */
+export function supplierPaymentLines(paidFrom: PaidFrom, amount: Minor): RuleLine[] {
+	nonNegative(amount, 'a supplier payment');
+	return [
+		{ code: CODE.ACCOUNTS_PAYABLE, debit: amount },
+		{ code: cashOrBank(paidFrom), credit: amount }
+	];
+}
+
+/** Spec 24 "Waste / void after preparation | Waste & Inventory Adjustments |
+ * Inventory": Dr 5100 / Cr 1200. */
+export function wasteLines(cost: Minor): RuleLine[] {
+	nonNegative(cost, 'a waste cost');
+	return [
+		{ code: CODE.WASTE_ADJUSTMENTS, debit: cost },
+		{ code: CODE.INVENTORY, credit: cost }
+	];
+}
+
+/** Spec 24 "Stock count shortfall | Waste & Inventory Adjustments | Inventory". */
+export function countShortfallLines(amount: Minor): RuleLine[] {
+	nonNegative(amount, 'a count shortfall');
+	return [
+		{ code: CODE.WASTE_ADJUSTMENTS, debit: amount },
+		{ code: CODE.INVENTORY, credit: amount }
+	];
+}
+
+/** Spec 24 "Stock count surplus | Inventory | Waste & Inventory Adjustments". */
+export function countSurplusLines(amount: Minor): RuleLine[] {
+	nonNegative(amount, 'a count surplus');
+	return [
+		{ code: CODE.INVENTORY, debit: amount },
+		{ code: CODE.WASTE_ADJUSTMENTS, credit: amount }
+	];
+}
+
+/** Revaluation of stock when a delivery lands in zero or negative stock, or a
+ * reversal leaves stock the average cannot describe (CLAUDE.md, "Inventory 2":
+ * against 5000 Cost of Goods Sold). SIGNED: net < 0 posts Dr 5000 / Cr 1200;
+ * net > 0 posts Dr 1200 / Cr 5000; zero posts nothing. */
+export function revaluationLines(net: Minor): RuleLine[] {
+	if (typeof net !== 'bigint') throw new TypeError('a revaluation is a bigint of minor units');
+	if (net < 0n) {
+		const magnitude = negate(net);
+		return [
+			{ code: CODE.COGS, debit: magnitude },
+			{ code: CODE.INVENTORY, credit: magnitude }
+		];
+	}
+	if (net > 0n) {
+		return [
+			{ code: CODE.INVENTORY, debit: net },
+			{ code: CODE.COGS, credit: net }
+		];
+	}
+	return [];
+}
+
+/** Stock on the shelf at go-live, contributed by the owner (CLAUDE.md,
+ * "Inventory 1" — a recorded amendment to spec 24, which has no row for it):
+ * Dr 1200 Inventory / Cr 3000 Owner's Capital. */
+export function openingStockLines(value: Minor): RuleLine[] {
+	nonNegative(value, 'an opening stock value');
+	return [
+		{ code: CODE.INVENTORY, debit: value },
+		{ code: CODE.OWNERS_CAPITAL, credit: value }
+	];
 }
 
 /** Σdebit === Σcredit — check for tests and for T-14's callers, not a repair.

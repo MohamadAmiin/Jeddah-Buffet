@@ -9,9 +9,20 @@ import {
 	cogsLines,
 	overShortLines,
 	overShortEvent,
-	SALE_EVENTS
+	SALE_EVENTS,
+	purchaseEvent,
+	purchaseLines,
+	supplierPaymentLines,
+	wasteLines,
+	countShortfallLines,
+	countSurplusLines,
+	revaluationLines,
+	openingStockLines,
+	type PostingEvent,
+	type RuleLine
 } from './posting-rules';
-import { postEntry, entryLines } from './journal';
+import type { JournalSourceType } from './journal';
+import { postEntry, postReversal, entryLines } from './journal';
 import { db } from '../db/client';
 import { onRestaurantCreated } from '../restaurants';
 import { restaurants } from '../db/schema/restaurants';
@@ -66,67 +77,131 @@ function underlyingMessage(err: unknown): string {
 	return messages.join(' | ');
 }
 
+// One rule builder per POSTING_EVENTS member: pos-sales' six unchanged, plus
+// tasks/inventory-cogs' eight (T-13). Record<PostingEvent, ...> makes a missing
+// event a type error, so the property test always covers every event.
+type Built = { lines: RuleLine[]; sourceType: JournalSourceType };
+function saleBuilder(kind: (typeof SALE_EVENTS)[number]) {
+	return (next: () => bigint, i: number): Built => {
+		const nLines = Number(between(next, 1n, 6n));
+		const cartLines = [];
+		for (let j = 0; j < nLines; j++) {
+			const unitPriceMinor = minor(between(next, 0n, 100_000n));
+			const quantity = between(next, 1n, 9n);
+			const nDeltas = Number(between(next, 0n, 3n));
+			const deltas = [];
+			let deltaSum = 0n;
+			for (let k = 0; k < nDeltas; k++) {
+				const d = between(next, 0n, 2000n);
+				deltas.push(minor(d));
+				deltaSum += d;
+			}
+			const taxRateBp = Number(between(next, 0n, 10_000n));
+			const base = (unitPriceMinor + deltaSum) * quantity;
+			const discountMinor = minor(base > 0n ? between(next, 0n, base) : 0n);
+			cartLines.push({
+				unitPriceMinor,
+				quantity,
+				modifierDeltasMinor: deltas,
+				taxRateBp,
+				discountMinor
+			});
+		}
+		const totals = computeOrderTotals(
+			{ taxMode: i % 2 === 0 ? 'exclusive' : 'inclusive', lines: cartLines },
+			ROUNDING_RULE
+		);
+		return { lines: saleLines(kind, totals), sourceType: 'order' };
+	};
+}
+const amount = (next: () => bigint) => minor(between(next, 0n, 100_000n));
+const BUILDERS: Record<PostingEvent, (next: () => bigint, i: number) => Built> = {
+	cash_sale: saleBuilder('cash_sale'),
+	card_sale: saleBuilder('card_sale'),
+	mobile_sale: saleBuilder('mobile_sale'),
+	cost_of_goods_sold: (next) => ({ lines: cogsLines(amount(next)), sourceType: 'pos_session' }),
+	cash_shortage_at_close: (next) => {
+		const d = minor(between(next, -100_000n, -1n));
+		expect(overShortEvent(d)).toBe('cash_shortage_at_close');
+		return { lines: overShortLines(d), sourceType: 'pos_session' };
+	},
+	cash_overage_at_close: (next) => {
+		const d = minor(between(next, 1n, 100_000n));
+		expect(overShortEvent(d)).toBe('cash_overage_at_close');
+		return { lines: overShortLines(d), sourceType: 'pos_session' };
+	},
+	purchase_paid: (next, i) => {
+		const paidBy = i % 2 === 0 ? 'cash' : 'bank';
+		expect(purchaseEvent(paidBy)).toBe('purchase_paid');
+		return { lines: purchaseLines(paidBy, amount(next)), sourceType: 'purchase' };
+	},
+	purchase_on_credit: (next) => {
+		expect(purchaseEvent('credit')).toBe('purchase_on_credit');
+		return { lines: purchaseLines('credit', amount(next)), sourceType: 'purchase' };
+	},
+	supplier_paid: (next, i) => ({
+		lines: supplierPaymentLines(i % 2 === 0 ? 'cash' : 'bank', amount(next)),
+		sourceType: 'supplier_payment'
+	}),
+	waste: (next) => ({ lines: wasteLines(amount(next)), sourceType: 'waste_entry' }),
+	stock_count_shortfall: (next) => ({
+		lines: countShortfallLines(amount(next)),
+		sourceType: 'stock_count'
+	}),
+	stock_count_surplus: (next) => ({
+		lines: countSurplusLines(amount(next)),
+		sourceType: 'stock_count'
+	}),
+	inventory_revaluation: (next) => ({
+		lines: revaluationLines(minor(between(next, -100_000n, 100_000n))),
+		sourceType: 'purchase'
+	}),
+	opening_stock: (next) => ({
+		lines: openingStockLines(amount(next)),
+		sourceType: 'opening_stock'
+	})
+};
+
 describe('MANDATORY (spec 29) — 300 generated events all balance at COMMIT', () => {
-	it('every one of the six POSTING_EVENTS commits and Sigma-debit = Sigma-credit per entry', async () => {
+	it('every one of the POSTING_EVENTS commits and Sigma-debit = Sigma-credit per entry', async () => {
 		const next = generator(20260929n);
 		const kept: string[] = [];
+		const posted = new Set<PostingEvent>();
+		let reversed = 0;
 		await db.transaction(async (tx) => {
 			for (let i = 0; i < 300; i++) {
-				const kind = POSTING_EVENTS[i % 6];
-				let lines;
-				if ((SALE_EVENTS as readonly string[]).includes(kind)) {
-					const nLines = Number(between(next, 1n, 6n));
-					const cartLines = [];
-					for (let j = 0; j < nLines; j++) {
-						const unitPriceMinor = minor(between(next, 0n, 100_000n));
-						const quantity = between(next, 1n, 9n);
-						const nDeltas = Number(between(next, 0n, 3n));
-						const deltas = [];
-						let deltaSum = 0n;
-						for (let k = 0; k < nDeltas; k++) {
-							const d = between(next, 0n, 2000n);
-							deltas.push(minor(d));
-							deltaSum += d;
-						}
-						const taxRateBp = Number(between(next, 0n, 10_000n));
-						const base = (unitPriceMinor + deltaSum) * quantity;
-						const discountMinor = minor(base > 0n ? between(next, 0n, base) : 0n);
-						cartLines.push({
-							unitPriceMinor,
-							quantity,
-							modifierDeltasMinor: deltas,
-							taxRateBp,
-							discountMinor
-						});
-					}
-					const totals = computeOrderTotals(
-						{ taxMode: i % 2 === 0 ? 'exclusive' : 'inclusive', lines: cartLines },
-						ROUNDING_RULE
-					);
-					lines = saleLines(kind as (typeof SALE_EVENTS)[number], totals);
-				} else if (kind === 'cost_of_goods_sold') {
-					lines = cogsLines(minor(between(next, 0n, 100_000n)));
-				} else if (kind === 'cash_shortage_at_close') {
-					const d = between(next, -100_000n, -1n);
-					lines = overShortLines(minor(d));
-					expect(overShortEvent(minor(d))).toBe('cash_shortage_at_close');
-				} else {
-					const d = between(next, 1n, 100_000n);
-					lines = overShortLines(minor(d));
-					expect(overShortEvent(minor(d))).toBe('cash_overage_at_close');
-				}
+				const kind = POSTING_EVENTS[i % POSTING_EVENTS.length];
+				const { lines, sourceType } = BUILDERS[kind](next, i);
 				const result = await postEntry(tx, {
 					restaurantId,
 					businessDate: '2026-09-27',
 					event: kind,
-					sourceType: (SALE_EVENTS as readonly string[]).includes(kind) ? 'order' : 'pos_session',
+					sourceType,
 					sourceId: randomUUID(),
 					memo: `case ${i}`,
 					lines
 				});
-				if (result) kept.push(result.entryId);
+				if (result) {
+					kept.push(result.entryId);
+					posted.add(kind);
+				}
+			}
+			// tasks/inventory-cogs T-14: reverse a seeded half of them in the same
+			// transaction; every mirror must balance at COMMIT too.
+			for (const entryId of [...kept]) {
+				if ((next() >> 16n) % 2n === 0n) continue;
+				const reversal = await postReversal(tx, {
+					restaurantId,
+					entryId,
+					businessDate: '2026-09-28',
+					memo: `reverse ${entryId}`
+				});
+				kept.push(reversal.entryId);
+				reversed++;
 			}
 		});
+		expect(posted.size).toBe(POSTING_EVENTS.length);
+		expect(reversed).toBeGreaterThan(50);
 
 		const summary = await testDb().execute(sql`
 			select entry_id::text as entry_id,
@@ -384,5 +459,181 @@ describe('trigger-message tripwire', () => {
 		} catch (err) {
 			expect(underlyingMessage(err)).toMatch(/is not balanced|has no lines/);
 		}
+	});
+});
+
+describe('postReversal (tasks/inventory-cogs T-14)', () => {
+	/** Drizzle wraps the pg error; find the one carrying a SQLSTATE. */
+	function pgError(err: unknown): { code?: string; constraint?: string } {
+		let cur: unknown = err;
+		const seen = new Set<unknown>();
+		while (cur && !seen.has(cur)) {
+			seen.add(cur);
+			if ((cur as { code?: unknown }).code) return cur as { code: string; constraint?: string };
+			cur = (cur as { cause?: unknown }).cause;
+		}
+		return {};
+	}
+
+	async function counts(): Promise<{ entries: string; lines: string }> {
+		const [e] = await testDb()
+			.select({ c: sql<string>`count(*)::text` })
+			.from(journalEntries);
+		const [l] = await testDb()
+			.select({ c: sql<string>`count(*)::text` })
+			.from(journalEntryLines);
+		return { entries: e.c, lines: l.c };
+	}
+
+	async function postCreditPurchase(): Promise<string> {
+		let entryId = '';
+		await db.transaction(async (tx) => {
+			const result = await postEntry(tx, {
+				restaurantId,
+				businessDate: '2026-09-27',
+				event: 'purchase_on_credit',
+				sourceType: 'purchase',
+				sourceId: randomUUID(),
+				memo: 'delivery',
+				lines: purchaseLines('credit', minor(11000n))
+			});
+			entryId = result!.entryId;
+		});
+		return entryId;
+	}
+
+	it('mirrors a purchase on credit: Dr 2000 / Cr 1200 on the given date; the original is unchanged', async () => {
+		const originalId = await postCreditPurchase();
+		const [before] = await testDb()
+			.select()
+			.from(journalEntries)
+			.where(eq(journalEntries.id, originalId));
+		const beforeLines = await entryLines(testDb(), originalId);
+
+		let reversalId = '';
+		await db.transaction(async (tx) => {
+			reversalId = (
+				await postReversal(tx, {
+					restaurantId,
+					entryId: originalId,
+					businessDate: '2026-09-28',
+					memo: 'wrong delivery'
+				})
+			).entryId;
+		});
+
+		expect(await entryLines(testDb(), reversalId)).toEqual([
+			{ lineNo: 1, code: '1200', name: 'Inventory', debit: 0n, credit: 11000n },
+			{ lineNo: 2, code: '2000', name: 'Accounts Payable', debit: 11000n, credit: 0n }
+		]);
+		const [reversal] = await testDb()
+			.select()
+			.from(journalEntries)
+			.where(eq(journalEntries.id, reversalId));
+		expect(reversal.event).toBe('purchase_on_credit');
+		expect(reversal.sourceType).toBe(before.sourceType);
+		expect(reversal.sourceId).toBe(before.sourceId);
+		expect(reversal.reversesEntryId).toBe(originalId);
+		expect(reversal.businessDate).toBe('2026-09-28');
+		expect(reversal.memo).toBe('wrong delivery');
+
+		const [after] = await testDb()
+			.select()
+			.from(journalEntries)
+			.where(eq(journalEntries.id, originalId));
+		expect(after).toEqual(before);
+		expect(await entryLines(testDb(), originalId)).toEqual(beforeLines);
+	});
+
+	it('a second reversal of the same entry fails with 23505 and writes nothing', async () => {
+		const originalId = await postCreditPurchase();
+		await db.transaction(async (tx) => {
+			await postReversal(tx, {
+				restaurantId,
+				entryId: originalId,
+				businessDate: '2026-09-28',
+				memo: 'first'
+			});
+		});
+		const before = await counts();
+		let caught: unknown;
+		try {
+			await db.transaction(async (tx) => {
+				await postReversal(tx, {
+					restaurantId,
+					entryId: originalId,
+					businessDate: '2026-09-28',
+					memo: 'second'
+				});
+			});
+		} catch (err) {
+			caught = err;
+		}
+		expect(pgError(caught)).toMatchObject({
+			code: '23505',
+			constraint: 'journal_entries_reverses_entry_unique'
+		});
+		expect(await counts()).toEqual(before);
+	});
+
+	it('a reversal cannot be reversed', async () => {
+		const originalId = await postCreditPurchase();
+		let reversalId = '';
+		await db.transaction(async (tx) => {
+			reversalId = (
+				await postReversal(tx, {
+					restaurantId,
+					entryId: originalId,
+					businessDate: '2026-09-28',
+					memo: 'first'
+				})
+			).entryId;
+		});
+		await expect(
+			db.transaction(async (tx) => {
+				await postReversal(tx, {
+					restaurantId,
+					entryId: reversalId,
+					businessDate: '2026-09-28',
+					memo: 'undo the undo'
+				});
+			})
+		).rejects.toThrow('a reversal cannot be reversed');
+	});
+
+	it("another restaurant's entry is not found and nothing is written", async () => {
+		const originalId = await postCreditPurchase();
+		const otherRestaurant = await makeRestaurant('Other Cafe');
+		const before = await counts();
+		await expect(
+			db.transaction(async (tx) => {
+				await postReversal(tx, {
+					restaurantId: otherRestaurant,
+					entryId: originalId,
+					businessDate: '2026-09-28',
+					memo: 'cross-tenant'
+				});
+			})
+		).rejects.toThrow('journal entry not found');
+		expect(await counts()).toEqual(before);
+	});
+
+	it('a bad business date throws TypeError before any query', async () => {
+		const originalId = await postCreditPurchase();
+		let caught: unknown;
+		try {
+			await db.transaction(async (tx) => {
+				await postReversal(tx, {
+					restaurantId,
+					entryId: originalId,
+					businessDate: '2026-9-28',
+					memo: 'bad date'
+				});
+			});
+		} catch (err) {
+			caught = err;
+		}
+		expect(caught).toBeInstanceOf(TypeError);
+		expect((caught as Error).message).toMatch(/YYYY-MM-DD/);
 	});
 });

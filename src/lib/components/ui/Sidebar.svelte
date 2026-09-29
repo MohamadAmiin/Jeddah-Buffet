@@ -29,7 +29,16 @@
 
 	type NavItem = {
 		label: string;
-		href: '/dashboard' | '/settings' | '/device' | '/employees' | '/menu' | '/reports' | null;
+		href:
+			| '/dashboard'
+			| '/settings'
+			| '/device'
+			| '/employees'
+			| '/menu'
+			| '/inventory'
+			| '/purchases'
+			| '/reports'
+			| null;
 		icon: IconName;
 	};
 	type NavGroup = { id: string; label: string | null; items: NavItem[] };
@@ -92,14 +101,14 @@
 			label: 'Catalogue',
 			items: [
 				{ label: 'Menu', href: '/menu', icon: 'menu' },
-				{ label: 'Inventory', href: null, icon: 'inventory' }
+				{ label: 'Inventory', href: '/inventory', icon: 'inventory' }
 			]
 		},
 		{
 			id: 'nav-money',
 			label: 'Money',
 			items: [
-				{ label: 'Purchases', href: null, icon: 'purchases' },
+				{ label: 'Purchases', href: '/purchases', icon: 'purchases' },
 				{ label: 'Expenses', href: null, icon: 'expenses' },
 				{ label: 'Reports', href: '/reports', icon: 'reports' }
 			]
