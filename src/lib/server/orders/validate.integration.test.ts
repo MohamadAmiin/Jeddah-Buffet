@@ -259,6 +259,35 @@ describe('validateSale (T-18)', () => {
 		expect(result.ok).toBe(false);
 	});
 
+	// menu-and-printing T-09: delivery is a tag paid at the till, exactly like
+	// takeaway — the validator adds no rule tying the table label to the type.
+	it('accepts a delivery sale', async () => {
+		const result = await db.transaction((tx) =>
+			validateSale(
+				tx,
+				ctxFor(fx, fx.cashierId),
+				envelope(fx, { orderType: 'delivery', tableLabel: null })
+			)
+		);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.sale.orderType).toBe('delivery');
+			expect(result.sale.tableLabel).toBeNull();
+			expect(result.softFlags).toEqual([]);
+		}
+	});
+
+	it('an unknown order type is invalid_payload', async () => {
+		const result = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(fx, fx.cashierId), envelope(fx, { orderType: 'home_delivery' }))
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.hard).toBe('invalid_payload');
+			expect(result.detail).toContain('orderType');
+		}
+	});
+
 	it('flags a price at the SAME menu version as price_tamper', async () => {
 		const env = envelope(fx, {
 			lines: [

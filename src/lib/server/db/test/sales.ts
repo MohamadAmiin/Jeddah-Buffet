@@ -30,7 +30,12 @@ import type { PosDeviceContext } from '../../auth/pos-context';
 import { minor, ROUNDING_RULE } from '../../../money';
 import { computeOrderTotals, serializeTotals } from '../../../money/order-totals';
 import { changeDue } from '../../../money/change';
-import { formatInvoiceNumber, type OpEnvelope, type OpKind } from '../../../sync-ops';
+import {
+	formatInvoiceNumber,
+	type OpEnvelope,
+	type OpKind,
+	type OrderType
+} from '../../../sync-ops';
 import type { TaxMode } from '../../../money/tax';
 
 export type SalesFixture = {
@@ -273,7 +278,7 @@ export type RecordSaleOptions = {
 	occurredAt: Date;
 	invoiceSeq: number;
 	method: 'cash' | 'card' | 'mobile';
-	orderType: 'dine_in' | 'takeaway';
+	orderType: OrderType;
 	tableLabel: string | null;
 	employeeId?: string;
 	lines: RecordSaleLine[];

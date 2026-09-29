@@ -26,6 +26,7 @@ import {
 	PAYMENT_METHODS,
 	formatInvoiceNumber,
 	type OpEnvelope,
+	type OrderType,
 	type SaleLine
 } from '../../sync-ops';
 import { TAX_MODES, type TaxMode } from '../../money/tax';
@@ -75,7 +76,7 @@ export type ParsedSale = {
 	orderId: string;
 	posSessionId: string;
 	businessDate: string;
-	orderType: 'dine_in' | 'takeaway';
+	orderType: OrderType;
 	tableLabel: string | null;
 	taxMode: TaxMode;
 	currencyCode: string;
@@ -163,7 +164,10 @@ export const saleCompletePayloadSchema = z
 	.object({
 		orderId: z.string().uuid(),
 		posSessionId: z.string().uuid(),
-		orderType: z.enum(ORDER_TYPES as unknown as [string, ...string[]]),
+		// The readonly tuple straight from the wire contract: a value added there is
+		// accepted here with no cast, and every consumer of ParsedSale is typed
+		// OrderType, so a missing case fails to compile instead of hiding.
+		orderType: z.enum(ORDER_TYPES),
 		tableLabel: z.string().min(1).max(32).nullable(),
 		taxMode: z.enum(TAX_MODES as unknown as [string, ...string[]]),
 		currencyCode: z.string().regex(/^[A-Z]{3}$/),
@@ -429,7 +433,7 @@ export async function validateSale(
 		orderId: payload.orderId,
 		posSessionId: payload.posSessionId,
 		businessDate: session.businessDate,
-		orderType: payload.orderType as 'dine_in' | 'takeaway',
+		orderType: payload.orderType,
 		tableLabel: payload.tableLabel,
 		taxMode: payload.taxMode as TaxMode,
 		currencyCode: payload.currencyCode,
