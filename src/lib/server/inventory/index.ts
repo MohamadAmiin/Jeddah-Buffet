@@ -5,3 +5,4 @@ export * from './business-date';
 export * from './ingredients';
 export * from './recipes';
 export * from './purchases';
+export * from './payments';

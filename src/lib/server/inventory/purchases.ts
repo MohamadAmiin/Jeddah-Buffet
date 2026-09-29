@@ -18,7 +18,7 @@
 // 0014). Every function takes the caller's tx, is restaurant-scoped, audits in
 // that tx (invariant 10) and answers business refusals as { ok: false, reason }.
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { DbTx } from '../db/client';
 import type { Executor } from '../auth/session';
 import { ingredientPurchaseUnits, ingredients } from '../db/schema/inventory';
@@ -30,6 +30,7 @@ import { ROUNDING_RULE, minor, sum, toBigInt, type Minor } from '../../money';
 import { formatQty, mulQty, parseQty, type Qty } from '../../money/quantity';
 import { applyMovements } from './movements';
 import type { InventoryWriteContext } from './ingredients';
+import { outstandingMinor, paymentsFor, type SupplierPaymentView } from './payments';
 
 export const MAX_PURCHASE_LINES = 50;
 export const PAID_BY = ['cash', 'bank', 'credit'] as const;
@@ -229,6 +230,8 @@ export type PurchaseSummary = {
 	totalMinor: Minor;
 	recordedAt: Date;
 	reversed: boolean;
+	/** Still owed on a live credit delivery; 0 otherwise (T-21). */
+	outstandingMinor: Minor;
 };
 
 export async function listPurchases(
@@ -244,7 +247,18 @@ export async function listPurchases(
 			paidBy: purchases.paidBy,
 			totalMinor: purchases.totalMinor,
 			recordedAt: purchases.recordedAt,
-			reversedAt: purchases.reversedAt
+			reversedAt: purchases.reversedAt,
+			// Same rule as outstandingMinor (payments.ts), as a column so the list
+			// is one query. Qualified by hand: drizzle leaves columns unqualified in a
+			// single-table select, and "id" inside the subquery would be sp.id.
+			outstanding: sql<string>`(case
+				when "purchases"."paid_by" = 'credit' and "purchases"."reversed_at" is null
+				then "purchases"."total_minor" - coalesce((
+					select sum(sp.amount_minor) from supplier_payments sp
+					where sp.purchase_id = "purchases"."id"
+					  and sp.restaurant_id = "purchases"."restaurant_id"
+					  and sp.reversed_at is null), 0)
+				else 0 end)::text`
 		})
 		.from(purchases)
 		.where(eq(purchases.restaurantId, restaurantId))
@@ -257,11 +271,13 @@ export async function listPurchases(
 		paidBy: r.paidBy as PaidBy,
 		totalMinor: minor(r.totalMinor),
 		recordedAt: r.recordedAt,
-		reversed: r.reversedAt !== null
+		reversed: r.reversedAt !== null,
+		outstandingMinor: minor(BigInt(r.outstanding))
 	}));
 }
 
 export type PurchaseDetail = PurchaseSummary & {
+	payments: SupplierPaymentView[];
 	note: string | null;
 	reversedAt: Date | null;
 	reversalReason: string | null;
@@ -325,6 +341,8 @@ export async function getPurchase(
 		reversalReason: header.reversalReason,
 		journalEntryId: header.journalEntryId,
 		reversalEntryId: header.reversalEntryId,
+		outstandingMinor: await outstandingMinor(executor, restaurantId, id),
+		payments: await paymentsFor(executor, restaurantId, id),
 		lines: lines.map((l) => ({
 			lineNo: l.lineNo,
 			ingredientId: l.ingredientId,
