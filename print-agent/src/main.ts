@@ -8,7 +8,8 @@
 // Zero dependencies: node: builtins and sibling files with .ts extensions only,
 // run directly by Node 24's type stripping (only erasable syntax — no enum, no
 // namespace, no parameter properties; tsconfig's erasableSyntaxOnly refuses them
-// first). `run` arrives with the server (T-25) and the queue (T-26).
+// first). `run` starts the server (T-25); the queue and the drawer behind it
+// arrive with T-26.
 import { resolve } from 'node:path';
 import {
 	DEFAULT_AGENT_PORT,
@@ -17,6 +18,7 @@ import {
 	parsePrinterAddress,
 	type AgentConfig
 } from './config.ts';
+import { createAgentServer, listen, type AgentDeps } from './server.ts';
 
 const HERE = import.meta.dirname;
 export const DEFAULT_CONFIG_PATH = resolve(HERE, '..', 'config.json');
@@ -111,6 +113,38 @@ export function runInit(flags: Flags): { path: string; config: AgentConfig } {
 	return { path, config };
 }
 
+/**
+ * The deps behind the routes. Until T-26 lands the queue and the drawer, a job
+ * or a pulse is refused with 500 rather than acknowledged — nothing pretends to
+ * have printed — and /status reports both printers unreachable with nothing
+ * queued.
+ */
+function pendingDeps(config: AgentConfig): AgentDeps {
+	const notWired = () => {
+		throw new Error('print queue not wired (T-26)');
+	};
+	return {
+		submitJob: notWired,
+		pulseDrawer: async () => notWired(),
+		status: async () => ({
+			agentVersion: 1,
+			printers: {
+				receipt: { width: config.printers.receipt.width, reachable: false, queued: 0 },
+				kitchen: config.printers.kitchen
+					? { width: config.printers.kitchen.width, reachable: false, queued: 0 }
+					: null
+			}
+		})
+	};
+}
+
+async function runServer(config: AgentConfig): Promise<void> {
+	const server = createAgentServer(config, pendingDeps(config));
+	const port = await listen(server, config.port);
+	// The URL, never the token.
+	process.stdout.write(`matcami print agent listening on http://127.0.0.1:${port}\n`);
+}
+
 function main(argv: string[]): number {
 	const { command, flags } = parseFlags(argv);
 	if (command === null || flags.help === true) {
@@ -132,11 +166,11 @@ function main(argv: string[]): number {
 		return 0;
 	}
 	if (command === 'run') {
-		// Loaded now so a broken file fails here, with the field named, not at the
-		// first print job. The server itself arrives in T-25/T-26.
-		loadConfig(text(flags, 'config') ?? DEFAULT_CONFIG_PATH);
-		process.stderr.write('run: not implemented yet (the server arrives with T-25 and T-26)\n');
-		return 1;
+		// Loaded first so a broken file fails here, with the field named, not at
+		// the first print job.
+		const config = loadConfig(text(flags, 'config') ?? DEFAULT_CONFIG_PATH);
+		void runServer(config);
+		return 0;
 	}
 	process.stderr.write(`unknown command "${command}"\n\n${USAGE}`);
 	return 1;
@@ -150,4 +184,8 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename
 		process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
 		process.exitCode = 1;
 	}
+	process.on('unhandledRejection', (error) => {
+		process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+		process.exit(1);
+	});
 }

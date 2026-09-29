@@ -1,0 +1,403 @@
+import { request as httpRequest, type Server } from 'node:http';
+import { afterEach, describe, expect, it } from 'vitest';
+import type { AgentConfig } from './config.ts';
+import {
+	createAgentServer,
+	listen,
+	MAX_BODY_BYTES,
+	parseJob,
+	type AgentDeps,
+	type AgentStatus,
+	type DrawerRequest,
+	type Job
+} from './server.ts';
+
+const ORIGIN = 'https://pos.example.com';
+const TOKEN = 'ab'.repeat(32);
+
+const config: AgentConfig = {
+	origin: ORIGIN,
+	token: TOKEN,
+	port: 0,
+	printers: {
+		receipt: { host: '127.0.0.1', port: 9100, width: 48 },
+		kitchen: { host: '127.0.0.1', port: 9101, width: 32 }
+	},
+	dataDir: '/tmp/unused'
+};
+
+const status: AgentStatus = {
+	agentVersion: 1,
+	printers: {
+		receipt: { width: 48, reachable: true, queued: 0 },
+		kitchen: { width: 32, reachable: false, queued: 2 }
+	}
+};
+
+type Call = {
+	method: string;
+	path: string;
+	headers?: Record<string, string>;
+	body?: string | Buffer;
+};
+type Answer = {
+	status: number;
+	headers: Record<string, string | string[] | undefined>;
+	json: unknown;
+};
+
+function call(port: number, c: Call): Promise<Answer> {
+	return new Promise((resolve, reject) => {
+		const req = httpRequest(
+			{ host: '127.0.0.1', port, method: c.method, path: c.path, headers: c.headers ?? {} },
+			(res) => {
+				const chunks: Buffer[] = [];
+				res.on('data', (chunk: Buffer) => chunks.push(chunk));
+				res.on('end', () => {
+					const text = Buffer.concat(chunks).toString('utf8');
+					let json: unknown = null;
+					try {
+						json = text ? JSON.parse(text) : null;
+					} catch {
+						json = text;
+					}
+					resolve({ status: res.statusCode ?? 0, headers: res.headers, json });
+				});
+			}
+		);
+		req.on('error', reject);
+		if (c.body !== undefined) req.write(c.body);
+		req.end();
+	});
+}
+
+function harness() {
+	const jobs: Job[] = [];
+	const drawer: DrawerRequest[] = [];
+	let submitAnswer: 'queued' | 'duplicate' = 'queued';
+	let drawerAnswer: 'opened' | 'duplicate' | 'too_late' | 'printer_unreachable' = 'opened';
+	const deps: AgentDeps = {
+		submitJob: (job) => {
+			jobs.push(job);
+			return submitAnswer;
+		},
+		pulseDrawer: async (request) => {
+			drawer.push(request);
+			return drawerAnswer;
+		},
+		status: async () => status
+	};
+	return {
+		deps,
+		jobs,
+		drawer,
+		setSubmit: (a: typeof submitAnswer) => (submitAnswer = a),
+		setDrawer: (a: typeof drawerAnswer) => (drawerAnswer = a)
+	};
+}
+
+let servers: Server[] = [];
+afterEach(async () => {
+	for (const s of servers.splice(0)) await new Promise((r) => s.close(() => r(undefined)));
+	servers = [];
+});
+
+async function start(deps: AgentDeps) {
+	const server = createAgentServer(config, deps);
+	servers.push(server);
+	const port = await listen(server, 0);
+	const good = (extra: Record<string, string> = {}) => ({
+		host: `127.0.0.1:${port}`,
+		origin: ORIGIN,
+		authorization: `Bearer ${TOKEN}`,
+		...extra
+	});
+	return { server, port, good };
+}
+
+const jobBody = (over: Partial<Job> = {}) =>
+	JSON.stringify({
+		id: 'order-1:receipt:0',
+		printer: 'receipt',
+		lines: [{ text: 'Hello', bold: true }],
+		cut: true,
+		...over
+	});
+
+describe('binding and the three walls', () => {
+	it('binds 127.0.0.1 only', async () => {
+		const { server } = await start(harness().deps);
+		const address = server.address();
+		expect(typeof address === 'object' && address?.address).toBe('127.0.0.1');
+	});
+
+	it('refuses a foreign Host with 403 bad_host before anything else', async () => {
+		const h = harness();
+		const { port } = await start(h.deps);
+		const answer = await call(port, {
+			method: 'POST',
+			path: '/jobs',
+			headers: {
+				host: `evil.example:${port}`,
+				origin: ORIGIN,
+				authorization: `Bearer ${TOKEN}`,
+				'content-type': 'application/json'
+			},
+			body: jobBody()
+		});
+		expect(answer.status).toBe(403);
+		expect(answer.json).toEqual({ error: 'bad_host' });
+		expect(h.jobs).toHaveLength(0);
+	});
+
+	it('refuses a missing or wrong Origin with 403 bad_origin, and never calls submitJob', async () => {
+		const h = harness();
+		const { port } = await start(h.deps);
+		const missing = await call(port, {
+			method: 'POST',
+			path: '/jobs',
+			headers: {
+				host: `127.0.0.1:${port}`,
+				authorization: `Bearer ${TOKEN}`,
+				'content-type': 'application/json'
+			},
+			body: jobBody()
+		});
+		expect(missing.status).toBe(403);
+		expect(missing.json).toEqual({ error: 'bad_origin' });
+		const wrong = await call(port, {
+			method: 'POST',
+			path: '/jobs',
+			headers: {
+				host: `localhost:${port}`,
+				origin: 'https://evil.example',
+				authorization: `Bearer ${TOKEN}`,
+				'content-type': 'application/json'
+			},
+			body: jobBody()
+		});
+		expect(wrong.status).toBe(403);
+		expect(wrong.json).toEqual({ error: 'bad_origin' });
+		expect(h.jobs).toHaveLength(0);
+	});
+
+	it('answers a preflight from the configured origin with 204 and the CORS headers, plus PNA when asked', async () => {
+		const { port, good } = await start(harness().deps);
+		const plain = await call(port, {
+			method: 'OPTIONS',
+			path: '/jobs',
+			headers: { host: `127.0.0.1:${port}`, origin: ORIGIN }
+		});
+		expect(plain.status).toBe(204);
+		expect(plain.headers['access-control-allow-origin']).toBe(ORIGIN);
+		expect(plain.headers['access-control-allow-methods']).toBe('GET, POST');
+		expect(plain.headers['access-control-allow-headers']).toBe('authorization, content-type');
+		expect(plain.headers['access-control-max-age']).toBe('600');
+		expect(plain.headers['vary']).toBe('Origin');
+		expect(plain.headers['access-control-allow-private-network']).toBeUndefined();
+
+		const pna = await call(port, {
+			method: 'OPTIONS',
+			path: '/jobs',
+			headers: { ...good(), 'access-control-request-private-network': 'true' }
+		});
+		expect(pna.status).toBe(204);
+		expect(pna.headers['access-control-allow-private-network']).toBe('true');
+	});
+
+	it('refuses no token, a wrong token and a token one character short with 401', async () => {
+		const h = harness();
+		const { port } = await start(h.deps);
+		for (const authorization of [
+			undefined,
+			`Bearer ${'cd'.repeat(32)}`,
+			`Bearer ${TOKEN.slice(1)}`,
+			TOKEN
+		]) {
+			const headers: Record<string, string> = { host: `127.0.0.1:${port}`, origin: ORIGIN };
+			if (authorization) headers.authorization = authorization;
+			const answer = await call(port, { method: 'GET', path: '/status', headers });
+			expect(answer.status, String(authorization)).toBe(401);
+			expect(answer.json).toEqual({ error: 'unauthorized' });
+		}
+		expect(h.jobs).toHaveLength(0);
+	});
+});
+
+describe('routes', () => {
+	it('GET /status answers the status with no-store and the CORS headers', async () => {
+		const { port, good } = await start(harness().deps);
+		const answer = await call(port, { method: 'GET', path: '/status', headers: good() });
+		expect(answer.status).toBe(200);
+		expect(answer.json).toEqual(status);
+		expect(answer.headers['cache-control']).toBe('no-store');
+		expect(answer.headers['access-control-allow-origin']).toBe(ORIGIN);
+		expect(answer.headers['content-type']).toBe('application/json');
+	});
+
+	it('POST /jobs: 415 for text/plain, 413 over 65,536 bytes, 422 for bad lines, 202 queued / 200 duplicate', async () => {
+		const h = harness();
+		const { port, good } = await start(h.deps);
+		const json = good({ 'content-type': 'application/json' });
+
+		expect(
+			(
+				await call(port, {
+					method: 'POST',
+					path: '/jobs',
+					headers: good({ 'content-type': 'text/plain' }),
+					body: jobBody()
+				})
+			).status
+		).toBe(415);
+		const huge = await call(port, {
+			method: 'POST',
+			path: '/jobs',
+			headers: json,
+			body: Buffer.alloc(MAX_BODY_BYTES + 4_464, 0x20)
+		});
+		expect(huge.status).toBe(413);
+
+		const accent = await call(port, {
+			method: 'POST',
+			path: '/jobs',
+			headers: json,
+			body: jobBody({ lines: [{ text: 'café' }] })
+		});
+		expect(accent.status).toBe(422);
+		expect(accent.json).toMatchObject({ error: 'bad_job' });
+		const long = await call(port, {
+			method: 'POST',
+			path: '/jobs',
+			headers: json,
+			body: jobBody({ lines: [{ text: 'x'.repeat(49) }] })
+		});
+		expect(long.status).toBe(422);
+		const doubleLong = await call(port, {
+			method: 'POST',
+			path: '/jobs',
+			headers: json,
+			body: jobBody({ lines: [{ text: 'x'.repeat(25), size: 'double' }] })
+		});
+		expect(doubleLong.status).toBe(422);
+		const kitchenFits = await call(port, {
+			method: 'POST',
+			path: '/jobs',
+			headers: json,
+			body: jobBody({ printer: 'kitchen', lines: [{ text: 'x'.repeat(32) }] })
+		});
+		expect(kitchenFits.status).toBe(202);
+		const kitchenLong = await call(port, {
+			method: 'POST',
+			path: '/jobs',
+			headers: json,
+			body: jobBody({ printer: 'kitchen', lines: [{ text: 'x'.repeat(33) }] })
+		});
+		expect(kitchenLong.status).toBe(422);
+		const notJson = await call(port, {
+			method: 'POST',
+			path: '/jobs',
+			headers: json,
+			body: '{nope'
+		});
+		expect(notJson.status).toBe(422);
+		expect(h.jobs).toHaveLength(1);
+
+		const queued = await call(port, {
+			method: 'POST',
+			path: '/jobs',
+			headers: json,
+			body: jobBody()
+		});
+		expect(queued.status).toBe(202);
+		expect(queued.json).toEqual({ status: 'queued' });
+		h.setSubmit('duplicate');
+		const dup = await call(port, { method: 'POST', path: '/jobs', headers: json, body: jobBody() });
+		expect(dup.status).toBe(200);
+		expect(dup.json).toEqual({ status: 'duplicate' });
+		expect(h.jobs.at(-1)).toEqual({
+			id: 'order-1:receipt:0',
+			printer: 'receipt',
+			lines: [{ text: 'Hello', bold: true }],
+			cut: true
+		});
+	});
+
+	it('POST /drawer maps opened/duplicate → 200, too_late → 409, printer_unreachable → 503, bad body → 422', async () => {
+		const h = harness();
+		const { port, good } = await start(h.deps);
+		const json = good({ 'content-type': 'application/json' });
+		const body = JSON.stringify({ id: 'order-1:drawer', completedAt: '2026-09-29T09:00:00.000Z' });
+
+		expect(
+			await call(port, { method: 'POST', path: '/drawer', headers: json, body })
+		).toMatchObject({ status: 200, json: { status: 'opened' } });
+		h.setDrawer('duplicate');
+		expect(
+			await call(port, { method: 'POST', path: '/drawer', headers: json, body })
+		).toMatchObject({ status: 200, json: { status: 'duplicate' } });
+		h.setDrawer('too_late');
+		expect(
+			await call(port, { method: 'POST', path: '/drawer', headers: json, body })
+		).toMatchObject({ status: 409, json: { error: 'too_late' } });
+		h.setDrawer('printer_unreachable');
+		expect(
+			await call(port, { method: 'POST', path: '/drawer', headers: json, body })
+		).toMatchObject({ status: 503, json: { error: 'printer_unreachable' } });
+		const bad = await call(port, {
+			method: 'POST',
+			path: '/drawer',
+			headers: json,
+			body: JSON.stringify({ id: 'x', completedAt: 'yesterday' })
+		});
+		expect(bad.status).toBe(422);
+		expect(bad.json).toMatchObject({ error: 'bad_request' });
+		expect(h.drawer).toHaveLength(4);
+	});
+
+	it('anything else is 404', async () => {
+		const { port, good } = await start(harness().deps);
+		expect((await call(port, { method: 'GET', path: '/nope', headers: good() })).status).toBe(404);
+		expect((await call(port, { method: 'GET', path: '/jobs', headers: good() })).status).toBe(404);
+	});
+});
+
+describe('parseJob', () => {
+	it('falls back to the receipt printer width for a kitchen job with no kitchen printer', () => {
+		const printers = { receipt: config.printers.receipt, kitchen: null };
+		expect(() =>
+			parseJob(
+				{ id: 'k', printer: 'kitchen', lines: [{ text: 'x'.repeat(48) }], cut: false },
+				printers
+			)
+		).not.toThrow();
+		expect(() =>
+			parseJob(
+				{ id: 'k', printer: 'kitchen', lines: [{ text: 'x'.repeat(49) }], cut: false },
+				printers
+			)
+		).toThrow(/49 characters/);
+	});
+
+	it('refuses a bad id, an empty line list, a non-boolean cut and unknown sizes', () => {
+		const printers = config.printers;
+		expect(() =>
+			parseJob({ id: 'has space', printer: 'receipt', lines: [{ text: 'a' }], cut: true }, printers)
+		).toThrow(/id/);
+		expect(() => parseJob({ id: 'a', printer: 'receipt', lines: [], cut: true }, printers)).toThrow(
+			/lines/
+		);
+		expect(() =>
+			parseJob({ id: 'a', printer: 'receipt', lines: [{ text: 'a' }], cut: 'yes' }, printers)
+		).toThrow(/cut/);
+		expect(() =>
+			parseJob(
+				{ id: 'a', printer: 'receipt', lines: [{ text: 'a', size: 'huge' }], cut: true },
+				printers
+			)
+		).toThrow(/size/);
+		expect(() =>
+			parseJob({ id: 'a', printer: 'fax', lines: [{ text: 'a' }], cut: true }, printers)
+		).toThrow(/printer/);
+	});
+});
