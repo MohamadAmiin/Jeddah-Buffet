@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { eq, sql } from 'drizzle-orm';
@@ -310,6 +311,10 @@ describe('applyMovements', () => {
 				inbound(higher, 1000n, 10n)
 			])
 		);
+		// Rewrite the LOWER row so its new tuple lands after the higher one's: a
+		// lock query that dropped its ORDER BY and scanned the heap would then meet
+		// `higher` first, block on C holding nothing, and D's NOWAIT would succeed.
+		await pool.query(`update ingredients set name = name where id = $1`, [lower]);
 
 		const holder = await pool.connect();
 		const prober = await pool.connect();
@@ -341,6 +346,18 @@ describe('applyMovements', () => {
 		}
 		expect((await cache(lower)).qty).toBe('0.900');
 		expect((await cache(higher)).qty).toBe('0.900');
+	});
+
+	it('lockIngredients keeps its one id-ordered FOR UPDATE statement (source tripwire)', () => {
+		// The planner may return rows in id order by accident (an index scan), so no
+		// run can prove the ORDER BY is there; the source can.
+		const source = readFileSync(new URL('./movements.ts', import.meta.url), 'utf8');
+		const body = source.slice(
+			source.indexOf('export async function lockIngredients'),
+			source.indexOf('function validate(')
+		);
+		expect(body).toMatch(/\.orderBy\(ingredients\.id\)\s*\.for\('update'/);
+		expect(body.match(/\.for\('update'/g)).toHaveLength(1);
 	});
 
 	it("another restaurant's ingredient throws and writes nothing", async () => {
