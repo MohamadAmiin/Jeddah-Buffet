@@ -36,9 +36,10 @@ import { sniffImageType } from './images';
 // units and are stored and returned as they are. This file imports nothing from
 // src/lib/money: no rounding, no tax, no formatting.
 //
-// ARCHIVE, NEVER DELETE (invariant 2). The one DELETE in this file removes an item
-// ↔ group LINK — a configuration row, not a posted record; an order line will
-// snapshot the modifiers a guest actually chose.
+// ARCHIVE, NEVER DELETE (invariant 2). The two DELETEs in this file remove an item
+// ↔ group LINK and a photo row no item references any more — configuration rows,
+// not posted records; an order line snapshots the modifiers a guest actually chose
+// and never points at a photo.
 //
 // A CATEGORY IS OPTIONAL. menu_items.category_id NULL means "No category" (the
 // till's "Other" tab). Archiving one MOVES its live items to no category in the
@@ -697,7 +698,7 @@ export async function linkModifierGroup(
 	return CHANGED;
 }
 
-/** Unlink a group from an item — the one DELETE in this module, of a configuration link. */
+/** Unlink a group from an item — a DELETE of a configuration link, never of a posted record. */
 export async function unlinkModifierGroup(
 	tx: DbTx,
 	restaurantId: string,
