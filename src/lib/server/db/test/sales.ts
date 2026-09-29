@@ -280,6 +280,9 @@ export type RecordSaleOptions = {
 	method: 'cash' | 'card' | 'mobile';
 	orderType: OrderType;
 	tableLabel: string | null;
+	/** Written into the payload ONLY when present, so the fixture can still
+	 * produce the pre-T-22 format (no `note` key at all). */
+	note?: string | null;
 	employeeId?: string;
 	lines: RecordSaleLine[];
 };
@@ -342,6 +345,7 @@ export function saleEnvelope(
 			posSessionId: o.posSessionId,
 			orderType: o.orderType,
 			tableLabel: o.tableLabel,
+			...('note' in o ? { note: o.note } : {}),
 			taxMode: f.taxMode,
 			currencyCode: f.currencyCode,
 			menuVersion: f.menuVersion,

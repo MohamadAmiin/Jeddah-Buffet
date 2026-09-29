@@ -277,6 +277,37 @@ describe('validateSale (T-18)', () => {
 		}
 	});
 
+	// MANDATORY (invariant 5 — an offline sale is a fact): the format every till
+	// queued before menu-and-printing T-22 — no `note` key at all — still records.
+	it('a payload with no note key validates with note null', async () => {
+		const env = envelope(fx);
+		expect('note' in (env.payload as object)).toBe(false);
+		const result = await db.transaction((tx) => validateSale(tx, ctxFor(fx, fx.cashierId), env));
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.sale.note).toBeNull();
+	});
+
+	it("a note is cleaned: 'no\\u001bchilli' → 'no chilli'; a blank one becomes null", async () => {
+		const cleaned = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(fx, fx.cashierId), envelope(fx, { note: 'no\u001bchilli' }))
+		);
+		expect(cleaned.ok).toBe(true);
+		if (cleaned.ok) expect(cleaned.sale.note).toBe('no chilli');
+		const blank = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(fx, fx.cashierId), envelope(fx, { note: '   ' }))
+		);
+		expect(blank.ok).toBe(true);
+		if (blank.ok) expect(blank.sale.note).toBeNull();
+	});
+
+	it('a 141-character note is invalid_payload', async () => {
+		const result = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(fx, fx.cashierId), envelope(fx, { note: 'x'.repeat(141) }))
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.hard).toBe('invalid_payload');
+	});
+
 	it('an unknown order type is invalid_payload', async () => {
 		const result = await db.transaction((tx) =>
 			validateSale(tx, ctxFor(fx, fx.cashierId), envelope(fx, { orderType: 'home_delivery' }))

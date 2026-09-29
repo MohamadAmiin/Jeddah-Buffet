@@ -45,6 +45,9 @@ export type Cart = {
 	/** From the wire contract: dine_in (the default), takeaway or delivery. */
 	orderType: OrderType;
 	tableLabel: string | null;
+	/** An optional kitchen note, at most 140 characters (menu-and-printing T-22).
+	 * Optional in the type: carts stored before this field have none. */
+	note?: string | null;
 	lines: CartLine[];
 	openedAt: string;
 };
@@ -216,6 +219,20 @@ export function cartTotals(cart: Cart, taxMode: TaxMode): OrderTotals {
 	return computeOrderTotals({ taxMode, lines: cart.lines.map(toTotalsLine) }, ROUNDING_RULE);
 }
 
+/**
+ * The kitchen note as the till stores it: control characters become spaces (an
+ * ESC byte must never reach the kitchen printer), runs of spaces collapse,
+ * trimmed, at most 140 characters, and null when nothing is left.
+ */
+export function setNote(cart: Cart, note: string): Cart {
+	const cleaned = note
+		.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+		.replace(/ {2,}/g, ' ')
+		.trim();
+	if (cleaned.length > 140) throw new Error('the kitchen note is at most 140 characters');
+	return { ...cart, note: cleaned === '' ? null : cleaned };
+}
+
 /** A new cart with the order type and table replaced; lines untouched.
  * Takeaway and delivery always drop the table. */
 export function setOrderType(cart: Cart, orderType: OrderType, tableLabel: string | null): Cart {
@@ -312,6 +329,8 @@ export async function completeSale(
 		posSessionId: args.posSessionId,
 		orderType: args.cart.orderType,
 		tableLabel: args.cart.tableLabel,
+		// T-22: the kitchen note rides in the payload; a cart without one sends null.
+		note: args.cart.note ?? null,
 		taxMode: args.taxMode,
 		currencyCode: args.currencyCode,
 		menuVersion: args.menuVersion,

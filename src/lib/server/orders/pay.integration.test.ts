@@ -348,6 +348,31 @@ describe('recordSale (T-19) — MANDATORY (spec 29) posting rules per event', ()
 		expect((audit[0].details as { orderType: string }).orderType).toBe('delivery');
 	});
 
+	// menu-and-printing T-22: the kitchen note lands on the order; a payload
+	// without the key (every pre-T-22 till) records with note NULL.
+	it('records the kitchen note on the order, and NULL when the payload has no note key', async () => {
+		const noted = twoLineCashEnvelope(fx);
+		(noted.payload as { note?: string }).note = 'no chilli';
+		await recordThrough(fx, noted, fx.cashierId);
+		const [withNote] = await testDb()
+			.select({ note: orders.note })
+			.from(orders)
+			.where(eq(orders.id, (noted.payload as { orderId: string }).orderId));
+		expect(withNote.note).toBe('no chilli');
+
+		const plain = twoLineCashEnvelope(fx);
+		(plain.payload as { invoiceSeq: number; invoiceNumber: string }).invoiceSeq = 2;
+		(plain.payload as { invoiceSeq: number; invoiceNumber: string }).invoiceNumber =
+			`${fx.deviceCode}-000002`;
+		expect('note' in (plain.payload as object)).toBe(false);
+		await recordThrough(fx, plain, fx.cashierId);
+		const [without] = await testDb()
+			.select({ note: orders.note })
+			.from(orders)
+			.where(eq(orders.id, (plain.payload as { orderId: string }).orderId));
+		expect(without.note).toBeNull();
+	});
+
 	it('the same sale by card routes the debit to 1020; by mobile to 1030', async () => {
 		for (const [method, code] of [
 			['card', '1020'],

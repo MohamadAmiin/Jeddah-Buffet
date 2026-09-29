@@ -23,6 +23,7 @@
 		readCart,
 		removeLine,
 		saveCart,
+		setNote,
 		setOrderType,
 		type Cart
 	} from '$lib/pos/orders';
@@ -71,6 +72,8 @@
 	let cart = $state.raw<Cart | null>(null);
 	let segment = $state<Segment>('dine_in');
 	let tableInput = $state('');
+	// The kitchen note (T-22): saved through setNote on change, shown on the check.
+	let noteInput = $state('');
 	let selectedTab = $state<string | null>(null);
 	let error = $state('');
 	let gridDisabled = $state(false);
@@ -172,9 +175,21 @@
 			if (cart) {
 				segment = cart.orderType;
 				tableInput = cart.tableLabel ?? '';
+				noteInput = cart.note ?? '';
 			}
 		})();
 	});
+
+	async function noteChanged() {
+		if (!cart) return;
+		try {
+			await commit(setNote(cart, noteInput));
+			noteInput = cart.note ?? '';
+			error = '';
+		} catch (err) {
+			error = `✕ ${err instanceof Error ? err.message : 'The note could not be saved'}`;
+		}
+	}
 
 	async function chooseSegment(next: Segment) {
 		if (!cart) return;
@@ -341,6 +356,22 @@
 				</span>
 			</label>
 		{/if}
+
+		<!-- T-22: an optional note for the kitchen ticket (spec 11). -->
+		<label class="flex flex-col gap-3">
+			<span class="text-section text-ink flex items-center gap-3">
+				<PosIcon name="clipboard" class="text-accent size-6" />
+				Note for the kitchen
+			</span>
+			<input
+				type="text"
+				maxlength="140"
+				placeholder="Optional — e.g. no onions"
+				bind:value={noteInput}
+				onchange={noteChanged}
+				class="border-control-line rounded-card min-h-touch bg-raise text-ink placeholder:text-ink-2 w-full border px-4"
+			/>
+		</label>
 
 		{#if error}
 			<p class="bg-danger-bg text-danger rounded-control px-3 py-2">{error}</p>
@@ -535,6 +566,9 @@
 			<div class="flex min-w-0 flex-col">
 				<h2 id="check-h" class="text-title">Current Order</h2>
 				<p class="text-caption">{heading}</p>
+				{#if cart?.note}
+					<p class="text-caption text-ink-2">Note: {cart.note}</p>
+				{/if}
 			</div>
 			<span
 				class="border-accent-ink text-caption ml-auto rounded-full border px-3 py-1 font-semibold"

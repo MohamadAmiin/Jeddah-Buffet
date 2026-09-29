@@ -13,6 +13,7 @@ import {
 	lineAmounts,
 	newCart,
 	removeLine,
+	setNote,
 	setOrderType,
 	type Cart,
 	type MenuItemForCart,
@@ -225,6 +226,43 @@ describe('completeSale', () => {
 		expect(order?.sale?.businessDate).toBe('2026-09-28');
 		expect(order?.sale?.completedAt).toBe(NOW.toISOString());
 		expect(order?.printed).toBeUndefined();
+	});
+
+	it('completeSale carries the note in the queued payload, and null without one', async () => {
+		const withNote = setNote(await buildCart(), 'no onions');
+		await completeSale({
+			cart: withNote,
+			payment: { method: 'cash', tenderedMinor: 5000n },
+			employeeId: 'emp-1',
+			deviceId: 'device-A',
+			deviceCode: 'POS1',
+			posSessionId: 'ses-1',
+			taxMode: 'exclusive',
+			currencyCode: 'USD',
+			menuVersion: 1,
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
+		});
+		const plain = await buildCart();
+		await completeSale({
+			cart: plain,
+			payment: { method: 'cash', tenderedMinor: 5000n },
+			employeeId: 'emp-1',
+			deviceId: 'device-A',
+			deviceCode: 'POS1',
+			posSessionId: 'ses-1',
+			taxMode: 'exclusive',
+			currencyCode: 'USD',
+			menuVersion: 1,
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
+		});
+		const notes = (await readQueue()).map(
+			(q) => (q.envelope.payload as { orderId: string; note: string | null }).note
+		);
+		expect(notes.sort()).toEqual([null, 'no onions'].sort());
 	});
 
 	it('abortForTest leaves nothing behind — no order, no queue, no counter movement', async () => {
@@ -513,6 +551,18 @@ describe('T-33 cart helpers', () => {
 		expect(newCart('device-A', 'delivery', '4', NOW).tableLabel).toBeNull();
 		const cart = doneWhenCart();
 		expect(setOrderType(cart, 'dine_in', 'Win\u007fdow').tableLabel).toBe('Window');
+	});
+
+	// menu-and-printing T-22: the kitchen note.
+	it('setNote cleans control characters, collapses spaces and caps at 140', () => {
+		const cart = doneWhenCart();
+		expect(setNote(cart, 'no\u001bchilli').note).toBe('no chilli');
+		expect(setNote(cart, '  extra   sauce  ').note).toBe('extra sauce');
+		expect(setNote(cart, '\u0000\u007f').note).toBeNull();
+		expect(setNote(cart, '').note).toBeNull();
+		expect(setNote(cart, 'x'.repeat(140)).note).toHaveLength(140);
+		expect(() => setNote(cart, 'x'.repeat(141))).toThrow(/140/);
+		expect(setNote(cart, 'no onions').lines).toBe(cart.lines);
 	});
 
 	it('two taps are two lines; quantity is absolute; removal renumbers', () => {
