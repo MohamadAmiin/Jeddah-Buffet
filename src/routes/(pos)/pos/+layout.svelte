@@ -38,6 +38,7 @@
 		readBoundDeviceId,
 		readCachedIdleSeconds,
 		readCachedSetting,
+		readMenuSyncError,
 		type LocalSession
 	} from '$lib/pos/store';
 	import PosIcon from '$lib/components/pos/PosIcon.svelte';
@@ -256,18 +257,24 @@
 	let restaurantName = $state<string | null>(null);
 	let deviceCode = $state<string | null>(null);
 	let timeZone = $state<string | null>(null);
+	// A menu snapshot this till could not parse (menu-and-printing T-15): shown as
+	// permanent chrome while online, because every syncMenu caller swallows the
+	// error and the menu would otherwise go stale in silence.
+	let menuSyncError = $state<string | null>(null);
 	let now = $state(new Date());
 	$effect(() => {
 		void page.url.pathname;
 		void (async () => {
-			const [name, code, zone] = await Promise.all(
-				['restaurantName', 'deviceCode', 'timeZone'].map((key) =>
+			const [name, code, zone, syncError] = await Promise.all([
+				...['restaurantName', 'deviceCode', 'timeZone'].map((key) =>
 					readCachedSetting(key).catch(() => null)
-				)
-			);
+				),
+				readMenuSyncError().catch(() => null)
+			]);
 			restaurantName = typeof name === 'string' ? name : null;
 			deviceCode = typeof code === 'string' ? code : null;
 			timeZone = typeof zone === 'string' ? zone : null;
+			menuSyncError = typeof syncError === 'string' ? syncError : null;
 		})();
 	});
 	onMount(() => {
@@ -446,6 +453,11 @@
 					{#if skewMinutes !== null}
 						<span class="bg-st-offline-bg text-st-offline rounded-full px-3 py-1"
 							>◆ Clock is off by {skewMinutes} min</span
+						>
+					{/if}
+					{#if menuSyncError !== null && online}
+						<span class="bg-st-offline-bg text-st-offline rounded-full px-3 py-1"
+							>◆ Menu update failed — reload the till</span
 						>
 					{/if}
 				</div>

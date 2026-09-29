@@ -19,8 +19,10 @@ import {
 	readCachedIdleSeconds,
 	readCachedSetting,
 	readMenu,
+	readMenuSyncError,
 	recordOfflineLogin,
 	replaceMenu,
+	syncMenu,
 	upgradeRunsForTest,
 	verifyCachedPin,
 	withDb,
@@ -33,6 +35,7 @@ import {
 	type QueueEntry,
 	type SequenceRow
 } from './store';
+import { parseSnapshot } from './menu-snapshot';
 
 function deleteDatabase(): Promise<void> {
 	return new Promise((resolve, reject) => {
@@ -486,5 +489,67 @@ describe('pruneCompletedOrders (T-22)', () => {
 			.map((q) => q.clientOpId)
 			.sort();
 		expect(remainingQueue).toEqual(['op-B']);
+	});
+});
+
+describe('a menu snapshot that fails to parse (menu-and-printing T-15)', () => {
+	const goodItem = {
+		id: 'i1',
+		categoryId: null,
+		imageId: null,
+		name: 'Tea',
+		priceMinor: '850',
+		taxRateBp: null,
+		isAvailable: true,
+		sortOrder: 0,
+		modifierGroupIds: []
+	};
+	const snapshotPayload = (version: number, items: unknown[]) => ({
+		version,
+		restaurantId: 'restaurant-A',
+		takenAt: '2026-09-29T09:00:00.000Z',
+		currency: 'USD',
+		currencyExponent: 2,
+		taxMode: 'exclusive',
+		taxRateBp: 1000,
+		categories: [],
+		items,
+		modifierGroups: []
+	});
+	const serverAt = (version: number, items: unknown[]) =>
+		(async (url: string) =>
+			new Response(
+				JSON.stringify(
+					url === '/api/menu/version'
+						? { version, restaurantId: 'restaurant-A' }
+						: snapshotPayload(version, items)
+				),
+				{ status: 200 }
+			)) as unknown as typeof fetch;
+
+	it('is remembered while the old menu is kept, and a good sync clears it', async () => {
+		await replaceMenu(parseSnapshot(snapshotPayload(7, [goodItem])));
+		expect(await readMenuSyncError()).toBeNull();
+
+		// A newer version whose item carries a JSON number where money must be a string.
+		await expect(syncMenu(serverAt(8, [{ ...goodItem, priceMinor: 900 }]))).rejects.toThrow(
+			/priceMinor/
+		);
+		expect((await readMenu())!.version).toBe(7);
+		expect(await readMenuSyncError()).toMatch(/items\[0\]\.priceMinor/);
+
+		expect(await syncMenu(serverAt(8, [goodItem]))).toBe('replaced');
+		expect((await readMenu())!.version).toBe(8);
+		expect(await readMenuSyncError()).toBeNull();
+	});
+
+	it('is cleared by an up-to-date answer as well', async () => {
+		await replaceMenu(parseSnapshot(snapshotPayload(7, [goodItem])));
+		await expect(syncMenu(serverAt(8, [{ ...goodItem, priceMinor: 900 }]))).rejects.toThrow();
+		expect(await readMenuSyncError()).not.toBeNull();
+
+		// The server went back to the version this till holds.
+		expect(await syncMenu(serverAt(7, [goodItem]))).toBe('up-to-date');
+		expect(await readMenuSyncError()).toBeNull();
 	});
 });

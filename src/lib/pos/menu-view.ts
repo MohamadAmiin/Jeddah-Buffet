@@ -12,8 +12,9 @@ export type CategoryTab = { id: string; name: string; items: MenuItem[] };
 const bySortOrder = <T extends { sortOrder: number }>(a: T, b: T) => a.sortOrder - b.sortOrder;
 
 /** Categories in sortOrder, each with its items in sortOrder; an empty category
- *  is KEPT; items whose categoryId matches no category go under a final
- *  synthetic tab { id: 'other', name: 'Other' }, present only when needed. */
+ *  is KEPT; items with NO category (categoryId null) or whose categoryId matches
+ *  no live category go under a final synthetic tab { id: 'other', name: 'Other' },
+ *  present only when needed. */
 export function itemsByCategory(menu: LocalMenu): CategoryTab[] {
 	const known = new Set(menu.categories.map((c) => c.id));
 	const tabs: CategoryTab[] = [...menu.categories].sort(bySortOrder).map((c) => ({
@@ -21,7 +22,9 @@ export function itemsByCategory(menu: LocalMenu): CategoryTab[] {
 		name: c.name,
 		items: menu.items.filter((i) => i.categoryId === c.id).sort(bySortOrder)
 	}));
-	const orphans = menu.items.filter((i) => !known.has(i.categoryId)).sort(bySortOrder);
+	const orphans = menu.items
+		.filter((i) => i.categoryId === null || !known.has(i.categoryId))
+		.sort(bySortOrder);
 	if (orphans.length > 0) tabs.push({ id: 'other', name: 'Other', items: orphans });
 	return tabs;
 }

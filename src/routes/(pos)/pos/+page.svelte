@@ -18,8 +18,10 @@
 		cacheSettings,
 		forgetDevice,
 		readCachedEmployees,
+		readMenu,
 		syncMenu
 	} from '$lib/pos/store';
+	import { warmMenuPhotos } from '$lib/pos/photo-warmup';
 	import { adoptServerHint } from '$lib/pos/invoice-sequence';
 	import { adoptServerSession } from '$lib/pos/session';
 	import { signOut } from '$lib/pos/employee.svelte';
@@ -179,11 +181,22 @@
 		// way the cashier arrived (idle return, Done after close, browser back).
 		signOut();
 
+		// After EVERY sync answer, warm the browser's HTTP cache with the menu's
+		// photos (best effort — menu-and-printing R2); a failure stays silent.
+		const warmPhotos = async () => {
+			const menu = await readMenu();
+			if (menu) void warmMenuPhotos(menu.items);
+		};
+
 		void loadDirectory()
 			.then(() => syncMenu())
+			.then(warmPhotos)
 			.catch(() => {});
 
-		const refreshMenu = () => void syncMenu().catch(() => {});
+		const refreshMenu = () =>
+			void syncMenu()
+				.then(warmPhotos)
+				.catch(() => {});
 		addEventListener('online', refreshMenu);
 		return () => removeEventListener('online', refreshMenu);
 	});

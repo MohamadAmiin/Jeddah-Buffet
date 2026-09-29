@@ -16,6 +16,7 @@ import type { OpEnvelope, OpKind, SyncResult } from '../sync-ops';
 import {
 	compareVersions,
 	parseSnapshot,
+	SnapshotError,
 	type MenuSnapshot,
 	type SnapshotCategory,
 	type SnapshotItem,
@@ -354,6 +355,22 @@ export async function readCachedIdleSeconds(): Promise<number | null> {
 	const value = await readCachedSetting('posIdleLockSeconds');
 
 	return typeof value === 'number' ? value : null;
+}
+
+/**
+ * The settings key under which syncMenu remembers a snapshot it could NOT
+ * parse (menu-and-printing T-15). Every caller of syncMenu swallows its errors
+ * — an offline till must keep the menu it has — so without this a till running
+ * old JavaScript against a newer server would freeze its menu in silence. The
+ * layout shows it as permanent chrome while online; a good sync clears it.
+ */
+export const MENU_SYNC_ERROR_KEY = 'menuSyncError';
+
+/** The remembered parse failure's message, or null for anything else. */
+export async function readMenuSyncError(): Promise<string | null> {
+	const value = await readCachedSetting(MENU_SYNC_ERROR_KEY);
+
+	return typeof value === 'string' ? value : null;
 }
 
 const BOUND_DEVICE_KEY = 'deviceId';
@@ -742,6 +759,7 @@ export async function syncMenu(fetchFn: typeof fetch = fetch): Promise<'up-to-da
 			: null;
 
 	if (compareVersions(local, server.version) === 'up-to-date') {
+		await cacheSettings([{ key: MENU_SYNC_ERROR_KEY, value: null }]);
 		return 'up-to-date';
 	}
 
@@ -758,10 +776,20 @@ export async function syncMenu(fetchFn: typeof fetch = fetch): Promise<'up-to-da
 		throw new Error(`GET /api/menu answered ${snapshotResponse.status}`);
 	}
 
-	// Parsed BEFORE the transaction opens: a malformed payload writes nothing.
-	const snapshot = parseSnapshot(await snapshotResponse.json());
+	// Parsed BEFORE the transaction opens: a malformed payload writes nothing to the
+	// menu — but the FAILURE is remembered, so the layout can say the menu is stale.
+	let snapshot: MenuSnapshot;
+	try {
+		snapshot = parseSnapshot(await snapshotResponse.json());
+	} catch (thrown) {
+		if (thrown instanceof SnapshotError) {
+			await cacheSettings([{ key: MENU_SYNC_ERROR_KEY, value: thrown.message }]);
+		}
+		throw thrown;
+	}
 
 	await replaceMenu(snapshot);
+	await cacheSettings([{ key: MENU_SYNC_ERROR_KEY, value: null }]);
 
 	return 'replaced';
 }

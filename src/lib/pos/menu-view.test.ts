@@ -13,6 +13,7 @@ function item(over: Partial<Item> & Pick<Item, 'id' | 'categoryId'>): Item {
 		isAvailable: true,
 		sortOrder: 0,
 		modifierGroupIds: [],
+		imageId: null,
 		...over
 	};
 }
