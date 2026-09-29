@@ -44,6 +44,11 @@ export type RestaurantWithSettings = {
 	acceptsCard: boolean | null;
 	/** null until the owner chooses on /settings; no default anywhere. */
 	acceptsMobile: boolean | null;
+	/** Receipt header text (menu-and-printing T-21): optional, null until set. */
+	receiptAddress: string | null;
+	receiptPhone: string | null;
+	taxRegistrationNumber: string | null;
+	receiptFooter: string | null;
 	createdAt: Date;
 };
 
@@ -69,6 +74,10 @@ export async function getRestaurantWithSettings(
 			currencyCode: restaurantSettings.currencyCode,
 			acceptsCard: restaurantSettings.acceptsCard,
 			acceptsMobile: restaurantSettings.acceptsMobile,
+			receiptAddress: restaurantSettings.receiptAddress,
+			receiptPhone: restaurantSettings.receiptPhone,
+			taxRegistrationNumber: restaurantSettings.taxRegistrationNumber,
+			receiptFooter: restaurantSettings.receiptFooter,
 			createdAt: restaurants.createdAt
 		})
 		.from(restaurants)
@@ -94,6 +103,12 @@ export type SettingsChanges = {
 	currencyCode?: string;
 	acceptsCard?: boolean;
 	acceptsMobile?: boolean;
+	// Receipt header text (T-21): a string is trimmed, '' clears the field to
+	// null; undefined means "not submitted, leave it alone".
+	receiptAddress?: string | null;
+	receiptPhone?: string | null;
+	taxRegistrationNumber?: string | null;
+	receiptFooter?: string | null;
 };
 
 export type UpdateSettingsContext = {
@@ -114,7 +129,8 @@ export type UpdateSettingsResult =
 				| 'invalid_tax_mode'
 				| 'invalid_tax_rate'
 				| 'invalid_currency'
-				| 'invalid_tender';
+				| 'invalid_tender'
+				| 'invalid_receipt_field';
 	  };
 
 // The POS idle lock's SANITY BOUND — not a default (CLAUDE.md, "Decisions already
@@ -122,6 +138,18 @@ export type UpdateSettingsResult =
 // counting change; over 30 minutes it is not a lock.
 const POS_IDLE_LOCK_MIN_SECONDS = 30;
 const POS_IDLE_LOCK_MAX_SECONDS = 1800;
+
+// Receipt header text (menu-and-printing T-21): the column bounds, repeated
+// here so a value is refused BEFORE the database would (the CHECKs in
+// restaurant-settings.ts carry the same numbers). Control characters are
+// refused because this text goes to an ESC/POS printer, which obeys them.
+const RECEIPT_LIMITS = {
+	receiptAddress: 120,
+	receiptPhone: 40,
+	taxRegistrationNumber: 40,
+	receiptFooter: 120
+} as const;
+type ReceiptField = keyof typeof RECEIPT_LIMITS;
 
 /**
  * Update restaurant settings, writing the change and its audit row in the SAME
@@ -226,6 +254,29 @@ export async function updateSettings(
 		if (value !== current[key]) diff[key] = { old: current[key], new: value };
 	}
 
+	// T-21: receipt header text. A string is trimmed; '' clears the field (null);
+	// a control character or a length over the column's bound is refused before
+	// anything is written. NEVER bumps menu_version — the receipt header is not in
+	// the till's menu snapshot; it reaches the till through GET /api/pos/employees.
+	const receipt: Partial<Record<ReceiptField, string | null>> = {};
+	for (const key of Object.keys(RECEIPT_LIMITS) as ReceiptField[]) {
+		const value = changes[key];
+		if (value === undefined) continue;
+		let next: string | null = null;
+		if (value !== null) {
+			if (typeof value !== 'string') return { ok: false, reason: 'invalid_receipt_field' };
+			const trimmed = value.trim();
+			if (/[\u0000-\u001f\u007f-\u009f]/.test(trimmed) || trimmed.length > RECEIPT_LIMITS[key]) {
+				return { ok: false, reason: 'invalid_receipt_field' };
+			}
+			next = trimmed === '' ? null : trimmed;
+		}
+		if (next !== current[key]) {
+			diff[key] = { old: current[key], new: next };
+			receipt[key] = next;
+		}
+	}
+
 	// A no-op submission must not produce a meaningless audit row.
 	if (Object.keys(diff).length === 0) return { ok: true, changed: false };
 
@@ -251,7 +302,11 @@ export async function updateSettings(
 		diff.taxRateBp ||
 		diff.currencyCode ||
 		diff.acceptsCard ||
-		diff.acceptsMobile
+		diff.acceptsMobile ||
+		diff.receiptAddress ||
+		diff.receiptPhone ||
+		diff.taxRegistrationNumber ||
+		diff.receiptFooter
 	) {
 		await tx
 			.update(restaurantSettings)
@@ -263,6 +318,13 @@ export async function updateSettings(
 				...(diff.currencyCode ? { currencyCode: changes.currencyCode! } : {}),
 				...(diff.acceptsCard ? { acceptsCard: changes.acceptsCard! } : {}),
 				...(diff.acceptsMobile ? { acceptsMobile: changes.acceptsMobile! } : {}),
+				// T-21: each receipt field only when it changed; null clears it.
+				...(diff.receiptAddress ? { receiptAddress: receipt.receiptAddress ?? null } : {}),
+				...(diff.receiptPhone ? { receiptPhone: receipt.receiptPhone ?? null } : {}),
+				...(diff.taxRegistrationNumber
+					? { taxRegistrationNumber: receipt.taxRegistrationNumber ?? null }
+					: {}),
+				...(diff.receiptFooter ? { receiptFooter: receipt.receiptFooter ?? null } : {}),
 				// T-29: the ONE menu-version bump on the server side. Inline SQL so
 				// two concurrent saves cannot both read 7 and both write 8. The
 				// convention amendment (CLAUDE.md, 2026-09-28, T-02): restaurants/

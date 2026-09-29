@@ -124,6 +124,10 @@
 				timeZone: string | null;
 				acceptsCard: boolean | null;
 				acceptsMobile: boolean | null;
+				receiptAddress: string | null;
+				receiptPhone: string | null;
+				taxRegistrationNumber: string | null;
+				receiptFooter: string | null;
 			};
 		};
 
@@ -147,7 +151,12 @@
 				{ key: 'acceptsMobile', value: body.settings.acceptsMobile },
 				{ key: 'timeZone', value: body.settings.timeZone },
 				{ key: 'restaurantName', value: body.settings.restaurantName },
-				{ key: 'deviceCode', value: body.device.code }
+				{ key: 'deviceCode', value: body.device.code },
+				// T-21: the receipt header, cached so an offline receipt is correct.
+				{ key: 'receiptAddress', value: body.settings.receiptAddress },
+				{ key: 'receiptPhone', value: body.settings.receiptPhone },
+				{ key: 'taxRegistrationNumber', value: body.settings.taxRegistrationNumber },
+				{ key: 'receiptFooter', value: body.settings.receiptFooter }
 			]);
 			// T-30: fold the server's invoice hint into the till's counter and
 			// adopt any server-open session so the till doesn't re-open it.

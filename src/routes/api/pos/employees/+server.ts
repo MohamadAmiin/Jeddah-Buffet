@@ -46,7 +46,12 @@ export const GET: RequestHandler = async (event) => {
 		posIdleLockSeconds: restaurant?.posIdleLockSeconds ?? null,
 		timeZone: restaurant?.timeZone ?? null,
 		acceptsCard: restaurant?.acceptsCard ?? null,
-		acceptsMobile: restaurant?.acceptsMobile ?? null
+		acceptsMobile: restaurant?.acceptsMobile ?? null,
+		// T-21: the receipt header, so the till prints a correct header offline.
+		receiptAddress: restaurant?.receiptAddress ?? null,
+		receiptPhone: restaurant?.receiptPhone ?? null,
+		taxRegistrationNumber: restaurant?.taxRegistrationNumber ?? null,
+		receiptFooter: restaurant?.receiptFooter ?? null
 	};
 
 	// T-28: the till's adoptServerHint (T-23) folds this into

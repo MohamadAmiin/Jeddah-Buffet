@@ -33,6 +33,11 @@ export const load: ServerLoad = async (event) => {
 		currencyCode: restaurant.currencyCode,
 		acceptsCard: restaurant.acceptsCard,
 		acceptsMobile: restaurant.acceptsMobile,
+		// Receipt header text (T-21): '' for null, for the inputs.
+		receiptAddress: restaurant.receiptAddress ?? '',
+		receiptPhone: restaurant.receiptPhone ?? '',
+		taxRegistrationNumber: restaurant.taxRegistrationNumber ?? '',
+		receiptFooter: restaurant.receiptFooter ?? '',
 		taxModes: [...TAX_MODES],
 		supportedCurrencies: Object.keys(SUPPORTED_CURRENCIES)
 	};
@@ -61,8 +66,20 @@ const settingsSchema = z.object({
 		.refine((code) => Object.hasOwn(SUPPORTED_CURRENCIES, code), CURRENCY_MESSAGE)
 		.optional(),
 	acceptsCard: z.enum(['unset', 'yes', 'no']).optional(),
-	acceptsMobile: z.enum(['unset', 'yes', 'no']).optional()
+	acceptsMobile: z.enum(['unset', 'yes', 'no']).optional(),
+	// Receipt header text (T-21). Unlike the fields above, a BLANK submitted value
+	// means "clear it": these do not go through optionalField — see clearable().
+	receiptAddress: z.string().optional(),
+	receiptPhone: z.string().optional(),
+	taxRegistrationNumber: z.string().optional(),
+	receiptFooter: z.string().optional()
 });
+
+/** A receipt field: absent = not submitted (undefined); blank = clear (null). */
+function clearable(value: string | undefined): string | null | undefined {
+	if (value === undefined) return undefined;
+	return value.trim() === '' ? null : value;
+}
 
 function tender(value: 'unset' | 'yes' | 'no' | undefined): boolean | undefined {
 	if (value === undefined || value === 'unset') return undefined;
@@ -93,7 +110,11 @@ export const actions: Actions = {
 			taxRateBp: optionalField(form.get('taxRateBp')),
 			currencyCode: optionalField(form.get('currencyCode')),
 			acceptsCard: optionalField(form.get('acceptsCard')),
-			acceptsMobile: optionalField(form.get('acceptsMobile'))
+			acceptsMobile: optionalField(form.get('acceptsMobile')),
+			receiptAddress: form.get('receiptAddress') ?? undefined,
+			receiptPhone: form.get('receiptPhone') ?? undefined,
+			taxRegistrationNumber: form.get('taxRegistrationNumber') ?? undefined,
+			receiptFooter: form.get('receiptFooter') ?? undefined
 		});
 
 		if (!parsed.success) {
@@ -115,7 +136,11 @@ export const actions: Actions = {
 					taxRateBp: parsed.data.taxRateBp,
 					currencyCode: parsed.data.currencyCode,
 					acceptsCard: tender(parsed.data.acceptsCard),
-					acceptsMobile: tender(parsed.data.acceptsMobile)
+					acceptsMobile: tender(parsed.data.acceptsMobile),
+					receiptAddress: clearable(parsed.data.receiptAddress),
+					receiptPhone: clearable(parsed.data.receiptPhone),
+					taxRegistrationNumber: clearable(parsed.data.taxRegistrationNumber),
+					receiptFooter: clearable(parsed.data.receiptFooter)
 				},
 				{ actorUserId: user.userId, ip, userAgent }
 			)
@@ -127,7 +152,9 @@ export const actions: Actions = {
 				invalid_tax_mode: TAX_MODE_MESSAGE,
 				invalid_tax_rate: TAX_RATE_MESSAGE,
 				invalid_currency: CURRENCY_MESSAGE,
-				invalid_tender: 'Choose Accepted or Not accepted for each payment method.'
+				invalid_tender: 'Choose Accepted or Not accepted for each payment method.',
+				invalid_receipt_field:
+					'Receipt text must be plain text: address and footer up to 120 characters, phone and tax number up to 40.'
 			};
 			return fail(400, {
 				message: messages[result.reason] ?? 'Those settings could not be saved.'

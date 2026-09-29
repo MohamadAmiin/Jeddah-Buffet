@@ -154,6 +154,48 @@
 				>
 			</div>
 
+			<!--
+				T-21 (menu-and-printing): what the receipt prints under the restaurant's
+				name. All optional; a blank field clears the line. Spec 33 decision 3 —
+				what a receipt must legally show — is still open, so this is the default
+				layout's text, not a legal form.
+			-->
+			<fieldset class="border-line flex flex-col gap-4 rounded-md border p-4">
+				<legend class="text-ink px-1 font-semibold">Receipt</legend>
+				<Field
+					id="receiptAddress"
+					name="receiptAddress"
+					label="Address"
+					value={data.receiptAddress}
+					maxlength="120"
+					hint="Printed under the restaurant's name. Leave blank to print none."
+				/>
+				<Field
+					id="receiptPhone"
+					name="receiptPhone"
+					label="Phone"
+					value={data.receiptPhone}
+					maxlength="40"
+					inputmode="tel"
+				/>
+				<Field
+					id="taxRegistrationNumber"
+					name="taxRegistrationNumber"
+					label="Tax registration number"
+					value={data.taxRegistrationNumber}
+					maxlength="40"
+					hint="Printed on every receipt when set. What a receipt must legally show is still being confirmed with an accountant."
+				/>
+				<Field
+					id="receiptFooter"
+					name="receiptFooter"
+					label="Footer line"
+					value={data.receiptFooter}
+					maxlength="120"
+					hint="For example: Mahadsanid! Thank you!"
+				/>
+			</fieldset>
+
 			<div class="flex flex-wrap items-center gap-3">
 				<!-- The label says WHY it is disabled while a save is in flight: "Saving…"
 				     is the reason, in the one place the owner is already looking. -->
