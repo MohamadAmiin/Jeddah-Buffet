@@ -30,7 +30,7 @@ import { posSyncOps } from '../db/schema/pos-sync';
 import { writeAudit } from '../audit';
 import { postEntry } from '../accounting/journal';
 import { countShortfallLines, countSurplusLines } from '../accounting/posting-rules';
-import { minor, type Minor } from '../../money';
+import { minor, negate, sum, type Minor } from '../../money';
 import { formatQty, qty, subQty, type Qty } from '../../money/quantity';
 import { applyMovements, lockIngredients, type MovementRequest } from './movements';
 import type { InventoryWriteContext } from './ingredients';
@@ -159,14 +159,11 @@ export async function postCount(
 		}))
 	);
 
-	let shortfall = 0n;
-	let surplus = 0n;
-	for (const cost of costByIngredient.values()) {
-		if (cost < 0n) shortfall -= cost;
-		else surplus += cost;
-	}
-	const shortfallMinor = minor(shortfall);
-	const surplusMinor = minor(surplus);
+	// Summed by the money module (invariant 1): a shortfall is the magnitude of
+	// the negative costs, a surplus the sum of the positive ones.
+	const signedCosts = [...costByIngredient.values()].map((cost) => minor(cost));
+	const shortfallMinor = sum(signedCosts.filter((cost) => cost < 0n).map((cost) => negate(cost)));
+	const surplusMinor = sum(signedCosts.filter((cost) => cost > 0n));
 	// Each is null (nothing written) when zero.
 	await postEntry(tx, {
 		restaurantId: ctx.restaurantId,
