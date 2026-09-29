@@ -17,8 +17,7 @@ import {
 	recordDelivery,
 	registerDevice,
 	registerRestaurant,
-	setRecipe,
-	signIn
+	setRecipe
 } from './fixtures';
 
 // FROM A DELIVERY TO COST OF GOODS SOLD (tasks/inventory-cogs T-35; spec 13,
@@ -106,7 +105,9 @@ test('a delivery, a recipe, a till sale: stock, COGS, reports and margin agree',
 	// 4. Two burgers on the till, paid in cash.
 	const till = await browser.newContext();
 	const tillPage = await till.newPage();
-	await signIn(tillPage, OWNER);
+	// registerDevice checks the owner's password itself; a dashboard sign-in on
+	// this tab first would spend a second attempt from the throttle every spec in
+	// the run shares (10 per address per 10 minutes, process-local).
 	await registerDevice(tillPage, OWNER);
 	const status = tillPage.getByRole('status');
 	await pickEmployee(tillPage, 'The Cashier');
