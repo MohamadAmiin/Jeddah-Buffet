@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -120,6 +120,30 @@ describe('initConfig', () => {
 		expect(replaced.origin).toBe('https://other.example.com');
 		expect(replaced.token).not.toBe(written.token);
 	});
+
+	it.skipIf(process.platform === 'win32')(
+		'the file holding the token is mode 0600 — on a fresh write AND on --force over a looser file',
+		() => {
+			const dir = tmp();
+			const fresh = join(dir, 'fresh.json');
+			const args = {
+				origin: 'https://pos.example.com',
+				receipt: { host: '192.168.1.50', port: 9100, width: 48 as const },
+				dataDir: join(dir, 'data')
+			};
+			initConfig(fresh, args);
+			expect(statSync(fresh).mode & 0o777).toBe(0o600);
+
+			// Copied from the example or written by hand: world-readable under the usual umask.
+			const loose = join(dir, 'loose.json');
+			writeFileSync(loose, '{}');
+			chmodSync(loose, 0o644);
+			expect(statSync(loose).mode & 0o777).toBe(0o644);
+			const rekeyed = initConfig(loose, { ...args, force: true });
+			expect(statSync(loose).mode & 0o777).toBe(0o600);
+			expect(loadConfig(loose).token).toBe(rekeyed.token);
+		}
+	);
 
 	it('loadConfig names a missing file and invalid JSON', () => {
 		const dir = tmp();

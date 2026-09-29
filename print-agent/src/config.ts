@@ -12,7 +12,7 @@
 // native type stripping), with no install step, so nothing from src/ or from
 // node_modules may be reached from here.
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 export type PrinterConfig = { host: string; port: number; width: 32 | 48 };
@@ -171,5 +171,9 @@ export function initConfig(path: string, args: InitArgs): AgentConfig {
 	});
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, JSON.stringify(config, null, '\t') + '\n', { mode: 0o600 });
+	// `mode` applies only when the file is CREATED: a --force over a file that was
+	// copied or hand-written at 0644 would leave the new token world-readable.
+	// Windows has no POSIX modes; the README says where to keep the folder there.
+	if (process.platform !== 'win32') chmodSync(path, 0o600);
 	return config;
 }

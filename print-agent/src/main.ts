@@ -168,7 +168,7 @@ function main(argv: string[]): number {
 	return 1;
 }
 
-// Only when executed directly — the test imports runInit and parseFlags.
+// Only when executed directly — main.test.ts imports runInit and parseFlags.
 if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename)) {
 	try {
 		process.exitCode = main(process.argv.slice(2));

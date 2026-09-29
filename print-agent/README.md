@@ -25,7 +25,7 @@ opens late: a pulse the agent could not send is refused, not retried.
 ## 3. Install
 
 1. Copy the repository's `print-agent/` folder to the till PC, for example to
-   `/opt/matcami/print-agent` (Linux) or `C:\matcami\print-agent` (Windows). Only `src/` is needed
+   `/opt/matcami/print-agent` (Linux) or `C:\Users\<till user>\matcami\print-agent` (Windows). Only `src/` is needed
    from the repository; `config.json` and `data/` are created on the PC.
 
 2. Write the configuration and mint the pairing token. Replace the address with the exact address
@@ -42,7 +42,7 @@ opens late: a pulse the agent could not send is refused, not retried.
    Leave out `--kitchen` when there is one printer: kitchen tickets then print on the receipt
    printer. Add `:port` to a printer address if it is not 9100.
 
-   The command writes `print-agent/config.json` (readable by your user only) and prints the agent
+   The command writes `print-agent/config.json` and prints the agent
    URL and the **pairing token once**:
 
    ```
@@ -51,6 +51,12 @@ opens late: a pulse the agent could not send is refused, not retried.
    Pairing token:  3f9c…(64 hex characters)
    Enter this URL and token on the till: Printer → Pair.
    ```
+
+   On Linux and macOS the file is set to mode `0600` — readable by your user only — on every
+   `init`, including `--force` over an existing file. Windows has no such mode: keep the
+   `print-agent` folder inside the till user's own profile (for example
+   `C:\Users\<till user>\matcami\print-agent`), where other accounts cannot read it, rather than
+   directly under `C:\`.
 
    Keep the token for section 5. It is a secret: it never goes into git, a chat message or a
    screenshot. If you lose it, run `init` again with `--force` and pair the till again.
@@ -123,7 +129,7 @@ journalctl -u matcami-print-agent -f        # the agent's own output
 4. **Actions** → New: **Start a program**.
    - Program/script: `node.exe` (or the full path, e.g. `C:\Program Files\nodejs\node.exe`)
    - Add arguments: `print-agent\src\main.ts run`
-   - Start in: `C:\matcami` (the **parent** of the `print-agent` folder)
+   - Start in: `C:\Users\<till user>\matcami` (the **parent** of the `print-agent` folder)
 5. **Settings**: tick **If the task fails, restart every: 1 minute**, attempts `999`; untick **Stop
    the task if it runs longer than**.
 6. **OK**, then right-click the task → **Run**. A browser tab at `http://127.0.0.1:9471/status`
