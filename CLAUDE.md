@@ -49,9 +49,12 @@ src/
       restaurants/  restaurant record, settings, and the onRestaurantCreated initializer list
       pos-sessions/ index.ts: POS shift open (attach) and close (expected cash, over/short to 6800), business date in SQL — called by orders/sync.ts; calls accounting/, permissions/, audit/
       reports/      sales.ts (salesReport, defaultReportDate) and flagged.ts (listUnresolvedOps, countUnresolvedOps, summarizeOp): read-only report queries over STORED columns (sales by business date, sessions, flagged ops) — called by (dashboard) routes; never recomputes money
+      menu/         index.ts (categories — optional on an item —, items, modifier groups, modifiers; every write inside the private withMenuVersionBump), images.ts (sniffImageType, readImage, imageResponse); photos live in menu_images
     money/          ISOMORPHIC: integer minor units, allocation, THE rounding rule, tax in both modes — imported by lib/server/** AND by (pos)
+    menu-images.ts  ISOMORPHIC photo limits and URLs (IMAGE_MAX_BYTES, IMAGE_CONTENT_TYPES, tillImageUrl, dashboardImageUrl) — imports nothing
+    image-resize.ts browser-only photo resizer for the dashboard's /menu panel (targetSize, resizePhoto); no DOM access at import time
     sync-ops/       index.ts — ISOMORPHIC: op kinds, payloads, status and flag lists, invoice-number format (formatInvoiceNumber, parseInvoiceNumber) — imported by lib/server/**, lib/pos/ and (pos); imports nothing
-    pos/            store.ts (IndexedDB version 3), queue.ts (the flush), invoice-sequence.ts, orders.ts, session.ts, employee.svelte.ts, menu-view.ts, idle.ts, menu-snapshot.ts — and, in a later plan, the print-agent client
+    pos/            store.ts (IndexedDB version 3), queue.ts (the flush), invoice-sequence.ts, orders.ts, session.ts, employee.svelte.ts, menu-view.ts, idle.ts, menu-snapshot.ts, photo-warmup.ts (photos into the HTTP cache after a sync), can-print.ts (THE rule for what may print) — and, in a later plan, the print-agent client
     components/ui/  shared dashboard primitives — Button, Field, CheckField, SelectField, PinField, Table, Card, PageHeader, Alert, StatusMark, ThemeToggle; they implement `docs/design-system.md` §7b
     styles/         tokens.css — THE design tokens; no colour, size or type literal lives anywhere else
   routes/

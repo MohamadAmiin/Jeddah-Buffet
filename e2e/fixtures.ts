@@ -220,8 +220,9 @@ export async function createMenuItem(
 		.selectOption(item.category === null ? { value: '' } : { label: item.category });
 	if (item.photo) {
 		await page.getByLabel('Photo').setInputFiles(item.photo);
-		// The picker resizes first; the preview is the sign it is ready to upload.
-		await expect(page.getByRole('img', { name: '' }).first()).toBeVisible();
+		// The picker resizes first; the object-URL preview is the sign it is ready to
+		// upload (alt="" gives the preview no img role, so locate it by its src).
+		await expect(page.locator('img[src^="blob:"]')).toBeVisible();
 	}
 	await page.getByRole('button', { name: 'Save item' }).click();
 	await expect(page.getByRole('alert')).toContainText(`${item.name} added.`);

@@ -46,6 +46,10 @@ server {
 
   limit_conn addr 10;
 
+  # Menu photos are resized in the browser to at most 400 KB before upload
+  # (src/lib/menu-images.ts); 1m is Nginx's default, stated so nobody lowers it.
+  client_max_body_size 1m;
+
   # THE PRIMARY THROTTLE — on the credential POSTs ONLY. The application's
   # in-memory bucket (auth/throttle.ts) is a backstop: process-local and reset on
   # restart. Do not put limit_req on the whole server: a cold page load is ~13
@@ -169,6 +173,7 @@ everything the application cannot. Treat it as a production database console.
 | `ADDRESS_HEADER` | production | `x-forwarded-for`. The app refuses to start without it, except on a localhost `ORIGIN`. |
 | `XFF_DEPTH` | behind a proxy | `1` for a single proxy. |
 | `SIGNUP` | optional | `open` (the default when unset) or `closed`. Anything else stops the app at boot. |
+| `BODY_SIZE_LIMIT` | optional | adapter-node's request body cap, default `512K`. Menu photos are capped at 400 KB (`src/lib/menu-images.ts`); do not set it lower. |
 
 **One open question, recorded rather than decided.** `env.ts` currently *requires*
 `MIGRATE_DATABASE_URL` at application startup, which puts the **owner** credential

@@ -45,16 +45,16 @@ reports.
 
 The IndexedDB database is `matcami-pos`, `DB_VERSION = 3`.
 
-| Store              | keyPath      | Owning module           | Cleared by `bindDevice` / `forgetDevice`?                                                                                                     |
-| ------------------ | ------------ | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `employees`        | `id`         | `store.ts`              | yes — a per-device cache of the staff bundle                                                                                                  |
-| `settings`         | `key`        | `store.ts`              | yes                                                                                                                                           |
-| `menu`             | `id`         | `menu-snapshot.ts`      | yes                                                                                                                                           |
-| `offline_logins`   | `clientOpId` | `store.ts` + `queue.ts` | NEVER — unsynced audit facts                                                                                                                  |
-| `orders`           | `id`         | `orders.ts`             | NEVER — completed sales are facts, pruned only 30 days after they sync                                                                        |
-| `sync_queue`       | `clientOpId` | `queue.ts`              | NEVER — the queue IS the unsynced work                                                                                                        |
-| `invoice_sequence` | `deviceId`   | `invoice-sequence.ts`   | NEVER — a rewind would reissue a number already queued; resume point `max(local counter, highest queued number for that device, server hint)` |
-| `session`          | `deviceId`   | `session.ts`            | NEVER — the open session's business date belongs to queued sales                                                                              |
+| Store              | keyPath      | Owning module           | Cleared by `bindDevice` / `forgetDevice`?                                                                                                                                             |
+| ------------------ | ------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `employees`        | `id`         | `store.ts`              | yes — a per-device cache of the staff bundle                                                                                                                                          |
+| `settings`         | `key`        | `store.ts`              | yes                                                                                                                                                                                   |
+| `menu`             | `id`         | `menu-snapshot.ts`      | yes                                                                                                                                                                                   |
+| `offline_logins`   | `clientOpId` | `store.ts` + `queue.ts` | NEVER — unsynced audit facts                                                                                                                                                          |
+| `orders`           | `id`         | `orders.ts`             | NEVER — completed sales are facts, pruned only 30 days after they sync; a completed row carries `sale` (the queued payload, line amounts, cashier, business date) and `printed` marks |
+| `sync_queue`       | `clientOpId` | `queue.ts`              | NEVER — the queue IS the unsynced work                                                                                                                                                |
+| `invoice_sequence` | `deviceId`   | `invoice-sequence.ts`   | NEVER — a rewind would reissue a number already queued; resume point `max(local counter, highest queued number for that device, server hint)`                                         |
+| `session`          | `deviceId`   | `session.ts`            | NEVER — the open session's business date belongs to queued sales                                                                                                                      |
 
 A wipe protects a stolen or re-registered tablet's PIN hashes and menu, but the facts already
 recorded on it belong to the restaurant's books and are never the wipe's to lose (spec 6,
@@ -68,7 +68,11 @@ invariant 5).
 - `idle.ts` — the idle watch; `null` seconds is inert, never a default.
 - `menu-snapshot.ts` — parses the full menu snapshot; amounts stay decimal strings until
   `readMenu` converts them with `BigInt`.
-- `menu-view.ts` — pure helpers over the cached menu: category tabs, the resolved tax rate,
-  modifier groups, `formatTaxRate`.
+- `menu-view.ts` — pure helpers over the cached menu: category tabs (an item with no category
+  sits under the synthetic `Other` tab), the resolved tax rate, modifier groups, `formatTaxRate`.
+- `photo-warmup.ts` — after every menu sync, fetches each photo once so the browser's HTTP cache
+  holds it for offline use (best effort — never a service-worker cache).
+- `can-print.ts` — THE rule for what may print: a completed cash sale always; card and mobile
+  only once the server said `accepted` or `recorded_flagged` (fail closed).
 
 Spec 4, 5, 6, 11. Invariants 5, 12.
