@@ -270,3 +270,75 @@ export async function closeSession(tillPage: Page, countedCashMinor: bigint): Pr
 	await tillPage.getByRole('button', { name: 'Close session' }).click();
 	await expect(tillPage.getByText('Expected', { exact: true })).toBeVisible();
 }
+
+// ── tasks/inventory-cogs T-35: the owner's inventory pages ──────────────────
+// Reached by the rail's Inventory and Purchases links and the pages' own links,
+// never by typing a URL.
+
+/** Add an ingredient on /inventory, then one purchase unit on its own page. */
+export async function createIngredient(
+	page: Page,
+	i: { name: string; baseUnit: string; unit: { name: string; baseQtyPerUnit: string } }
+): Promise<void> {
+	await page.getByRole('link', { name: 'Inventory', exact: true }).click();
+	await expect(page).toHaveURL(/\/inventory$/);
+	await page.getByLabel('Name', { exact: true }).fill(i.name);
+	await page.getByLabel('Base unit', { exact: true }).fill(i.baseUnit);
+	await page.getByRole('button', { name: 'Add ingredient' }).click();
+	await expect(page).toHaveURL(/\/inventory\/[0-9a-f-]{36}$/);
+	await page.getByLabel('Unit name').fill(i.unit.name);
+	await page.getByLabel(`${i.baseUnit} per unit`).fill(i.unit.baseQtyPerUnit);
+	await page.getByRole('button', { name: 'Add unit' }).click();
+	await expect(page.getByRole('table', { name: 'Purchase units' })).toContainText(i.unit.name);
+}
+
+/** Set a menu item's recipe on /inventory/recipes; quantities are in base units. */
+export async function setRecipe(
+	page: Page,
+	r: { itemName: string; rows: { ingredientName: string; qty: string }[] }
+): Promise<void> {
+	await page.getByRole('link', { name: 'Inventory', exact: true }).click();
+	await page.getByRole('link', { name: 'Recipes', exact: true }).click();
+	await expect(page).toHaveURL(/\/inventory\/recipes/);
+	await page.getByRole('link', { name: r.itemName, exact: true }).click();
+	await expect(page).toHaveURL(/\/inventory\/recipes\?item=/);
+	for (const [index, row] of r.rows.entries()) {
+		const select = page.getByLabel(`Ingredient, row ${index + 1}`);
+		if ((await select.count()) === 0) {
+			await page.getByRole('button', { name: 'Add row' }).click();
+		}
+		const option = select.locator('option', { hasText: `${row.ingredientName} (` });
+		await select.selectOption({ value: (await option.getAttribute('value'))! });
+		await page.getByLabel(`Quantity, row ${index + 1}`).fill(row.qty);
+	}
+	await page.getByRole('button', { name: 'Save recipe' }).click();
+	await expect(page).toHaveURL(/\/inventory\/recipes\?item=/);
+	await expect(page.getByRole('alert')).toHaveCount(0);
+}
+
+/** Record a delivery on /purchases/new; totals are major units as text ("11.00"). */
+export async function recordDelivery(
+	page: Page,
+	d: {
+		supplier: string;
+		paidBy: 'Paid now — bank' | 'Paid now — cash' | 'On credit';
+		lines: { ingredientName: string; unitName: string; qty: string; total: string }[];
+	}
+): Promise<void> {
+	await page.getByRole('link', { name: 'Purchases', exact: true }).click();
+	await expect(page).toHaveURL(/\/purchases$/);
+	await page.getByRole('link', { name: 'Record a delivery' }).click();
+	await expect(page).toHaveURL(/\/purchases\/new$/);
+	await page.getByLabel('Supplier', { exact: true }).fill(d.supplier);
+	await page.getByLabel('Paid by', { exact: true }).selectOption({ label: d.paidBy });
+	for (const [index, line] of d.lines.entries()) {
+		const n = index + 1;
+		await page
+			.getByLabel(`Line ${n}: ingredient and unit`)
+			.selectOption({ label: `${line.ingredientName} — ${line.unitName}` });
+		await page.getByLabel(`Line ${n}: quantity`).fill(line.qty);
+		await page.getByLabel(`Line ${n}: line total`).fill(line.total);
+	}
+	await page.getByRole('button', { name: 'Record delivery' }).click();
+	await expect(page).toHaveURL(/\/purchases\/[0-9a-f-]{36}$/);
+}
