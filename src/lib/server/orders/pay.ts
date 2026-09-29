@@ -7,7 +7,7 @@
 //      compared; the flag is on flag_reason).
 //   4. Record the invoice number (spec 6 device namespace; a 23505 rolls
 //      the whole transaction back and T-21 maps it to invoice_collision).
-//   5. Deduct inventory (T-17 no-op today; the seam is in place).
+//   5. Deduct inventory (consumeForSale — recipe × quantity, tasks/inventory-cogs).
 //   6. Create the invoice: the row inserted in step 4 IS the invoice —
 //      spec 13 and R8 list "Record Invoice Number" and "Create Invoice" as
 //      two steps; this plan deliberately collapses them into ONE insert.
@@ -126,7 +126,9 @@ export async function recordSale(
 		issuedAt: ctx.occurredAt
 	});
 
-	// Step 5 — deduct inventory (T-17 no-op returns cogsMinor 0n).
+	// Step 5 — deduct inventory: recipe × quantity through the one ledger writer,
+	// costed at the current average (tasks/inventory-cogs T-19). cogsMinor is 0n
+	// when nothing sold has a recipe.
 	const { cogsMinor } = await consumeForSale(tx, {
 		restaurantId: ctx.restaurantId,
 		orderId: sale.orderId,

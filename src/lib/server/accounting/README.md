@@ -21,6 +21,12 @@
 - `posting-rules.ts` — `saleLines` → `Dr 1000|1020|1030 total / Dr 4100 discount / Cr 4000
 subtotal / Cr 2100 tax`; `cogsLines` → `Dr 5000 / Cr 1200`; `overShortLines` → `Dr 6800 /
 Cr 1000` for a shortage, `Dr 1000 / Cr 6800` for an overage, nothing for zero.
+  The inventory rows (tasks/inventory-cogs): `purchaseLines` → `Dr 1200 / Cr 1000|1010`
+  (`purchase_paid`) or `Cr 2000` (`purchase_on_credit`); `supplierPaymentLines` → `Dr 2000 /
+Cr 1000|1010` (`supplier_paid`); `wasteLines` and `countShortfallLines` → `Dr 5100 / Cr 1200`;
+  `countSurplusLines` → `Dr 1200 / Cr 5100`; `revaluationLines` (signed) → against 5000
+  (`inventory_revaluation`); `openingStockLines` → `Dr 1200 / Cr 3000` (`opening_stock`).
+  `JOURNAL_SOURCE_TYPES` lists the seven sources an entry may name.
 - `journal.ts` — `postEntry`: drops `0n` lines, returns `null` when none remain, resolves
   accounts by code within the restaurant; the deferred trigger of migration 0012 is what
   enforces the balance at COMMIT. `postReversal` is the only way a reversing entry is created;
