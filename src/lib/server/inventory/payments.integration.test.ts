@@ -13,7 +13,13 @@ import { entryLines } from '../accounting/journal';
 import { minor } from '../../money';
 import { qty } from '../../money/quantity';
 import { addPurchaseUnit, createIngredient, type InventoryWriteContext } from './ingredients';
-import { getPurchase, listPurchases, recordPurchase, type PaidBy } from './purchases';
+import {
+	getPurchase,
+	listPurchases,
+	recordPurchase,
+	reversePurchase,
+	type PaidBy
+} from './purchases';
 import { outstandingMinor, paySupplier, reverseSupplierPayment } from './payments';
 import { todayInZone } from './business-date';
 
@@ -175,19 +181,13 @@ describe('paySupplier', () => {
 		const cashDelivery = await delivery(ctx, 'cash', 3000n);
 		expect(await pay(ctx, cashDelivery, 1000n)).toEqual({ ok: false, reason: 'not_credit' });
 		const reversedDelivery = await delivery(ctx, 'credit', 3000n);
-		// The reversal path is T-22's; stamp it directly here to test the refusal.
-		await testDb().execute(sql`
-			update purchases set reversed_at = now(), reversed_by_user_id = ${ctx.actorUserId},
-			       reversal_reason = 'test stamp'
-			where id = ${reversedDelivery}
-		`);
+		// Reversed through the real path (T-22): its Cr 2000 is mirrored, so the
+		// afterEach's 2000 = outstanding check holds with no hand repair.
+		const reversal = await db.transaction((tx) =>
+			reversePurchase(tx, ctx, { purchaseId: reversedDelivery, reason: 'Entered by mistake' })
+		);
+		expect(reversal.ok).toBe(true);
 		expect(await pay(ctx, reversedDelivery, 1000n)).toEqual({ ok: false, reason: 'reversed' });
-		// A reversed credit delivery owes nothing — and its 2000 credit is still on
-		// the books until T-22's mirror entry, so keep the afterEach honest:
-		await testDb().execute(sql`
-			update purchases set reversed_at = null, reversed_by_user_id = null, reversal_reason = null
-			where id = ${reversedDelivery}
-		`);
 	});
 });
 
