@@ -30,7 +30,7 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { DbTx } from '../db/client';
 import { ingredients, stockMovements } from '../db/schema/inventory';
-import { ROUNDING_RULE, minor, toBigInt, type Minor } from '../../money';
+import { ROUNDING_RULE, minor, sum, toBigInt, type Minor } from '../../money';
 import { formatQty, parseQty, qty, type Qty } from '../../money/quantity';
 import {
 	applyAtAverage,
@@ -216,8 +216,9 @@ export async function applyMovements(
 		recordedByUserId: ctx.recordedByUserId
 	};
 	const rows: (typeof stockMovements.$inferInsert)[] = [];
-	let costTotal = 0n;
-	let revaluationTotal = 0n;
+	// The totals are collected and summed by the money module (invariant 1).
+	const costs: Minor[] = [];
+	const revaluations: Minor[] = [];
 
 	for (const r of requests) {
 		const state = working.get(r.ingredientId)!;
@@ -252,7 +253,7 @@ export async function applyMovements(
 			qty: formatQty(signedQty),
 			costMinor: toBigInt(applied.costMinor)
 		});
-		costTotal += applied.costMinor;
+		costs.push(applied.costMinor);
 
 		if (applied.revaluationMinor !== 0n) {
 			rows.push({
@@ -262,7 +263,7 @@ export async function applyMovements(
 				qty: formatQty(qty(0n)),
 				costMinor: toBigInt(applied.revaluationMinor)
 			});
-			revaluationTotal += applied.revaluationMinor;
+			revaluations.push(applied.revaluationMinor);
 		}
 	}
 
@@ -282,7 +283,7 @@ export async function applyMovements(
 
 	return {
 		movements,
-		costMinor: minor(costTotal),
-		revaluationMinor: minor(revaluationTotal)
+		costMinor: sum(costs),
+		revaluationMinor: sum(revaluations)
 	};
 }
