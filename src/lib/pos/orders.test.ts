@@ -148,7 +148,9 @@ describe('completeSale', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		expect(result.invoiceNumber).toBe('POS1-000001');
 		expect(result.changeMinor).toBe(1970n);
@@ -183,7 +185,9 @@ describe('completeSale', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		const queue = await readQueue();
 		expect(queue).toHaveLength(1);
@@ -191,6 +195,36 @@ describe('completeSale', () => {
 		expect(payload.orderType).toBe('delivery');
 		expect(payload.tableLabel).toBeNull();
 		expect((await readOrder(cart.orderId))?.invoiceNumber).toBe(result.invoiceNumber);
+	});
+
+	// menu-and-printing T-18: the receipt's numbers live on the order, verbatim.
+	it('stores the queued payload, the line amounts, the cashier and the business date on the completed order', async () => {
+		const cart = await buildCart();
+		const result = await completeSale({
+			cart,
+			payment: { method: 'cash', tenderedMinor: 5000n },
+			employeeId: 'emp-1',
+			deviceId: 'device-A',
+			deviceCode: 'POS1',
+			posSessionId: 'ses-1',
+			taxMode: 'exclusive',
+			currencyCode: 'USD',
+			menuVersion: 1,
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
+		});
+		const order = await readOrder(cart.orderId);
+		const [entry] = await readQueue();
+		expect(order?.sale).toBeDefined();
+		// Deep-equal to the queue entry's payload, invoice number included.
+		expect(order?.sale?.payload).toEqual(entry.envelope.payload);
+		expect(order?.sale?.payload.invoiceNumber).toBe(result.invoiceNumber);
+		expect(order?.sale?.lineAmountsMinor).toEqual(lineAmounts(cart).map(String));
+		expect(order?.sale?.cashierName).toBe('Sam');
+		expect(order?.sale?.businessDate).toBe('2026-09-28');
+		expect(order?.sale?.completedAt).toBe(NOW.toISOString());
+		expect(order?.printed).toBeUndefined();
 	});
 
 	it('abortForTest leaves nothing behind — no order, no queue, no counter movement', async () => {
@@ -207,7 +241,9 @@ describe('completeSale', () => {
 					taxMode: 'exclusive',
 					currencyCode: 'USD',
 					menuVersion: 1,
-					now: NOW
+					now: NOW,
+					cashierName: 'Sam',
+					businessDate: '2026-09-28'
 				},
 				true
 			)
@@ -232,7 +268,9 @@ describe('completeSale', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		const second = await completeSale({
 			cart: await buildCart(),
@@ -244,7 +282,9 @@ describe('completeSale', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		expect(first.invoiceNumber).toBe('POS1-000001');
 		expect(second.invoiceNumber).toBe('POS1-000002');
@@ -263,7 +303,9 @@ describe('completeSale', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		const [entry] = await readQueue();
 		expect(() => JSON.stringify(entry.envelope)).not.toThrow();
@@ -296,7 +338,9 @@ describe('completeSale', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		expect(result.changeMinor).toBeNull();
 		const [entry] = await readQueue();
@@ -321,7 +365,9 @@ describe('completeSale', () => {
 				taxMode: 'exclusive',
 				currencyCode: 'USD',
 				menuVersion: 1,
-				now: NOW
+				now: NOW,
+				cashierName: 'Sam',
+				businessDate: '2026-09-28'
 			})
 		).rejects.toThrow();
 		expect(await readQueue()).toHaveLength(0);
@@ -342,7 +388,9 @@ describe('abandonSale', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		const result = await abandonSale(sale.orderId, 'rejected', NOW);
 		const order = await readOrder(sale.orderId);
@@ -379,7 +427,9 @@ describe('unsynced count follows the queue', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		await withDb((db) =>
 			inTransaction(db, ['sync_queue'], 'readwrite', (tx) => {

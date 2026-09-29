@@ -215,7 +215,10 @@
 				currencyCode: menu.currency as string,
 				menuVersion: menu.version,
 				payment: { method, tenderedMinor: method === 'cash' ? tendered : null },
-				now: new Date()
+				now: new Date(),
+				// Kept on the local order for the receipt (T-18).
+				cashierName: signedIn.current.displayName,
+				businessDate: session.businessDate ?? null
 			});
 			outcome = method === 'cash' ? 'paid' : 'pending';
 			sale = {

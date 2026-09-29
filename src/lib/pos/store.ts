@@ -12,7 +12,7 @@
 // correct, and the two would drift the first time the cost factor changes.
 
 import { verifyPin } from '../pin';
-import type { OpEnvelope, OpKind, SyncResult } from '../sync-ops';
+import type { OpEnvelope, OpKind, SaleCompletePayload, SyncResult } from '../sync-ops';
 import {
 	compareVersions,
 	parseSnapshot,
@@ -73,8 +73,34 @@ export type OfflineLogin = {
 	parked?: true;
 };
 
+/**
+ * The sale's OWN numbers, kept on the completed order (menu-and-printing T-18):
+ * the exact SaleCompletePayload the queue carries (invoice number included), the
+ * per-line amounts the order screen showed, who sold it and when. Every receipt,
+ * kitchen ticket and reprint is laid out from THIS and nothing else — never from
+ * the cart with today's tax mode, never from a recomputation (invariant 7; the
+ * risk panel's BLOCKER).
+ */
+export type SaleSnapshot = {
+	payload: SaleCompletePayload;
+	lineAmountsMinor: string[];
+	cashierName: string;
+	completedAt: string;
+	businessDate: string | null;
+};
+
+/** What has already been printed for an order; the drawer pulse is marked once. */
+export type PrintedMarks = {
+	receiptAt?: string;
+	kitchenAt?: string;
+	drawerAt?: string;
+	reprints?: number;
+};
+
 /** One order on this till. `cart` is T-24's Cart; typed as a parameter so this
- * file does not import a module that does not exist yet. */
+ * file does not import a module that does not exist yet. `sale` and `printed`
+ * are optional: orders completed before T-18 carry neither (no DB_VERSION
+ * change — they are fields of a stored object, not a store or an index). */
 export type LocalOrder<C = unknown> = {
 	id: string;
 	deviceId: string;
@@ -87,6 +113,8 @@ export type LocalOrder<C = unknown> = {
 	completedAt?: string;
 	syncedAt?: string;
 	syncStatus?: 'accepted' | 'recorded_flagged' | 'unrecorded' | 'rejected';
+	sale?: SaleSnapshot;
+	printed?: PrintedMarks;
 };
 
 /** One queued operation. Every *Minor field in `envelope` is a decimal STRING

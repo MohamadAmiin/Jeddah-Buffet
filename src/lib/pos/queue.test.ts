@@ -87,7 +87,9 @@ async function seedSale(deviceCode: string, invoiceSeq = 1): Promise<string> {
 		taxMode: 'exclusive',
 		currencyCode: 'USD',
 		menuVersion: 1,
-		now: NOW
+		now: NOW,
+		cashierName: 'Sam',
+		businessDate: '2026-09-28'
 	});
 	expect(result.invoiceNumber).toBe(`${deviceCode}-${String(invoiceSeq).padStart(6, '0')}`);
 	return result.clientOpId;
@@ -287,7 +289,9 @@ describe('flush — parking and rejects', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		const { fetchFn, bodies } = makeMockFetch([
 			{ kind: 'response', status: 403, body: { error: 'not_permitted' } },
@@ -315,7 +319,9 @@ describe('flush — parking and rejects', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		const { fetchFn } = makeMockFetch([
 			{

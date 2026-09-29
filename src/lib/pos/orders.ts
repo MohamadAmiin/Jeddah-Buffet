@@ -249,6 +249,10 @@ export type CompleteSaleArgs = {
 	currencyCode: string;
 	menuVersion: number;
 	now: Date;
+	/** Kept on the local order for the receipt (menu-and-printing T-18). */
+	cashierName: string;
+	/** The session's business date, or null while the server has not assigned one. */
+	businessDate: string | null;
 };
 
 export type CompleteSaleResult = {
@@ -299,6 +303,9 @@ export async function completeSale(
 	const clientOpId = secureId();
 	const paymentId = secureId();
 	const occurredAt = args.now.toISOString();
+	// The per-line amounts the order screen showed — the same money-module path,
+	// kept on the order so a receipt never recomputes them (invariant 7).
+	const amounts = lineAmounts(args.cart);
 
 	const payload: SaleCompletePayload = {
 		orderId: args.cart.orderId,
@@ -364,7 +371,17 @@ export async function completeSale(
 							cart: args.cart,
 							invoiceSeq: invoice.seq,
 							invoiceNumber: invoice.number,
-							completedAt: occurredAt
+							completedAt: occurredAt,
+							// THE SAME payload object the queue entry carries — invoice number
+							// already set — so the receipt prints exactly what the books get
+							// (menu-and-printing T-18). No second computation of any total.
+							sale: {
+								payload,
+								lineAmountsMinor: amounts.map((a) => a.toString()),
+								cashierName: args.cashierName,
+								completedAt: occurredAt,
+								businessDate: args.businessDate
+							}
 						} satisfies LocalOrder<Cart>);
 						const envelope: OpEnvelope<'sale.complete', SaleCompletePayload> = {
 							kind: 'sale.complete',
