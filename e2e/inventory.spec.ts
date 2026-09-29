@@ -114,7 +114,9 @@ test('a delivery, a recipe, a till sale: stock, COGS, reports and margin agree',
 	await enterPin(tillPage, '4321');
 	await openSession(tillPage, 50000n);
 	await expect(status).toContainText('0 unsynced');
-	const businessDate = /business date (\d{4}-\d{2}-\d{2})/.exec(await status.innerText())![1];
+	// The till's status bar (redesigned in PR #13) reads "Business date YYYY-MM-DD".
+	await expect(status).toContainText(/Business date \d{4}-\d{2}-\d{2}/);
+	const businessDate = /Business date (\d{4}-\d{2}-\d{2})/.exec(await status.innerText())![1];
 	await addItem(tillPage, 'Burger');
 	await addItem(tillPage, 'Burger');
 	await chooseOrderType(tillPage, 'Takeaway');
