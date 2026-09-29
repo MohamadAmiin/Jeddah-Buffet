@@ -152,7 +152,9 @@ describe('a scripted day', () => {
 		const counted = await db.transaction((tx) =>
 			postCount(tx, ctx, {
 				businessDate: '2026-09-28',
-				lines: [{ ingredientId: meat.id, countedQty: qty(24000000n) }]
+				// Down to 3 kg: the reversal below then takes 5 kg out of 3 kg, which
+				// the average cannot describe, so it MUST revalue (T-10(e)'s shape).
+				lines: [{ ingredientId: meat.id, countedQty: qty(3000000n) }]
 			})
 		);
 		if (!counted.ok) throw new Error(counted.reason);
@@ -160,6 +162,11 @@ describe('a scripted day', () => {
 			reversePurchase(tx, ctx, { purchaseId: delivery.purchaseId, reason: 'Wrong invoice' })
 		);
 		if (!reversed.ok) throw new Error(reversed.reason);
+		// By hand through the costing rules: 25 kg / 7000 at 0.28¢/g; 3 × 150 g sold
+		// → 24,550 g / 6874; 500 g wasted → 24,050 g / 6734; counted 3,000 g → 840.
+		// Reversing 5,000 g at 5000: raw 840 − 5000 = −4160; value at the average of
+		// −2,000 g is −560; revaluation = −560 − (−4160) = +3600 (Dr 1200 / Cr 5000).
+		expect(reversed.revaluationMinor).toBe(3600n);
 
 		// reconciliation: the tripwire is quiet.
 		const rec = await reconciliation(testDb(), f.restaurantId);
@@ -181,7 +188,12 @@ describe('a scripted day', () => {
 		});
 		// The bun was never bought: three sales took it negative, and it is flagged.
 		expect(stock.find((r) => r.id === bun)!.negative).toBe(true);
-		expect((await negativeStock(testDb(), f.restaurantId)).map((r) => r.id)).toEqual([bun]);
+		expect(meatRow.negative).toBe(true);
+		expect(meatRow.onHandQty).toBe(-2000000n);
+		expect((await negativeStock(testDb(), f.restaurantId)).map((r) => r.id)).toEqual([
+			bun,
+			meat.id
+		]);
 
 		// consumptionByDate for the session's business date = −Σ the sales' movements.
 		const saleMoves = await testDb()
@@ -218,13 +230,14 @@ describe('a scripted day', () => {
 			join accounts a on a.id = l.account_id
 			where e.restaurant_id = ${f.restaurantId} and e.event = 'cost_of_goods_sold' and a.code = '5000'
 		`);
-		const cogs = await cogsByDate(testDb(), f.restaurantId, '2026-01-01', '2026-12-31');
+		const cogs = await cogsByDate(testDb(), f.restaurantId, '2000-01-01', '2999-12-31');
 		const totalCogs = cogs.reduce((t, r) => t + r.cogsMinor, 0n);
 		const totalReval = cogs.reduce((t, r) => t + r.revaluationMinor, 0n);
 		expect(totalCogs).toBe(BigInt(cogsEntries.rows[0].total));
 		expect(totalCogs > 0n).toBe(true);
-		// A positive revaluation (Dr 1200 / Cr 5000) lowers 5000's balance.
-		expect(totalReval).toBe(-reversed.revaluationMinor);
+		// The +3600 revaluation (Dr 1200 / Cr 5000) lowers 5000's balance, in its
+		// own column and never in the COGS one.
+		expect(totalReval).toBe(-3600n);
 		const [cogsCount] = await testDb()
 			.select({ c: sql<number>`count(*)::int` })
 			.from(journalEntries)
@@ -243,7 +256,7 @@ describe('a scripted day', () => {
 		]);
 		const lines = await countDifferences(testDb(), f.restaurantId, counted.countId);
 		expect(lines).toHaveLength(1);
-		expect(lines[0].countedQty).toBe(24000000n);
+		expect(lines[0].countedQty).toBe(3000000n);
 		expect(lines[0].differenceQty).toBe(lines[0].countedQty - lines[0].systemQty);
 		const counts = await listCounts(testDb(), f.restaurantId);
 		expect(counts.map((c) => [c.id, c.shortfallMinor, c.surplusMinor])).toEqual([
@@ -253,16 +266,15 @@ describe('a scripted day', () => {
 		// The movement log, newest first, holds every kind the day produced.
 		const log = await movementLog(testDb(), f.restaurantId, meat.id);
 		expect(new Set(log.map((m) => m.movementType))).toEqual(
-			new Set(
-				[
-					'opening_stock',
-					'purchase',
-					'sale_consumption',
-					'waste',
-					'count_adjustment',
-					'purchase_reversal'
-				].concat(reversed.revaluationMinor !== 0n ? ['revaluation'] : [])
-			)
+			new Set([
+				'opening_stock',
+				'purchase',
+				'sale_consumption',
+				'waste',
+				'count_adjustment',
+				'purchase_reversal',
+				'revaluation'
+			])
 		);
 		for (let i = 1; i < log.length; i++) {
 			expect(log[i - 1].occurredAt.getTime() >= log[i].occurredAt.getTime()).toBe(true);
@@ -285,8 +297,11 @@ describe('the tripwire', () => {
 });
 
 describe('business date, not calendar date (invariant 11)', () => {
-	it('a sale at 01:30 local in a session opened the evening before belongs to that evening', async () => {
-		// Africa/Mogadishu is UTC+3: opened 28th 18:00 local, sold 29th 01:30 local.
+	it('sales after midnight in a session opened the evening before belong to that evening', async () => {
+		// Africa/Mogadishu is UTC+3: opened 28th 18:00 local. The first sale is 29th
+		// 01:30 local (still the 28th in UTC); the second is 29th 03:30 local =
+		// 29th 00:30 UTC — BOTH calendar dates are the 29th, the business date is
+		// the 28th. Grouping by any calendar date would put it on the 29th.
 		const session = await openSessionAt(db, f, {
 			posSessionId: randomUUID(),
 			openedAt: new Date('2026-09-28T15:00:00Z'),
@@ -294,10 +309,11 @@ describe('business date, not calendar date (invariant 11)', () => {
 		});
 		expect(session.businessDate).toBe('2026-09-28');
 		await sellBurger(session.posSessionId, 1, new Date('2026-09-28T22:30:00Z'));
+		await sellBurger(session.posSessionId, 2, new Date('2026-09-29T00:30:00Z'));
 
 		const evening = await consumptionByDate(testDb(), f.restaurantId, '2026-09-28', '2026-09-28');
 		const nextDay = await consumptionByDate(testDb(), f.restaurantId, '2026-09-29', '2026-09-29');
-		expect(evening.find((r) => r.ingredientId === meat.id)!.qty).toBe(150000n);
+		expect(evening.find((r) => r.ingredientId === meat.id)!.qty).toBe(300000n);
 		expect(nextDay).toEqual([]);
 		const cogs = await cogsByDate(testDb(), f.restaurantId, '2026-09-28', '2026-09-29');
 		expect(cogs.map((r) => r.businessDate)).toEqual(['2026-09-28']);
