@@ -49,6 +49,15 @@ export default defineConfig({
 					// interfere with each other's rows.
 					fileParallelism: false
 				}
+			},
+			// The print agent (print-agent/) is a standalone Node program outside src/,
+			// so the unit project's glob never reaches it (menu-and-printing T-24).
+			{
+				test: {
+					name: 'print-agent',
+					environment: 'node',
+					include: ['print-agent/src/**/*.test.ts']
+				}
 			}
 		]
 	}

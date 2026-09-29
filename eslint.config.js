@@ -88,6 +88,28 @@ export default ts.config(
 		}
 	},
 
+	// THE PRINT AGENT runs alone on the till PC by `node print-agent/src/main.ts`
+	// (Node 24 type stripping, no install): it may import only node: builtins and
+	// its own sibling files. Nothing from src/ — not $lib, not a relative path
+	// into it (menu-and-printing T-24).
+	{
+		files: ['print-agent/**/*.ts'],
+		rules: {
+			'no-restricted-imports': [
+				'error',
+				{
+					patterns: [
+						{
+							group: ['$lib/*', '$lib/**', '**/src/lib/**', '../../src/*', '../src/*'],
+							message:
+								'The print agent runs alone on the till PC: it imports only node: builtins and its own files.'
+						}
+					]
+				}
+			]
+		}
+	},
+
 	// eslint-config-prettier MUST stay last among the rule-setting configs, or it
 	// cannot turn off the stylistic rules it exists to disable.
 	prettier,
