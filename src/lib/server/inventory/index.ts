@@ -6,3 +6,4 @@ export * from './ingredients';
 export * from './recipes';
 export * from './purchases';
 export * from './payments';
+export * from './opening';
