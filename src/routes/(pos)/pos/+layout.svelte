@@ -435,7 +435,7 @@
 				}}
 		current={onSales ? 'sales' : page.url.pathname === '/pos/order' ? 'order' : 'other'}
 	/>
-	<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+	<div class="relative flex min-h-0 flex-1 flex-col overflow-y-auto">
 		{@render children()}
 	</div>
 </div>

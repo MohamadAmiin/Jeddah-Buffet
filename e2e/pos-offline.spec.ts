@@ -117,6 +117,9 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	});
 
 	// ── 3. the bundle landed, and holds no plaintext PIN ───────────────────────
+	// Wait for it: the first IndexedDB open (which asks to persist) can come from
+	// the till bar's own reads, before the employee directory has been written.
+	await expect.poll(async () => (await storeRows(tillPage, 'employees')).length).toBe(4);
 	const bundle = await storeRows<{
 		id: string;
 		displayName: string;

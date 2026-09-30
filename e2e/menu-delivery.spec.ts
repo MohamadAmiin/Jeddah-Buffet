@@ -112,8 +112,8 @@ test('menu photos, optional categories and a Delivery sale, online and offline',
 	//    Dine in pressed before anything is chosen.
 	await expect(tillPage.getByRole('tab', { name: 'Drinks' })).toBeVisible();
 	await expect(tillPage.getByRole('tab', { name: 'Other' })).toBeVisible();
-	await expect(tillPage.getByRole('button', { name: 'Dine in', exact: true })).toHaveAttribute(
-		'aria-pressed',
+	await expect(tillPage.getByRole('radio', { name: 'Dine in', exact: true })).toHaveAttribute(
+		'aria-checked',
 		'true'
 	);
 	await tillPage.getByRole('tab', { name: 'Other' }).click();

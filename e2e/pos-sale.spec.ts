@@ -122,12 +122,13 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	// 8. The first sale, online: Burger + Drink, takeaway, 20.00 tendered.
 	await addItem(tillPage, 'Burger');
 	await addItem(tillPage, 'Drink');
-	const check = tillPage.getByRole('table');
+	const check = tillPage.getByRole('list', { name: 'Lines on the check' });
 	await expect(check).toContainText('@ 8.00 · tax 10.00%');
 	await expect(check).toContainText('@ 2.00 · tax 10.00%');
-	const totals = tillPage.locator('#check-h').locator('xpath=ancestor::section[1]');
+	const totals = tillPage.getByRole('region', { name: 'Current Order' });
 	await expect(totals).toContainText(/Subtotal\s*10\.00/);
-	await expect(totals).toContainText(/Tax\s*1\.00/);
+	// The tax row names the restaurant's tax mode (docs/redesign Phase 2).
+	await expect(totals).toContainText(/Tax \(exclusive\)\s*1\.00/);
 	await expect(totals).toContainText(/Total\s*11\.00/);
 	await chooseOrderType(tillPage, 'Takeaway');
 	await payCash(tillPage, 2000n);

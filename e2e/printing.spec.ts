@@ -157,8 +157,8 @@ async function addBurger(tillPage: Page, options: { noCheese?: boolean } = {}): 
 	const panel = tillPage.getByRole('region', { name: 'Burger options' });
 	await expect(panel).toBeVisible();
 	if (options.noCheese) await panel.getByRole('button', { name: /No cheese/ }).click();
-	await panel.getByRole('button', { name: 'Add', exact: true }).click();
-	await expect(tillPage.getByRole('table')).toContainText('Burger');
+	await panel.getByRole('button', { name: 'Add to order', exact: true }).click();
+	await expect(tillPage.getByRole('list', { name: 'Lines on the check' })).toContainText('Burger');
 }
 
 async function signInOnTill(tillPage: Page, name: string, pin: string): Promise<void> {
@@ -343,7 +343,7 @@ test('receipts, kitchen tickets and the drawer: cash prints, a reprint is COPY, 
 	await tillPage.route('**/api/pos/sync', (route) => route.abort());
 	await newSale(tillPage);
 	await addBurger(tillPage);
-	await tillPage.getByRole('button', { name: /^Pay\b/ }).click();
+	await tillPage.getByRole('link', { name: /^Pay\b/ }).click();
 	await expect(tillPage).toHaveURL(/\/pos\/pay$/);
 	await tillPage
 		.getByRole('group', { name: 'Tender' })

@@ -249,7 +249,7 @@ export async function addItem(tillPage: Page, name: string): Promise<void> {
 		.getByRole('tabpanel')
 		.or(tillPage.getByRole('region', { name: 'Menu items' }));
 	await grid.getByRole('button', { name: new RegExp(name) }).click();
-	await expect(tillPage.getByRole('table')).toContainText(name);
+	await expect(tillPage.getByRole('list', { name: 'Lines on the check' })).toContainText(name);
 }
 
 export async function chooseOrderType(
@@ -257,9 +257,9 @@ export async function chooseOrderType(
 	type: 'Dine in' | 'Takeaway' | 'Delivery',
 	options: { tableLabel?: string } = {}
 ): Promise<void> {
-	await tillPage.getByRole('button', { name: type, exact: true }).click();
+	await tillPage.getByRole('radio', { name: type, exact: true }).click();
 	if (options.tableLabel !== undefined) {
-		await tillPage.getByLabel('Table (optional)').fill(options.tableLabel);
+		await tillPage.getByLabel('Table', { exact: true }).fill(options.tableLabel);
 		await tillPage.keyboard.press('Tab');
 	}
 	const expected =
@@ -271,7 +271,7 @@ export async function chooseOrderType(
 }
 
 export async function payCash(tillPage: Page, tenderedMinor: bigint): Promise<void> {
-	await tillPage.getByRole('button', { name: /^Pay\b/ }).click();
+	await tillPage.getByRole('link', { name: /^Pay\b/ }).click();
 	await expect(tillPage).toHaveURL(/\/pos\/pay$/);
 	await expect(tillPage.getByRole('heading', { name: 'Amount due' })).toBeVisible();
 	await tillPage
