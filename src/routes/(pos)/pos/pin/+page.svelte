@@ -7,6 +7,9 @@
 	// here as the source of truth — a reload would reset such a count, which is the
 	// exact bypass the server-side counter exists to close.
 	//
+	// Laid out as docs/redesign Phase 4 asks: who the PIN is for on the left, the
+	// keypad card on the right ending in Sign in, always on screen.
+	//
 	// NEVER RENDER THE PIN. It is shown as dots, sent in the request BODY only (never
 	// a URL, a query string or a header), never logged, and cleared from memory when
 	// the attempt ends, on idle and when the page is left. It is never written to
@@ -30,6 +33,10 @@
 	} from '$lib/pos/store';
 	import { signIn, type SignedInEmployee } from '$lib/pos/employee.svelte';
 	import { readLocalSession } from '$lib/pos/session';
+	import Icon from '$lib/components/ui/Icon.svelte';
+	import Keypad, { type KeypadKey } from '$lib/components/pos/Keypad.svelte';
+	import TillBanner from '$lib/components/pos/TillBanner.svelte';
+	import { KEY } from '$lib/components/pos/keys';
 
 	async function handOff(employee: SignedInEmployee) {
 		signIn(employee);
@@ -322,111 +329,139 @@
 		digits = '';
 	});
 
-	// POS touch floors: keys are `touch-lg` (72px) square, every pressable surface
-	// takes a `border-control-line` edge, and a disabled key changes its fill and
-	// ink tokens and keeps that edge — never `opacity`.
-	const key = (disabled: boolean) =>
-		`min-h-touch-lg min-w-touch-lg border-control-line rounded-control text-title border font-mono font-medium ${
-			disabled ? 'bg-disabled-bg text-disabled-ink' : 'bg-raise text-ink'
-		}`;
+	// Who the PIN is for, from the cached employee list (the same list the
+	// employee-select screen shows). Read once after mount.
+	let who = $state<{ name: string; role: string } | null>(null);
+	$effect(() => {
+		const id = employeeId;
+		if (!id) return;
+		void readCachedEmployees()
+			.then((all) => {
+				const found = all.find((e) => e.id === id);
+				who = found
+					? { name: found.displayName, role: found.isOwner ? 'Owner' : found.roleName }
+					: null;
+			})
+			.catch(() => (who = null));
+	});
+	const initials = $derived(
+		who === null
+			? ''
+			: who.name
+					.split(/\s+/)
+					.filter(Boolean)
+					.slice(0, 2)
+					.map((word) => word.charAt(0).toUpperCase())
+					.join('')
+	);
+	const firstName = $derived(who === null ? null : (who.name.split(/\s+/)[0] ?? who.name));
+	const keysDisabled = $derived(locked || pending);
+	const signInDisabled = $derived(locked || pending || digits.length < PIN_MIN_DIGITS);
+
+	function onkey(key: KeypadKey) {
+		if (key === 'back') backspace();
+		else if (key === 'clear') clear();
+		else press(key);
+	}
 </script>
 
 <svelte:head>
 	<title>Enter your PIN · matcami</title>
 </svelte:head>
 
-<main class="mx-auto flex max-w-md flex-col items-center gap-4 px-4 py-8">
+<!-- A two-column screen, vertically centred, that always fits. Below md the columns
+     stack and Sign in sits under the keypad, never above it. -->
+<main class="relative flex min-h-0 flex-1 overflow-y-auto p-3 md:p-4 lg:p-6">
 	{#if signedIn}
 		<!-- Shown only for the instant between signIn and the hand-off landing. -->
-		<h1 class="text-title text-ink">
+		<h1 class="text-title text-ink m-auto">
 			Signed in as {signedIn.displayName} ({signedIn.roleName})
 		</h1>
 	{:else if employeeId}
-		<h1 class="text-title text-ink">Enter your PIN</h1>
+		<div class="m-auto grid w-full max-w-4xl items-center gap-8 md:grid-cols-2 lg:gap-12">
+			<div class="flex flex-col gap-5">
+				<div class="flex items-center gap-4">
+					{#if who}
+						<span
+							aria-hidden="true"
+							class="bg-accent font-display text-title text-accent-ink grid size-16 shrink-0 place-items-center rounded-full"
+							>{initials}</span
+						>
+					{/if}
+					<div class="flex min-w-0 flex-col">
+						<h1 class="text-title">
+							{who ? `Enter the PIN for ${who.name}` : 'Enter the PIN'}
+						</h1>
+						{#if who}<p class="text-body text-ink-2">{who.role}</p>{/if}
+					</div>
+				</div>
 
-		<!-- The digits are never shown: one dot per digit, and a count for a screen reader. -->
-		<p
-			aria-hidden="true"
-			class="text-title text-ink min-h-touch font-mono font-medium tracking-widest"
-		>
-			{'●'.repeat(digits.length)}
-		</p>
-		<p aria-live="polite" class="sr-only">{digits.length} digits entered</p>
+				<!-- The digits are never shown: six drawn slots (the last two, optional,
+				     dashed while empty) and a count for a screen reader. -->
+				<div aria-hidden="true" class="flex items-center gap-3">
+					{#each [0, 1, 2, 3, 4, 5] as slot (slot)}
+						<span
+							class="size-5 rounded-full border-2 {slot < digits.length
+								? 'border-ink bg-ink'
+								: slot >= PIN_MIN_DIGITS
+									? 'border-control-line border-dashed'
+									: 'border-control-line'}"
+						></span>
+					{/each}
+				</div>
+				<p aria-live="polite" class="sr-only">{digits.length} digits entered</p>
 
-		{#if locked}
-			<!-- A disabled keypad says WHY, beside the keys, rather than sitting dead. -->
-			<p role="alert" class="bg-danger-bg text-danger rounded-control w-full px-3 py-2">
-				<span aria-hidden="true" class="font-mono">✕</span>
-				Locked after 5 wrong attempts. Try again in {countdown}.
-			</p>
-		{:else if message}
-			<p role="alert" class="bg-danger-bg text-danger rounded-control w-full px-3 py-2">
-				<span aria-hidden="true" class="font-mono">✕</span>
-				{message}
-				{#if notRegistered}
-					<a href={resolve('/pos/register')} class="text-danger underline">Register it again</a>
+				<!-- One message line with a reserved height, so nothing below it moves. -->
+				<div id="pin-hint" class="min-h-12">
+					{#if locked}
+						<TillBanner tone="danger" live="alert"
+							>Locked after 5 wrong attempts. Try again in {countdown}.</TillBanner
+						>
+					{:else if message}
+						<TillBanner tone="danger" live="alert">
+							{message}
+							{#if notRegistered}
+								<a href={resolve('/pos/register')} class="text-danger underline"
+									>Register it again</a
+								>
+							{/if}
+						</TillBanner>
+					{:else if pending}
+						<p class="text-body text-ink-2">Checking the PIN…</p>
+					{:else if digits.length < PIN_MIN_DIGITS}
+						<p class="text-body text-ink-2">Enter at least {PIN_MIN_DIGITS} digits</p>
+					{/if}
+				</div>
+
+				<a href={resolve('/pos')} class="min-h-touch-min flex w-fit items-center gap-2 px-4 {KEY}">
+					<Icon name="arrow-left" class="size-5" />
+					{firstName ? `Not ${firstName}? Choose your name` : 'Choose your name'}
+				</a>
+
+				{#if idleRead && idleSeconds === null}
+					<p class="text-body text-ink-2">
+						Automatic return to employee select is not configured yet.
+					</p>
 				{/if}
-			</p>
-		{/if}
+			</div>
 
-		<div class="grid grid-cols-3 gap-2">
-			{#each ['1', '2', '3', '4', '5', '6', '7', '8', '9'] as digit (digit)}
+			<section
+				aria-label="PIN keypad"
+				class="rounded-card border-line bg-raise shadow-raised flex flex-col gap-3 border p-4"
+			>
+				<Keypad label="PIN keypad" disabled={keysDisabled} reason="pin-hint" {onkey} />
 				<button
 					type="button"
-					disabled={locked || pending}
-					onclick={() => press(digit)}
-					class={key(locked || pending)}
+					disabled={signInDisabled}
+					aria-describedby={signInDisabled ? 'pin-hint' : undefined}
+					onclick={submit}
+					class="min-h-touch-lg rounded-control border-control-line w-full border font-semibold {signInDisabled
+						? 'bg-disabled-bg text-disabled-ink'
+						: 'bg-accent text-accent-ink'}">Sign in</button
 				>
-					{digit}
-				</button>
-			{/each}
-			<button
-				type="button"
-				disabled={locked || pending}
-				onclick={clear}
-				class={`${key(locked || pending)} text-pos font-sans`}
-			>
-				Clear
-			</button>
-			<button
-				type="button"
-				disabled={locked || pending}
-				onclick={() => press('0')}
-				class={key(locked || pending)}
-			>
-				0
-			</button>
-			<button
-				type="button"
-				disabled={locked || pending}
-				onclick={backspace}
-				class={`${key(locked || pending)} text-pos font-sans`}
-			>
-				<span aria-hidden="true">⌫</span><span class="sr-only">Delete the last digit</span>
-			</button>
+			</section>
 		</div>
-
-		{#if !locked && digits.length < PIN_MIN_DIGITS}
-			<p class="text-ink-2">Enter at least {PIN_MIN_DIGITS} digits</p>
-		{/if}
-
-		<button
-			type="button"
-			disabled={locked || pending || digits.length < PIN_MIN_DIGITS}
-			onclick={submit}
-			class={`min-h-touch-lg border-control-line rounded-control text-pos w-full border font-semibold ${
-				locked || pending || digits.length < PIN_MIN_DIGITS
-					? 'bg-disabled-bg text-disabled-ink'
-					: 'bg-accent text-accent-ink'
-			}`}
-		>
-			{pending ? 'Checking…' : 'Sign in'}
-		</button>
-
-		{#if idleRead && idleSeconds === null}
-			<p class="text-ink-2">Automatic return to employee select is not configured yet.</p>
-		{/if}
 	{:else}
-		<p class="text-ink-2">No employee selected.</p>
+		<p class="text-ink-2 m-auto">No employee selected.</p>
 	{/if}
 </main>

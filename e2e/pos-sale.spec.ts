@@ -97,7 +97,9 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	await expect(tillPage).toHaveURL(/\/pos\/session$/);
 	await expect(tillPage.getByTestId('till-employee')).toContainText('The Cashier · Cashier');
 	await expect(tillPage.getByRole('banner')).toContainText('○ No session');
-	await expect(tillPage.getByText(/Business date: \d{4}-\d{2}-\d{2}/)).toBeVisible();
+	await expect(
+		tillPage.locator('dd').filter({ hasText: /^\s*\d{4}-\d{2}-\d{2}\s*$/ })
+	).toBeVisible();
 
 	// 7. Open with a 500.00 float; the chip shows the SERVER's business date.
 	await openSession(tillPage, 50000n);

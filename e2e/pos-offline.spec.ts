@@ -373,7 +373,8 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	expect(await storeRows(tillPage, 'employees')).toEqual([]);
 
 	await tillPage.goto(`/pos/pin?employee=${idOf('The Cashier')}`);
-	await expect(tillPage.getByRole('heading', { name: 'Enter your PIN' })).toBeVisible();
+	// The bundle is forgotten, so the screen cannot name who the PIN is for.
+	await expect(tillPage.getByRole('heading', { name: /^Enter the PIN\b/ })).toBeVisible();
 	await till.setOffline(true);
 	await enterPin(tillPage, '4321');
 	await expect(tillPage.getByRole('alert')).toContainText('cannot check a PIN offline');

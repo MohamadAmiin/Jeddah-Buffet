@@ -106,7 +106,7 @@ export async function enterPin(tillPage: Page, pin: string): Promise<void> {
 /** Pick an employee on the till's employee-select screen. */
 export async function pickEmployee(tillPage: Page, displayName: string): Promise<void> {
 	await tillPage.getByRole('button', { name: new RegExp(displayName) }).click();
-	await expect(tillPage.getByRole('heading', { name: 'Enter your PIN' })).toBeVisible();
+	await expect(tillPage.getByRole('heading', { name: /^Enter the PIN for / })).toBeVisible();
 }
 
 /** Every row of one store in the till's IndexedDB, read inside the page. */

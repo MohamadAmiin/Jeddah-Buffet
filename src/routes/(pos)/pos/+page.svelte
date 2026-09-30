@@ -222,107 +222,110 @@
 	<title>Select employee · matcami</title>
 </svelte:head>
 
-<main class="mx-auto flex max-w-2xl flex-col gap-4 px-4 py-8">
-	<h1 class="text-title text-ink">Who is signing in?</h1>
+<!-- One centred column inside a main that scrolls itself (docs/redesign Phase 4). -->
+<main class="relative flex min-h-0 flex-1 overflow-y-auto p-3 md:p-4 lg:p-6">
+	<div class="m-auto flex w-full max-w-3xl flex-col gap-4">
+		<h1 class="text-title text-ink">Who is signing in?</h1>
 
-	{#if status === 'loading'}
-		<p class="text-ink-2">Loading the staff list…</p>
-	{:else if status === 'not-registered'}
-		<div
-			role="alert"
-			class="bg-danger-bg text-danger rounded-control flex flex-col gap-2 px-3 py-2"
-		>
-			<p>
-				<span aria-hidden="true" class="font-mono">✕</span>
-				This device is not registered as a till, or its registration was revoked. Register it again to
-				use it as a till.
-			</p>
-			<a
-				href={resolve('/pos/register')}
-				class="min-h-touch-lg bg-accent text-accent-ink border-control-line rounded-control text-pos grid place-items-center border font-semibold"
+		{#if status === 'loading'}
+			<p class="text-ink-2">Loading the staff list…</p>
+		{:else if status === 'not-registered'}
+			<div
+				role="alert"
+				class="bg-danger-bg text-danger rounded-control flex flex-col gap-2 px-3 py-2"
 			>
-				Register this device
-			</a>
-		</div>
-	{:else if status === 'offline'}
-		<div
-			role="alert"
-			class="bg-st-offline-bg text-st-offline rounded-control flex flex-col gap-2 px-3 py-2"
-		>
-			<p>
-				<span aria-hidden="true" class="font-mono">◆</span>
-				No connection, and this device has not cached an employee list yet.
-			</p>
-			<button
-				type="button"
-				onclick={loadDirectory}
-				class="min-h-touch-lg bg-raise text-ink border-control-line rounded-control text-pos border"
+				<p>
+					<span aria-hidden="true" class="font-mono">✕</span>
+					This device is not registered as a till, or its registration was revoked. Register it again
+					to use it as a till.
+				</p>
+				<a
+					href={resolve('/pos/register')}
+					class="min-h-touch-lg bg-accent text-accent-ink border-control-line rounded-control text-pos grid place-items-center border font-semibold"
+				>
+					Register this device
+				</a>
+			</div>
+		{:else if status === 'offline'}
+			<div
+				role="alert"
+				class="bg-st-offline-bg text-st-offline rounded-control flex flex-col gap-2 px-3 py-2"
 			>
-				Retry
-			</button>
-		</div>
-	{:else if status === 'error'}
-		<div
-			role="alert"
-			class="bg-danger-bg text-danger rounded-control flex flex-col gap-2 px-3 py-2"
-		>
-			<p>
-				<span aria-hidden="true" class="font-mono">✕</span>
-				The staff list could not be loaded.
-			</p>
-			<button
-				type="button"
-				onclick={loadDirectory}
-				class="min-h-touch-lg bg-raise text-ink border-control-line rounded-control text-pos border"
+				<p>
+					<span aria-hidden="true" class="font-mono">◆</span>
+					No connection, and this device has not cached an employee list yet.
+				</p>
+				<button
+					type="button"
+					onclick={loadDirectory}
+					class="min-h-touch-lg bg-raise text-ink border-control-line rounded-control text-pos border"
+				>
+					Retry
+				</button>
+			</div>
+		{:else if status === 'error'}
+			<div
+				role="alert"
+				class="bg-danger-bg text-danger rounded-control flex flex-col gap-2 px-3 py-2"
 			>
-				Retry
-			</button>
-		</div>
-	{:else}
-		{#if status === 'cached'}
-			<!-- A cached list must not look like a live one. -->
-			<p class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">
-				<span aria-hidden="true" class="font-mono">◆</span>
-				No connection — this is the staff list saved on this device.
-			</p>
-		{/if}
+				<p>
+					<span aria-hidden="true" class="font-mono">✕</span>
+					The staff list could not be loaded.
+				</p>
+				<button
+					type="button"
+					onclick={loadDirectory}
+					class="min-h-touch-lg bg-raise text-ink border-control-line rounded-control text-pos border"
+				>
+					Retry
+				</button>
+			</div>
+		{:else}
+			{#if status === 'cached'}
+				<!-- A cached list must not look like a live one. -->
+				<p class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">
+					<span aria-hidden="true" class="font-mono">◆</span>
+					No connection — this is the staff list saved on this device.
+				</p>
+			{/if}
 
-		{#if cacheWarning}
-			<p role="alert" class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">
-				<span aria-hidden="true" class="font-mono">◆</span>
-				This device could not save the staff list, so it cannot sign anyone in offline.
-			</p>
-		{/if}
+			{#if cacheWarning}
+				<p role="alert" class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">
+					<span aria-hidden="true" class="font-mono">◆</span>
+					This device could not save the staff list, so it cannot sign anyone in offline.
+				</p>
+			{/if}
 
-		{#if employees.length === 0}
-			<p class="text-ink-2">
-				No active staff yet. The owner adds staff on the dashboard’s Employees page.
-			</p>
-		{/if}
+			{#if employees.length === 0}
+				<p class="text-ink-2">
+					No active staff yet. The owner adds staff on the dashboard’s Employees page.
+				</p>
+			{/if}
 
-		<ul class="grid grid-cols-2 gap-2 sm:grid-cols-3">
-			{#each employees as employee (employee.id)}
-				<li>
-					<!-- An employee with no PIN is SHOWN, as unavailable with the reason in
+			<ul class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+				{#each employees as employee (employee.id)}
+					<li>
+						<!-- An employee with no PIN is SHOWN, as unavailable with the reason in
 					     words: hiding them would make "why is Sam missing from the till?"
 					     unanswerable from the screen. -->
-					<button
-						type="button"
-						disabled={!employee.hasPin}
-						onclick={() => choose(employee.id)}
-						class={`min-h-touch-lg border-control-line rounded-control flex w-full flex-col items-start justify-center border px-3 py-2 text-left ${
-							employee.hasPin ? 'bg-raise' : 'bg-disabled-bg'
-						}`}
-					>
-						<span class={employee.hasPin ? 'text-ink font-semibold' : 'text-disabled-ink'}>
-							{employee.displayName}
-						</span>
-						<span class={employee.hasPin ? 'text-ink-2' : 'text-disabled-ink'}>
-							{employee.roleName}{employee.hasPin ? '' : ' — no PIN set yet'}
-						</span>
-					</button>
-				</li>
-			{/each}
-		</ul>
-	{/if}
+						<button
+							type="button"
+							disabled={!employee.hasPin}
+							onclick={() => choose(employee.id)}
+							class={`min-h-touch-lg border-control-line rounded-control flex w-full flex-col items-start justify-center border px-3 py-2 text-left ${
+								employee.hasPin ? 'bg-raise' : 'bg-disabled-bg'
+							}`}
+						>
+							<span class={employee.hasPin ? 'text-ink font-semibold' : 'text-disabled-ink'}>
+								{employee.displayName}
+							</span>
+							<span class={employee.hasPin ? 'text-ink-2' : 'text-disabled-ink'}>
+								{employee.roleName}{employee.hasPin ? '' : ' — no PIN set yet'}
+							</span>
+						</button>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</div>
 </main>
