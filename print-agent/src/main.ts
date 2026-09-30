@@ -129,9 +129,9 @@ async function runServer(config: AgentConfig): Promise<void> {
 	// The URL, never the token.
 	process.stdout.write(`matcami print agent listening on http://127.0.0.1:${port}\n`);
 	const shutdown = () => {
-		queue.close();
-		server.close(() => process.exit(0));
-		setTimeout(() => process.exit(0), 2000).unref();
+		// Let a print already on the wire finish and be recorded, then leave.
+		void queue.close().then(() => server.close(() => process.exit(0)));
+		setTimeout(() => process.exit(0), 5000).unref();
 	};
 	process.once('SIGINT', shutdown);
 	process.once('SIGTERM', shutdown);

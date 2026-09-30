@@ -116,7 +116,8 @@ export type Queue = {
 	seen: SeenStore;
 	log: (line: string) => void;
 	/** Stop the workers and timers; queued files stay on disk for the next start. */
-	close: () => void;
+	/** Stop the workers and timers and wait for an in-flight print to finish; queued files stay on disk. */
+	close: () => Promise<void>;
 };
 
 type Worker = {
@@ -127,6 +128,8 @@ type Worker = {
 	delayMs: number;
 	timer: ReturnType<typeof setTimeout> | null;
 	wake: (() => void) | null;
+	/** The running loop, so close() can wait for a print already on the wire. */
+	loop: Promise<void> | null;
 };
 
 const FILE_RE = /^(\d{12})-[0-9a-f]{40}\.json$/;
@@ -154,7 +157,8 @@ export function createQueue(options: QueueOptions): Queue {
 			running: false,
 			delayMs: retry.baseMs,
 			timer: null,
-			wake: null
+			wake: null,
+			loop: null
 		},
 		kitchen: {
 			target: 'kitchen',
@@ -163,7 +167,8 @@ export function createQueue(options: QueueOptions): Queue {
 			running: false,
 			delayMs: retry.baseMs,
 			timer: null,
-			wake: null
+			wake: null,
+			loop: null
 		}
 	};
 	let closed = false;
@@ -222,9 +227,23 @@ export function createQueue(options: QueueOptions): Queue {
 		});
 	}
 
-	async function run(worker: Worker): Promise<void> {
+	function run(worker: Worker): void {
 		if (worker.running) return;
 		worker.running = true;
+		worker.loop = loop(worker).finally(() => {
+			worker.running = false;
+			worker.loop = null;
+			// A job that arrived while the loop was winding down starts it again.
+			if (!closed && worker.jobs.length > 0) run(worker);
+		});
+	}
+
+	/**
+	 * The worker's loop. It never rejects: a failure outside printing itself —
+	 * the disk refusing seen.json or the log — is written to stderr and stops
+	 * this worker; the next start resumes from the files on disk.
+	 */
+	async function loop(worker: Worker): Promise<void> {
 		try {
 			while (!closed && worker.jobs.length > 0) {
 				const head = worker.jobs[0];
@@ -258,11 +277,15 @@ export function createQueue(options: QueueOptions): Queue {
 				worker.jobs.shift();
 				worker.delayMs = retry.baseMs;
 			}
-		} finally {
-			worker.running = false;
+		} catch (error) {
+			try {
+				process.stderr.write(
+					`print-agent: ${worker.target} worker stopped: ${(error as Error).message}\n`
+				);
+			} catch {
+				// Nowhere left to report to.
+			}
 		}
-		// A job that arrived while the loop was winding down starts it again.
-		if (!closed && worker.jobs.length > 0) void run(worker);
 	}
 
 	async function backOff(worker: Worker, reason: string): Promise<void> {
@@ -271,7 +294,7 @@ export function createQueue(options: QueueOptions): Queue {
 		worker.delayMs = Math.min(worker.delayMs * 2, retry.maxMs);
 	}
 
-	for (const worker of Object.values(workers)) void run(worker);
+	for (const worker of Object.values(workers)) run(worker);
 
 	const reachableCache: Record<Target, { at: number; value: boolean } | null> = {
 		receipt: null,
@@ -307,7 +330,7 @@ export function createQueue(options: QueueOptions): Queue {
 			const worker = workers[target];
 			worker.jobs.push({ file, job: queued });
 			if (worker.running) worker.wake?.();
-			else void run(worker);
+			else run(worker);
 			return 'queued';
 		},
 		status: async () => {
@@ -327,11 +350,13 @@ export function createQueue(options: QueueOptions): Queue {
 			if (!options.printers.kitchen) receipt.queued += workers.kitchen.jobs.length;
 			return { agentVersion: 1, printers: { receipt, kitchen } };
 		},
-		close: () => {
+		close: async () => {
 			closed = true;
 			clearInterval(pruneTimer);
-			// Waking a sleeping worker clears its timer and lets its loop see `closed`.
+			// Waking a sleeping worker clears its timer and lets its loop see `closed`;
+			// a worker mid-send finishes that job, records it, and then stops.
 			for (const worker of Object.values(workers)) worker.wake?.();
+			await Promise.all(Object.values(workers).map((worker) => worker.loop ?? Promise.resolve()));
 		}
 	};
 }

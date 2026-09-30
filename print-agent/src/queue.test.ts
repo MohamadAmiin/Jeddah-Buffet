@@ -24,7 +24,8 @@ const queues: Queue[] = [];
 const dirs: string[] = [];
 
 afterEach(async () => {
-	for (const q of queues.splice(0)) q.close();
+	// close() resolves once every worker has stopped, so no print is still writing when the dir goes.
+	for (const q of queues.splice(0)) await q.close();
 	for (const f of running.splice(0)) await f.stop();
 	for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
@@ -135,7 +136,7 @@ describe('createQueue', () => {
 		const log = readFileSync(join(dir, 'agent.log'), 'utf8');
 		expect(log).toMatch(/Z printed o1:receipt:0\n/);
 
-		q.close();
+		await q.close();
 		const again = makeQueue(dir, fake.cfg);
 		expect(again.submit(job('o1:receipt:0', 'Tea'))).toBe('duplicate');
 		await settle();
@@ -178,7 +179,7 @@ describe('createQueue', () => {
 		first.submit(job('r1', 'One'));
 		first.submit(job('r2', 'Two'));
 		await settle(100);
-		first.close();
+		await first.close();
 		expect(queueFiles(dir)).toHaveLength(2);
 
 		const fake = await startFake(port);
