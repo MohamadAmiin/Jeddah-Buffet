@@ -357,7 +357,15 @@ export async function setRecipe(
 		await select.selectOption({ value: (await option.getAttribute('value'))! });
 		await page.getByLabel(`Quantity, row ${index + 1}`).fill(row.qty);
 	}
+	// Wait for the save to FINISH. The page stays on the same URL and shows no
+	// success alert, so neither of the checks below proves it is done — and a click
+	// made while the save's redirect is still in flight is overridden by it.
+	const saved = page.waitForResponse(
+		(response) => response.request().method() === 'POST' && response.url().includes('?/save')
+	);
 	await page.getByRole('button', { name: 'Save recipe' }).click();
+	await saved;
+	await page.waitForLoadState('networkidle');
 	await expect(page).toHaveURL(/\/inventory\/recipes\?item=/);
 	await expect(page.getByRole('alert')).toHaveCount(0);
 }

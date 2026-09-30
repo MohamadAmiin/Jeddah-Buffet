@@ -25,6 +25,7 @@
 	import { adoptServerHint } from '$lib/pos/invoice-sequence';
 	import { adoptServerSession } from '$lib/pos/session';
 	import { signOut } from '$lib/pos/employee.svelte';
+	import { KEY } from '$lib/components/pos/keys';
 
 	type DirectoryEntry = {
 		id: string;
@@ -255,13 +256,7 @@
 					<span aria-hidden="true" class="font-mono">◆</span>
 					No connection, and this device has not cached an employee list yet.
 				</p>
-				<button
-					type="button"
-					onclick={loadDirectory}
-					class="min-h-touch-lg bg-raise text-ink border-control-line rounded-control text-pos border"
-				>
-					Retry
-				</button>
+				<button type="button" onclick={loadDirectory} class="min-h-touch-lg {KEY}"> Retry </button>
 			</div>
 		{:else if status === 'error'}
 			<div
@@ -272,13 +267,7 @@
 					<span aria-hidden="true" class="font-mono">✕</span>
 					The staff list could not be loaded.
 				</p>
-				<button
-					type="button"
-					onclick={loadDirectory}
-					class="min-h-touch-lg bg-raise text-ink border-control-line rounded-control text-pos border"
-				>
-					Retry
-				</button>
+				<button type="button" onclick={loadDirectory} class="min-h-touch-lg {KEY}"> Retry </button>
 			</div>
 		{:else}
 			{#if status === 'cached'}
@@ -312,9 +301,7 @@
 							type="button"
 							disabled={!employee.hasPin}
 							onclick={() => choose(employee.id)}
-							class={`min-h-touch-lg border-control-line rounded-control flex w-full flex-col items-start justify-center border px-3 py-2 text-left ${
-								employee.hasPin ? 'bg-raise' : 'bg-disabled-bg'
-							}`}
+							class="min-h-touch-lg flex w-full flex-col items-start justify-center px-3 py-2 text-left {KEY}"
 						>
 							<span class={employee.hasPin ? 'text-ink font-semibold' : 'text-disabled-ink'}>
 								{employee.displayName}
