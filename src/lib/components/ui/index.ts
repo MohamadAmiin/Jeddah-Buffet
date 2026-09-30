@@ -15,3 +15,6 @@ export { default as PageHeader } from './PageHeader.svelte';
 export { default as Sidebar } from './Sidebar.svelte';
 export { default as StatusMark } from './StatusMark.svelte';
 export { default as ThemeToggle } from './ThemeToggle.svelte';
+export { default as Icon } from './Icon.svelte';
+export { default as MobileBar } from './MobileBar.svelte';
+export { default as NavDrawer } from './NavDrawer.svelte';

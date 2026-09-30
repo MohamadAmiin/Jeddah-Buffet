@@ -78,7 +78,7 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	await createEmployee(page, { displayName: 'The Runner', role: 'waiter', pin: '6789' });
 	// The idle lock: without it the till never restores a signed-in employee on
 	// reload (T-26), and step 7's reload is exactly that restore.
-	await page.getByRole('link', { name: 'POS', exact: true }).click();
+	await page.getByRole('link', { name: 'POS device', exact: true }).click();
 	await expect(page).toHaveURL(/\/device$/);
 	await page.getByLabel('Auto-lock after (seconds)').fill('120');
 	await page.getByRole('button', { name: 'Save auto-lock' }).click();
@@ -363,7 +363,7 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	// till so, it must not go on signing staff in offline from the PIN hashes it
 	// still holds. The accepted stolen-tablet GAP covers a till that never
 	// reconnects, not one that has been told. The unsynced records stay.
-	await page.getByRole('link', { name: 'POS', exact: true }).click();
+	await page.getByRole('link', { name: 'POS device', exact: true }).click();
 	await page.getByText('Revoke this device…').click();
 	await page.getByRole('button', { name: 'Revoke device' }).click();
 	await expect(page.getByRole('alert')).toContainText('Device revoked');

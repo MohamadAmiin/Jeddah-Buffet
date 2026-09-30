@@ -177,7 +177,7 @@ export async function completeSettings(
 	await page.getByRole('button', { name: 'Save settings' }).click();
 	await expect(page.getByRole('alert')).toContainText('Settings saved.');
 
-	await page.getByRole('link', { name: 'POS', exact: true }).click();
+	await page.getByRole('link', { name: 'POS device', exact: true }).click();
 	await expect(page).toHaveURL(/\/device$/);
 	await page.getByLabel('Auto-lock after (seconds)').fill(String(s.idleSeconds));
 	await page.getByRole('button', { name: 'Save auto-lock' }).click();
@@ -350,7 +350,10 @@ export async function recordDelivery(
 		lines: { ingredientName: string; unitName: string; qty: string; total: string }[];
 	}
 ): Promise<void> {
-	await page.getByRole('link', { name: 'Purchases', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Deliveries', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/purchases$/);
 	await page.getByRole('link', { name: 'Record a delivery' }).click();
 	await expect(page).toHaveURL(/\/purchases\/new$/);
