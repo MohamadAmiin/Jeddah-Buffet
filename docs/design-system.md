@@ -170,6 +170,15 @@ PIN fields: PinField only — digits, 4 to 6, masked with a show/hide toggle; th
 - `ThemeToggle` — the dashboard light/dark theme control.
 
 **Tables.** Tables stack below Tailwind's `md` breakpoint and **never scroll horizontally**. Below `md`, each row presents column labels beside their values. Money and counts use `font-mono tabular-nums` and are right-aligned at `md` and above.
+
+**Layout groundwork (docs/redesign, Phase 0).** Conventions every later layout change builds on, on both surfaces:
+
+- **"You are here".** A current nav row or tab carries a bare `data-current` attribute and is styled with Tailwind v4's built-in `data-current:` variant. The exact page also carries `aria-current="page"` for assistive tech. No custom variant.
+- **Stacking scale** (Tailwind's own `z-*`): `z-10` sticky aside · `z-20` sticky action bar · `z-30` phone top bar · `z-40` navigation drawer and phone check sheet · `z-50` skip link and till menus. The drawer and sheet sit on `bg-scrim` (`--c-scrim`).
+- **Focus on a rail.** Every rail-coloured surface (the Sidebar, the phone top bar, the navigation drawer, the till bar) carries `data-rail`, and `base.css` swaps the ring to `--c-rail-ring` there, because the accent ring measures 2.37:1 on the dashboard rail and 1.58:1 on the till bar. A light panel that opens inside a rail carries `data-panel` and keeps the accent ring. `tokens.test.ts` asserts `rail-ring` on `rail` at 3:1.
+- **Mono weights.** IBM Plex Mono ships 400 and 500 only. A mono figure is `font-medium` at most, including where `font-mono` meets a heavier role (`text-display`, `text-title`, `text-section`); a heavier weight is synthesised bold. `text-total` is a complete role at weight 500.
+- **One icon set.** `src/lib/components/ui/Icon.svelte` (24×24, `currentColor`, round caps, `aria-hidden`; stroke 1.8, 1.6 on the rail). `PosIcon` is a thin wrapper over it. An icon never carries meaning alone.
+- **Till components and key classes.** Shared till components live in `src/lib/components/pos/`, where the touch tokens are allowed (they stay banned in `ui/`). The key class strings (`KEY`, `KEY_CHOSEN`, `TILL_FIELD`) come from `src/lib/components/pos/keys.ts`, not retyped. The money tripwire in `menu-view.test.ts` scans every file in `pos/`.
 ### Legal ink-on-surface pairs
 
 **Check this table before pairing an ink with a surface. Adding a new pair means measuring it.** Ratios are WCAG relative luminance computed from the hex values in `src/lib/styles/tokens.css`. Every rule is the **intersection of both themes**, so no screen has to be reasoned about twice.

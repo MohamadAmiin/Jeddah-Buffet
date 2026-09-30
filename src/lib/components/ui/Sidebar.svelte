@@ -373,7 +373,7 @@
 		<div class={`flex min-w-0 items-center gap-2.5 ${isCollapsed ? 'lg:gap-0' : ''}`}>
 			<span
 				aria-hidden="true"
-				class="bg-rail-active text-rail-ink grid size-9 flex-none place-items-center rounded-full font-mono text-caption font-semibold"
+				class="bg-rail-active text-rail-ink grid size-9 flex-none place-items-center rounded-full font-mono text-caption font-medium"
 			>
 				{initials}
 			</span>

@@ -57,27 +57,27 @@
 			<dl class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
 				<div>
 					<dt class="text-eyebrow text-ink-3 uppercase">Gross sales</dt>
-					<dd class="text-section font-mono tabular-nums">{data.totals.grossSales}</dd>
+					<dd class="text-section font-mono font-medium tabular-nums">{data.totals.grossSales}</dd>
 				</div>
 				<div>
 					<dt class="text-eyebrow text-ink-3 uppercase">Discounts</dt>
-					<dd class="text-section font-mono tabular-nums">{data.totals.discounts}</dd>
+					<dd class="text-section font-mono font-medium tabular-nums">{data.totals.discounts}</dd>
 				</div>
 				<div>
 					<dt class="text-eyebrow text-ink-3 uppercase">Net sales</dt>
-					<dd class="text-section font-mono tabular-nums">{data.totals.netSales}</dd>
+					<dd class="text-section font-mono font-medium tabular-nums">{data.totals.netSales}</dd>
 				</div>
 				<div>
 					<dt class="text-eyebrow text-ink-3 uppercase">Tax</dt>
-					<dd class="text-section font-mono tabular-nums">{data.totals.tax}</dd>
+					<dd class="text-section font-mono font-medium tabular-nums">{data.totals.tax}</dd>
 				</div>
 				<div>
 					<dt class="text-eyebrow text-ink-3 uppercase">Takings</dt>
-					<dd class="text-section font-mono tabular-nums">{data.totals.takings}</dd>
+					<dd class="text-section font-mono font-medium tabular-nums">{data.totals.takings}</dd>
 				</div>
 				<div>
 					<dt class="text-eyebrow text-ink-3 uppercase">Orders</dt>
-					<dd class="text-section font-mono tabular-nums">{data.totals.orderCount}</dd>
+					<dd class="text-section font-mono font-medium tabular-nums">{data.totals.orderCount}</dd>
 				</div>
 			</dl>
 			<p class="text-caption text-ink-2 mt-3">

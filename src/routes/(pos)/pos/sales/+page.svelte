@@ -186,7 +186,7 @@
 						data-testid="sale-row"
 					>
 						<div class="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-							<span class="font-mono font-semibold">{order.invoiceNumber ?? '—'}</span>
+							<span class="font-mono font-medium">{order.invoiceNumber ?? '—'}</span>
 							<span class="text-right font-mono tabular-nums">{totalOf(order)}</span>
 						</div>
 						<div class="text-ink-2 flex flex-wrap items-center gap-x-4 gap-y-1">

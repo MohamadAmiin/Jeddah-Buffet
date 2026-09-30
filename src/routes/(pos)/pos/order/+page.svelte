@@ -697,7 +697,7 @@
 						class="border-line mt-2 flex flex-wrap items-baseline justify-between gap-x-4 border-t pt-4"
 					>
 						<dt class="text-title text-ink">Total</dt>
-						<dd class="text-title text-accent text-right font-mono font-bold tabular-nums">
+						<dd class="text-title text-accent text-right font-mono font-medium tabular-nums">
 							{formatMoney(figures.totals.total, format)}
 						</dd>
 					</div>

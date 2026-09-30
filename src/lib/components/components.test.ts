@@ -117,6 +117,11 @@ describe('the ui/ component boundary', () => {
 					'colour is defined.'
 			).toBeUndefined();
 
+			// The touch tokens are banned in ui/ only: src/lib/components/pos/ holds the
+			// till's shared components (Check, Closer, Keypad, TillBar …), which are made
+			// of them (docs/redesign Phase 0). The server-import, hex and px guards above
+			// still cover pos/.
+			if (!label.startsWith('ui')) return;
 			for (const token of POS_TOKENS) {
 				expect(
 					code.includes(token),

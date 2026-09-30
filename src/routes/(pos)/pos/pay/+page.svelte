@@ -268,7 +268,7 @@
 	}
 
 	const key =
-		'min-h-touch-lg min-w-touch-lg border border-control-line rounded-control bg-raise text-ink font-mono text-title';
+		'min-h-touch-lg min-w-touch-lg border border-control-line rounded-control bg-raise text-ink font-mono font-medium text-title';
 	const closer =
 		'min-h-touch-xl w-full border border-control-line rounded-control font-semibold text-pos';
 </script>

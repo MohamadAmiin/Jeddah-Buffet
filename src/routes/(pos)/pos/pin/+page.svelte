@@ -326,7 +326,7 @@
 	// takes a `border-control-line` edge, and a disabled key changes its fill and
 	// ink tokens and keeps that edge — never `opacity`.
 	const key = (disabled: boolean) =>
-		`min-h-touch-lg min-w-touch-lg border-control-line rounded-control text-title border font-mono ${
+		`min-h-touch-lg min-w-touch-lg border-control-line rounded-control text-title border font-mono font-medium ${
 			disabled ? 'bg-disabled-bg text-disabled-ink' : 'bg-raise text-ink'
 		}`;
 </script>
@@ -345,7 +345,10 @@
 		<h1 class="text-title text-ink">Enter your PIN</h1>
 
 		<!-- The digits are never shown: one dot per digit, and a count for a screen reader. -->
-		<p aria-hidden="true" class="text-title text-ink min-h-touch font-mono tracking-widest">
+		<p
+			aria-hidden="true"
+			class="text-title text-ink min-h-touch font-mono font-medium tracking-widest"
+		>
 			{'●'.repeat(digits.length)}
 		</p>
 		<p aria-live="polite" class="sr-only">{digits.length} digits entered</p>

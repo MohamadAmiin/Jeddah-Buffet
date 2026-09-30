@@ -142,12 +142,14 @@
 			</div>
 			<div class="bg-raise border-line rounded-card shadow-flat flex flex-col gap-1 border p-4">
 				<dt class="text-eyebrow text-ink-3 uppercase">Setup</dt>
-				<dd class="text-section font-mono tabular-nums">{doneCount} of {steps.length}</dd>
+				<dd class="text-section font-mono font-medium tabular-nums">
+					{doneCount} of {steps.length}
+				</dd>
 				<dd class="text-caption text-ink-2">steps complete</dd>
 			</div>
 			<div class="bg-raise border-line rounded-card shadow-flat flex flex-col gap-1 border p-4">
 				<dt class="text-eyebrow text-ink-3 uppercase">Recorded events</dt>
-				<dd class="text-section font-mono tabular-nums">{data.activity.length}</dd>
+				<dd class="text-section font-mono font-medium tabular-nums">{data.activity.length}</dd>
 				<dd class="text-caption text-ink-2">most recent shown below</dd>
 			</div>
 			<div class="bg-raise border-line rounded-card shadow-flat flex flex-col gap-1 border p-4">

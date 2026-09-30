@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { LocalMenu } from './store';
 import { formatTaxRate, itemsByCategory, modifierGroupsFor, resolveTaxRate } from './menu-view';
@@ -130,7 +130,13 @@ describe('MANDATORY (spec 29) — the till screens hold no number conversion of 
 		'src/routes/(pos)/pos/pay/+page.svelte',
 		'src/routes/(pos)/pos/sales/+page.svelte',
 		'src/routes/(pos)/pos/printer/+page.svelte',
-		'src/lib/pos/menu-view.ts'
+		'src/lib/pos/menu-view.ts',
+		// The till's shared components print money too (docs/redesign Phase 0), so
+		// every file under src/lib/components/pos/ is scanned — a new one is covered
+		// without being listed.
+		...readdirSync('src/lib/components/pos', { recursive: true, encoding: 'utf8' })
+			.filter((f) => f.endsWith('.svelte') || f.endsWith('.ts'))
+			.map((f) => `src/lib/components/pos/${f.replaceAll('\\', '/')}`)
 	];
 	const FORBIDDEN = [
 		'parseFloat',
