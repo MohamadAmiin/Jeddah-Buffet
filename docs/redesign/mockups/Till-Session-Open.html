@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1280">
+<title>Till · Open a session · matcami redesign</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="mockup.css">
+</head>
+<body>
+<div class="mock-root mock-fixed" style="width:1280px;height:800px">
+<div data-surface="pos" class="flex h-dvh flex-col overflow-hidden bg-bg text-pos text-ink">
+<header data-rail class="bg-rail flex h-touch shrink-0 items-center gap-2 px-3 text-rail-ink sm:gap-3 sm:px-4 lg:px-6">
+  <nav aria-label="Till" class="flex shrink-0 items-center gap-3">
+    <a href="/pos/order" aria-label="POS" class="grid size-10 shrink-0 place-items-center rounded-control bg-rail-ink font-display text-title font-bold text-rail sm:hidden">m</a>
+    <span class="hidden size-10 shrink-0 place-items-center rounded-control bg-rail-ink font-display text-title font-bold text-rail sm:grid" aria-hidden="true">m</span>
+    <a href="/pos/order" class="hidden min-h-touch-min items-center gap-2 rounded-full border border-rail-line bg-rail-active px-5 font-semibold sm:flex"><svg class="pos-icon size-5" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.5 8h13l-1 12.5h-11z"></path><path d="M9 8V6.5a3 3 0 0 1 6 0V8"></path></svg>POS</a>
+  </nav>
+  <div class="hidden min-w-0 flex-col lg:flex">
+    <span class="truncate font-semibold leading-tight">Jeddah Buffet</span>
+    <span class="truncate text-body leading-tight text-rail-ink-2">Till POS1</span>
+  </div>
+  <div role="status" aria-label="Connection and sync" class="ml-auto flex shrink-0 items-center gap-2">
+    <span class="inline-flex h-10 items-center gap-1.5 rounded-full bg-ok-bg px-2.5 text-body font-semibold text-ok sm:px-3"><span class="font-mono" aria-hidden="true">●</span>Online</span>
+    <span class="inline-flex h-10 items-center gap-1.5 rounded-full border border-rail-line px-2.5 text-body text-rail-ink-2 sm:px-3"><svg class="pos-icon size-4 sm:hidden" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 11a8 8 0 0 0-14.5-4.5L4 8"></path><path d="M4 3.5V8h4.5"></path><path d="M4 13a8 8 0 0 0 14.5 4.5L20 16"></path><path d="M20 20.5V16h-4.5"></path></svg>0<span class="sr-only sm:not-sr-only">&#160;unsynced</span></span>
+  </div>
+  <p class="hidden shrink-0 flex-col items-end xl:flex">
+    <span class="font-semibold leading-tight tabular-nums">12:29 AM</span>
+    <span class="text-body leading-tight text-rail-ink-2">Wed, Sep 30</span>
+  </p>
+  <p class="hidden shrink-0 flex-col leading-tight md:flex"><span class="font-semibold"><span class="font-mono" aria-hidden="true">○</span> No session</span><span class="text-body text-rail-ink-2">Open one to start selling</span></p>
+  <details class="relative shrink-0">
+    <summary class="flex min-h-touch-min items-center gap-2 rounded-control border border-rail-line bg-rail-raise p-1 sm:pr-3">
+      <span class="grid size-10 place-items-center rounded-full bg-rail-active text-body font-semibold" aria-hidden="true">AY</span>
+      <span class="hidden flex-col text-left leading-tight md:flex"><span class="font-semibold">Amina Yusuf</span><span class="hidden text-body text-rail-ink-2 xl:block">Cashier</span></span>
+      <span class="sr-only md:hidden">Amina Yusuf · Cashier</span>
+      <svg class="pos-icon hidden size-4 text-rail-ink-2 sm:block" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 9l6 6 6-6"></path></svg>
+    </summary>
+  </details>
+</header>
+<main class="flex min-h-0 flex-1 overflow-y-auto p-3 md:p-4 lg:p-6">
+  <div class="m-auto grid w-full max-w-5xl items-center gap-6 md:grid-cols-2 lg:gap-12">
+    <div class="flex flex-col gap-5">
+      <div class="flex flex-col gap-2">
+        <p class="text-eyebrow uppercase text-ink-3">Start of shift</p>
+        <h1 class="text-display">Open a session</h1>
+      </div>
+      <dl class="flex flex-col divide-y divide-line-soft rounded-card border border-line bg-raise px-4">
+        <div class="flex items-baseline justify-between gap-4 py-3"><dt class="text-ink-2">Business date</dt><dd class="font-mono tabular-nums">2026-09-30</dd></div>
+        <div class="flex items-baseline justify-between gap-4 py-3"><dt class="text-ink-2">Device clock</dt><dd>Sep 30, 2026, 12:29 AM</dd></div>
+        <div class="flex items-baseline justify-between gap-4 py-3"><dt class="text-ink-2">Till</dt><dd>POS1 · Jeddah Buffet</dd></div>
+        <div class="flex items-baseline justify-between gap-4 py-3"><dt class="text-ink-2">Cashier</dt><dd>Amina Yusuf</dd></div>
+      </dl>
+      <p class="flex items-start gap-3 text-ink-2"><svg class="pos-icon mt-0.5 size-6 text-accent" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z"></path><path d="M12 11v5.5"></path><path d="M12 7.8v.2"></path></svg><span>The server sets the business date from the moment you open. Count the float in the drawer, then key it in on the right.</span></p>
+    </div>
+    <section aria-labelledby="float-h" class="flex flex-col gap-3 rounded-card border border-line bg-raise p-4 shadow-raised">
+      <div class="flex items-baseline justify-between gap-3">
+        <h2 id="float-h" class="font-sans text-pos font-semibold">Opening cash (the float)</h2>
+        <p class="text-body text-ink-2">50000 is 500.00 USD</p>
+      </div>
+      <output aria-live="polite" class="block rounded-control border border-control-line bg-bg px-4 py-2 text-right font-mono text-total tabular-nums">500.00 USD</output>
+      <div role="group" aria-label="Opening cash keypad" class="grid grid-cols-3 gap-2">
+<button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">1</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">2</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">3</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">4</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">5</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">6</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">7</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">8</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">9</button>  <button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-semibold">Clear</button>
+  <button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">0</button>
+  <button type="button" class="min-h-touch-lg grid place-items-center rounded-control border border-control-line bg-raise"><span class="sr-only">Delete the last digit</span><svg class="pos-icon size-7" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 6H9l-6 6 6 6h12z"></path><path d="M12.5 9.5l5 5"></path><path d="M17.5 9.5l-5 5"></path></svg></button>
+</div>
+      <button type="button" class="min-h-touch-xl w-full rounded-control border border-control-line bg-accent text-title font-semibold text-accent-ink">Open session</button>
+    </section>
+  </div>
+</main>
+</div>
+</div>
+</body>
+</html>

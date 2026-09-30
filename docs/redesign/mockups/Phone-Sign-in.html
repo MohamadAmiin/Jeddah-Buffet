@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=390">
+<title>Phone · Sign in · matcami redesign</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="mockup.css">
+</head>
+<body>
+<div class="mock-root" style="width:390px;height:844px">
+<main class="grid min-h-dvh grid-cols-1 lg:grid-cols-9">
+  <div class="flex flex-col justify-center bg-raise px-5 py-8 sm:px-8 sm:py-14 lg:col-span-5 lg:px-14">
+    <div class="mx-auto flex w-full max-w-form flex-col gap-6">
+      <p class="font-display text-section">matcami<span class="text-accent" aria-hidden="true">.</span></p>
+      <div class="flex flex-col gap-1">
+        <h1 class="text-title">Sign in</h1>
+        <p class="text-caption text-ink-2">Management dashboard</p>
+      </div>
+      <form method="POST" class="flex flex-col gap-4">
+        <div class="flex flex-col gap-1">
+  <label for="email" class="text-sm font-medium text-ink-2">Email</label>
+  <input id="email" type="email" value="owner@jeddah.test" class="min-h-10 w-full rounded-control border border-control-line bg-bg px-3 text-ink" />
+</div>
+        <div class="flex flex-col gap-1">
+  <label for="password" class="text-sm font-medium text-ink-2">Password</label>
+  <input id="password" type="password" value="" class="min-h-10 w-full rounded-control border border-control-line bg-bg px-3 text-ink" />
+</div>
+        <button type="submit" class="inline-flex min-h-10 items-center justify-center gap-2 rounded-control border px-4 text-sm font-medium border-transparent bg-accent text-accent-ink w-full">Sign in</button>
+      </form>
+      <hr class="border-t border-line" />
+      <p class="text-sm text-ink-2">New here? <a href="/register" class="font-medium text-accent underline underline-offset-4">Set up your restaurant <span aria-hidden="true">→</span></a></p>
+    </div>
+  </div>
+  <aside class="flex flex-col justify-center bg-accent px-5 py-8 text-accent-ink sm:px-8 sm:py-14 lg:col-span-4 lg:px-12">
+    <div class="mx-auto flex w-full max-w-form flex-col gap-4">
+      <p class="font-mono text-eyebrow uppercase">Restaurant management · point of sale</p>
+      <h2 class="text-title">Every sale, every shift, every number that has to tie out.</h2>
+      <hr class="w-10 border-t-2 border-accent-ink" />
+      <div class="hidden flex-col gap-2 rounded-card bg-raise p-5 font-mono text-sm text-ink shadow-floating sm:flex">
+        <p class="font-semibold">MATCAMI SUUGO · KITCHEN</p>
+        <p class="text-caption text-ink-2">TABLE 4 · DINE-IN · ORDER #1042 · AMINA</p>
+        <p class="border-t border-dashed border-line pt-2">1×  Baasto Suugo</p>
+        <p class="pl-6 text-ink-2">+ Extra suqaar</p>
+        <p>2×  Bariis Iskukaris</p>
+        <p>1×  Hilib Ari</p>
+        <p class="border-t border-dashed border-line pt-2 text-caption">NOTE: HILIB WELL DONE</p>
+      </div>
+    </div>
+  </aside>
+</main>
+</div>
+</body>
+</html>

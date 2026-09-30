@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1280">
+<title>Till · Register this device (error) · matcami redesign</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="mockup.css">
+</head>
+<body>
+<div class="mock-root mock-fixed" style="width:1280px;height:800px">
+<div data-surface="pos" class="flex h-dvh flex-col overflow-hidden bg-bg text-pos text-ink">
+<header data-rail class="bg-rail flex h-touch shrink-0 items-center gap-2 px-3 text-rail-ink sm:gap-3 sm:px-4 lg:px-6">
+  <nav aria-label="Till" class="flex shrink-0 items-center gap-3">
+    <a href="/pos" aria-label="POS" class="grid size-10 shrink-0 place-items-center rounded-control bg-rail-ink font-display text-title font-bold text-rail sm:hidden">m</a>
+    <span class="hidden size-10 shrink-0 place-items-center rounded-control bg-rail-ink font-display text-title font-bold text-rail sm:grid" aria-hidden="true">m</span>
+    <a href="/pos" class="hidden min-h-touch-min items-center gap-2 rounded-full border border-rail-line bg-rail-active px-5 font-semibold sm:flex"><svg class="pos-icon size-5" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.5 8h13l-1 12.5h-11z"></path><path d="M9 8V6.5a3 3 0 0 1 6 0V8"></path></svg>POS</a>
+  </nav>
+  <div class="hidden min-w-0 flex-col lg:flex">
+    <span class="truncate font-semibold leading-tight">Restaurant</span>
+    <span class="truncate text-body leading-tight text-rail-ink-2">Till not registered</span>
+  </div>
+  <div role="status" aria-label="Connection and sync" class="ml-auto flex shrink-0 items-center gap-2">
+    <span class="inline-flex h-10 items-center gap-1.5 rounded-full bg-ok-bg px-2.5 text-body font-semibold text-ok sm:px-3"><span class="font-mono" aria-hidden="true">●</span>Online</span>
+    <span class="inline-flex h-10 items-center gap-1.5 rounded-full border border-rail-line px-2.5 text-body text-rail-ink-2 sm:px-3"><svg class="pos-icon size-4 sm:hidden" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 11a8 8 0 0 0-14.5-4.5L4 8"></path><path d="M4 3.5V8h4.5"></path><path d="M4 13a8 8 0 0 0 14.5 4.5L20 16"></path><path d="M20 20.5V16h-4.5"></path></svg>0<span class="sr-only sm:not-sr-only">&#160;unsynced</span></span>
+  </div>
+  <p class="hidden shrink-0 flex-col items-end xl:flex">
+    <span class="font-semibold leading-tight tabular-nums">12:29 AM</span>
+    <span class="text-body leading-tight text-rail-ink-2">Wed, Sep 30</span>
+  </p>
+  <p class="hidden shrink-0 flex-col leading-tight md:flex"><span class="font-semibold"><span class="font-mono" aria-hidden="true">○</span> No session</span><span class="text-body text-rail-ink-2">Open one to start selling</span></p>
+  <p class="shrink-0 text-body text-rail-ink-2">Nobody signed in</p>
+</header>
+<main class="flex min-h-0 flex-1 overflow-y-auto p-3 md:p-4 lg:p-6">
+  <div class="m-auto grid w-full max-w-5xl items-center gap-6 md:grid-cols-2 lg:gap-12">
+    <div class="flex flex-col gap-4">
+      <p class="text-eyebrow uppercase text-ink-3">One time, on this tablet</p>
+      <h1 class="text-display">Register this device as the till</h1>
+      <p class="text-ink-2">Sign in once with the restaurant owner's email and password. After that, staff sign in here with their PIN.</p>
+      <p class="flex items-start gap-3 rounded-control border border-line bg-raise px-4 py-3 text-ink-2"><svg class="pos-icon mt-0.5 size-6 text-accent" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z"></path><path d="M12 11v5.5"></path><path d="M12 7.8v.2"></path></svg><span>Registering this device signs you out of the dashboard here. Use another computer for the dashboard — this tablet becomes the till.</span></p>
+    </div>
+    <form method="POST" class="flex flex-col gap-3 rounded-card border border-line bg-raise p-4 shadow-raised">
+      <div role="alert" class="flex items-start gap-2 rounded-control bg-danger-bg px-3 py-2 text-danger"><span class="font-mono" aria-hidden="true">✕</span><span>That email and password did not sign in as this restaurant's owner.</span></div>
+      <div class="flex flex-col gap-1">
+        <label for="reg-email" class="font-semibold">Owner email</label>
+        <input id="reg-email" type="email" value="owner@jeddah.test" class="min-h-touch rounded-control border border-control-line bg-raise px-3" />
+      </div>
+      <div class="flex flex-col gap-1">
+        <label for="reg-password" class="font-semibold">Owner password</label>
+        <input id="reg-password" type="password" class="min-h-touch rounded-control border border-control-line bg-raise px-3" />
+      </div>
+      <div class="flex flex-col gap-1">
+        <label for="reg-name" class="font-semibold">Name for this device</label>
+        <input id="reg-name" value="Counter tablet" maxlength="60" class="min-h-touch rounded-control border border-control-line bg-raise px-3" />
+      </div>
+      <button type="submit" class="min-h-touch-lg w-full rounded-control border border-control-line bg-accent font-semibold text-accent-ink">Register this device</button>
+    </form>
+  </div>
+</main>
+</div>
+</div>
+</body>
+</html>

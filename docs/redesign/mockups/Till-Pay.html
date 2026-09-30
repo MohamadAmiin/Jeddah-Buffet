@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1280">
+<title>Till · Take payment · matcami redesign</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="mockup.css">
+</head>
+<body>
+<div class="mock-root mock-fixed" style="width:1280px;height:800px">
+<div data-surface="pos" class="flex h-dvh flex-col overflow-hidden bg-bg text-pos text-ink">
+<header data-rail class="bg-rail flex h-touch shrink-0 items-center gap-2 px-3 text-rail-ink sm:gap-3 sm:px-4 lg:px-6">
+  <nav aria-label="Till" class="flex shrink-0 items-center gap-3">
+    <a href="/pos/order" aria-label="POS" class="grid size-10 shrink-0 place-items-center rounded-control bg-rail-ink font-display text-title font-bold text-rail sm:hidden">m</a>
+    <span class="hidden size-10 shrink-0 place-items-center rounded-control bg-rail-ink font-display text-title font-bold text-rail sm:grid" aria-hidden="true">m</span>
+    <a href="/pos/order" class="hidden min-h-touch-min items-center gap-2 rounded-full border border-rail-line bg-rail-active px-5 font-semibold sm:flex"><svg class="pos-icon size-5" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.5 8h13l-1 12.5h-11z"></path><path d="M9 8V6.5a3 3 0 0 1 6 0V8"></path></svg>POS</a>
+  </nav>
+  <div class="hidden min-w-0 flex-col lg:flex">
+    <span class="truncate font-semibold leading-tight">Jeddah Buffet</span>
+    <span class="truncate text-body leading-tight text-rail-ink-2">Till POS1</span>
+  </div>
+  <div role="status" aria-label="Connection and sync" class="ml-auto flex shrink-0 items-center gap-2">
+    <span class="inline-flex h-10 items-center gap-1.5 rounded-full bg-ok-bg px-2.5 text-body font-semibold text-ok sm:px-3"><span class="font-mono" aria-hidden="true">●</span>Online</span>
+    <span class="inline-flex h-10 items-center gap-1.5 rounded-full border border-rail-line px-2.5 text-body text-rail-ink-2 sm:px-3"><svg class="pos-icon size-4 sm:hidden" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 11a8 8 0 0 0-14.5-4.5L4 8"></path><path d="M4 3.5V8h4.5"></path><path d="M4 13a8 8 0 0 0 14.5 4.5L20 16"></path><path d="M20 20.5V16h-4.5"></path></svg>0<span class="sr-only sm:not-sr-only">&#160;unsynced</span></span>
+  </div>
+  <p class="hidden shrink-0 flex-col items-end xl:flex">
+    <span class="font-semibold leading-tight tabular-nums">12:29 AM</span>
+    <span class="text-body leading-tight text-rail-ink-2">Wed, Sep 30</span>
+  </p>
+  <a href="/pos/session" class="hidden min-h-touch-min min-w-touch-min shrink-0 items-center justify-center gap-2 rounded-control border border-rail-line bg-rail-raise px-3 font-semibold sm:flex" aria-label="Session · business date 2026-09-30 · Close session">
+    <svg class="pos-icon size-5 text-rail-ink-2" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7.5 11V8a4.5 4.5 0 0 1 9 0v3"></path><path d="M6 11h12v9.5H6z"></path><path d="M12 15v2"></path></svg>
+    <span class="hidden flex-col leading-tight md:flex"><span><span class="font-mono" aria-hidden="true">●</span> Session</span><span class="hidden text-body font-normal text-rail-ink-2 xl:block">Close session</span></span>
+    <svg class="pos-icon hidden size-4 text-rail-ink-2 md:block" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 6l6 6-6 6"></path></svg>
+  </a>
+  <details class="relative shrink-0">
+    <summary class="flex min-h-touch-min items-center gap-2 rounded-control border border-rail-line bg-rail-raise p-1 sm:pr-3">
+      <span class="grid size-10 place-items-center rounded-full bg-rail-active text-body font-semibold" aria-hidden="true">AY</span>
+      <span class="hidden flex-col text-left leading-tight md:flex"><span class="font-semibold">Amina Yusuf</span><span class="hidden text-body text-rail-ink-2 xl:block">Cashier</span></span>
+      <span class="sr-only md:hidden">Amina Yusuf · Cashier</span>
+      <svg class="pos-icon hidden size-4 text-rail-ink-2 sm:block" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 9l6 6 6-6"></path></svg>
+    </summary>
+  </details>
+</header>
+<main class="flex min-h-0 flex-1 flex-col gap-3 p-3 md:flex-row md:gap-4 md:p-4 lg:px-6">
+  <section aria-labelledby="pay-h" class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-card border border-line bg-raise shadow-flat">
+    <div class="flex shrink-0 flex-wrap items-center gap-3 border-b border-line-soft p-3 md:p-4">
+      <a href="/pos/order" class="flex min-h-touch-min items-center gap-2 rounded-control border border-control-line bg-raise px-4 font-semibold"><svg class="pos-icon size-5" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12H5"></path><path d="M11 6l-6 6 6 6"></path></svg>Back to the check</a>
+      <h1 id="pay-h" class="text-title">Amount due</h1>
+      <p class="ml-auto font-mono text-title font-medium tabular-nums">15.75 USD</p>
+    </div>
+    <div class="min-h-0 flex-1 overflow-y-auto p-3 md:p-4">
+      <div class="flex flex-col gap-5">
+        <div class="flex flex-col gap-2">
+          <p id="tender-l" class="font-semibold">Tender</p>
+          <div role="radiogroup" aria-labelledby="tender-l" class="grid grid-cols-3 gap-3">
+            <button type="button" role="radio" aria-checked="true" tabindex="0" class="flex min-h-touch-lg items-center justify-center gap-2 rounded-control border border-control-line bg-raise px-2 font-semibold aria-checked:border-accent aria-checked:bg-accent aria-checked:text-accent-ink"><svg class="pos-icon hidden size-6 sm:block" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 6.5h18v11H3z"></path><path d="M12 14.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"></path><path d="M6.5 10v4"></path><path d="M17.5 10v4"></path></svg>Cash<svg class="pos-icon size-6" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z"></path><path d="M8.3 12.4l2.5 2.5 5-5.2"></path></svg></button>
+            <button type="button" role="radio" aria-checked="false" tabindex="-1" class="flex min-h-touch-lg items-center justify-center gap-2 rounded-control border border-control-line bg-raise px-2 font-semibold aria-checked:border-accent aria-checked:bg-accent aria-checked:text-accent-ink"><svg class="pos-icon hidden size-6 sm:block" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 6h18v12H3z"></path><path d="M3 10h18"></path><path d="M7 14.5h4"></path></svg>Card</button>
+            <button type="button" role="radio" aria-checked="false" disabled="disabled" aria-describedby="why-mobile" class="flex min-h-touch-lg flex-col items-center justify-center rounded-control border border-control-line bg-disabled-bg px-2 text-center text-disabled-ink"><span class="flex items-center gap-2 font-semibold"><svg class="pos-icon hidden size-6 sm:block" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8 3h8a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"></path><path d="M11 18h2"></path></svg>Mobile money</span><span id="why-mobile" class="text-body leading-tight">Not accepted in settings</span></button>
+          </div>
+        </div>
+        <div class="grid gap-5 sm:grid-cols-2">
+          <div class="flex flex-col gap-5">
+            <div class="flex flex-col gap-2">
+              <h2 class="font-sans text-pos font-semibold">Quick cash</h2>
+              <div class="grid grid-cols-3 gap-2">
+                <button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise px-2 font-semibold">Exact</button>
+                <button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise px-2 font-mono tabular-nums">16.00</button>
+                <button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise px-2 font-mono tabular-nums">20.00</button>
+              </div>
+            </div>
+            <dl class="flex flex-col gap-3 rounded-card border border-line bg-raise-2 p-4">
+              <div class="flex items-baseline justify-between gap-3"><dt class="text-ink-2">Amount tendered</dt><dd class="font-mono text-title font-medium tabular-nums">20.00 USD</dd></div>
+              <div class="flex flex-col gap-1 border-t border-line pt-3"><dt class="text-ink-2">Change due</dt><dd class="text-right font-mono text-total tabular-nums">4.25 USD</dd></div>
+            </dl>
+          </div>
+          <section aria-label="Amount tendered" class="flex flex-col gap-2">
+            <p class="text-body text-ink-2">Keys enter cents: 2000 is 20.00 USD</p>
+            <div role="group" aria-label="Amount tendered keypad" class="grid grid-cols-3 gap-2">
+<button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">1</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">2</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">3</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">4</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">5</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">6</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">7</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">8</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">9</button>  <button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-semibold">Clear</button>
+  <button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">0</button>
+  <button type="button" class="min-h-touch-lg grid place-items-center rounded-control border border-control-line bg-raise"><span class="sr-only">Delete the last digit</span><svg class="pos-icon size-7" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 6H9l-6 6 6 6h12z"></path><path d="M12.5 9.5l5 5"></path><path d="M17.5 9.5l-5 5"></path></svg></button>
+</div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section aria-labelledby="check-h" class="hidden md:flex w-96 shrink-0 flex-col overflow-hidden rounded-card border border-line bg-raise shadow-raised xl:w-md">
+  <header class="flex shrink-0 items-center gap-3 bg-accent px-5 py-3 text-accent-ink">
+    <svg class="pos-icon size-7" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 3.5h6v3H9z"></path><path d="M8 5H6.5A1.5 1.5 0 0 0 5 6.5v13A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5v-13A1.5 1.5 0 0 0 17.5 5H16"></path><path d="M8.5 11.5h7"></path><path d="M8.5 15.5h5"></path></svg>
+    <div class="flex min-w-0 flex-1 flex-col">
+      <h2 id="check-h" class="text-title">Current Order</h2>
+      <p class="truncate text-body">Sit now · Table 4</p>
+    </div>
+    <span class="rounded-full bg-st-billed-bg px-3 py-1 text-caption font-semibold text-st-billed"><span class="font-mono" aria-hidden="true">◐</span> BILLED</span>
+  </header>
+  <ol aria-label="Lines on the check" class="min-h-0 flex-1 divide-y divide-line-soft overflow-y-auto">
+<li class="border-l-4 border-transparent">
+<div class="flex w-full items-start gap-3 py-2.5 pl-4 pr-5">    <span class="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full bg-st-new-bg px-2 py-0.5 text-caption font-semibold text-st-new"><span class="font-mono" aria-hidden="true">◇</span>NEW</span>
+    <span class="flex min-w-0 flex-1 flex-col">
+      <span class="font-semibold leading-snug"><span class="font-mono font-medium">1×</span> Baasto Suugo</span>
+<span class="text-body text-ink-2">+ Banana on the side <span class="font-mono ">0.50</span></span><span class="text-body text-ink-2">+ Extra suqaar <span class="font-mono ">1.50</span></span>      <span class="text-body text-ink-2">@ <span class="font-mono">8.50</span> · tax 5.00%</span>
+    </span>
+    <span class="font-mono font-medium tabular-nums">10.50</span>
+</div></li>
+<li class="border-l-4 border-transparent">
+<div class="flex w-full items-start gap-3 py-2.5 pl-4 pr-5">    <span class="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full bg-st-new-bg px-2 py-0.5 text-caption font-semibold text-st-new"><span class="font-mono" aria-hidden="true">◇</span>NEW</span>
+    <span class="flex min-w-0 flex-1 flex-col">
+      <span class="font-semibold leading-snug"><span class="font-mono font-medium">1×</span> Shaah</span>
+      <span class="text-body text-ink-2">@ <span class="font-mono">1.00</span> · tax 5.00%</span>
+    </span>
+    <span class="font-mono font-medium tabular-nums">1.00</span>
+</div></li>
+<li class="border-l-4 border-transparent">
+<div class="flex w-full items-start gap-3 py-2.5 pl-4 pr-5">    <span class="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full bg-st-new-bg px-2 py-0.5 text-caption font-semibold text-st-new"><span class="font-mono" aria-hidden="true">◇</span>NEW</span>
+    <span class="flex min-w-0 flex-1 flex-col">
+      <span class="font-semibold leading-snug"><span class="font-mono font-medium">1×</span> Mango Juice</span>
+<span class="text-body text-ink-2">+ Large <span class="font-mono ">1.00</span></span>      <span class="text-body text-ink-2">@ <span class="font-mono">2.50</span> · tax 5.00%</span>
+    </span>
+    <span class="font-mono font-medium tabular-nums">3.50</span>
+</div></li>
+  </ol>
+  <footer class="shrink-0 border-t border-line px-5 pb-5 pt-3">
+    <dl class="flex flex-col gap-0.5">
+      <div class="flex items-baseline justify-between text-ink-2"><dt>Subtotal</dt><dd class="font-mono tabular-nums">15.00 USD</dd></div>
+      <div class="flex items-baseline justify-between text-ink-2"><dt>Tax <span class="text-body">(exclusive)</span></dt><dd class="font-mono tabular-nums">0.75 USD</dd></div>
+      <div class="mt-1 flex items-baseline justify-between border-t border-line pt-2"><dt class="font-display text-title">Total</dt><dd class="font-mono text-total tabular-nums text-accent">15.75 USD</dd></div>
+    </dl>
+    <div class="mt-4 flex gap-3">  <button type="button" class="flex min-h-touch-xl flex-1 items-center justify-center gap-3 rounded-card border border-control-line bg-accent text-title font-semibold text-accent-ink">Pay · Cash <span class="font-mono font-medium tabular-nums">15.75 USD</span></button>
+</div>
+  </footer>
+</section>
+  <div class="shrink-0 md:hidden">
+    <button type="button" class="flex min-h-touch-xl w-full items-center justify-center gap-3 rounded-card border border-control-line bg-accent text-title font-semibold text-accent-ink">Pay · Cash <span class="font-mono font-medium tabular-nums">15.75 USD</span></button>
+  </div>
+</main>
+</div>
+</div>
+</body>
+</html>

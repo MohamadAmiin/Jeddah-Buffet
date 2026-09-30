@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=390">
+<title>Phone · Employees · matcami redesign</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="mockup.css">
+</head>
+<body>
+<div class="mock-root" style="width:390px;height:844px">
+<a href="#content" class="sr-only focus:not-sr-only">Skip to content</a>
+<div class="min-h-dvh bg-bg lg:flex">
+  <aside data-rail aria-label="Workspace" class="bg-rail sticky top-0 hidden h-dvh w-65 shrink-0 flex-col border-r border-rail-line text-rail-ink lg:flex">
+    <div class="flex items-center gap-3 px-4 py-4">
+  <span class="grid size-10 shrink-0 place-items-center rounded-control bg-rail-ink font-display text-title text-rail" aria-hidden="true">m</span>
+  <div class="flex min-w-0 flex-1 flex-col">
+<h1 class="truncate font-sans text-section">Jeddah Buffet</h1>    <p class="text-caption text-rail-ink-2">Owner workspace</p>
+  </div>
+  <button type="button" aria-expanded="true" class="grid size-8 place-items-center rounded-control border border-rail-line text-rail-ink-2 hover:text-rail-ink" aria-label="Collapse the sidebar"><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 6l-6 6 6 6"></path></svg></button>
+</div>
+    <nav aria-label="Dashboard sections" class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3 pb-4 pt-1">
+  <div class="flex flex-col gap-1">
+    <ul class="flex flex-col gap-0.5">
+      <li>
+        <a href="/dashboard" class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption font-medium text-rail-ink hover:bg-rail-raise data-current:border-rail-ink data-current:bg-rail-active data-current:font-semibold"><svg class="rail-icon size-5 text-rail-ink-2" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.5 4h3A1.5 1.5 0 0 1 10 5.5v3A1.5 1.5 0 0 1 8.5 10h-3A1.5 1.5 0 0 1 4 8.5v-3A1.5 1.5 0 0 1 5.5 4z"></path><path d="M15.5 4h3A1.5 1.5 0 0 1 20 5.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 14 8.5v-3A1.5 1.5 0 0 1 15.5 4z"></path><path d="M5.5 14h3a1.5 1.5 0 0 1 1.5 1.5v3A1.5 1.5 0 0 1 8.5 20h-3A1.5 1.5 0 0 1 4 18.5v-3A1.5 1.5 0 0 1 5.5 14z"></path><path d="M15.5 14h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3a1.5 1.5 0 0 1-1.5-1.5v-3a1.5 1.5 0 0 1 1.5-1.5z"></path></svg>Overview</a>
+      </li>
+    </ul>
+  </div>
+  <div class="flex flex-col gap-1">
+<p id="rail-grp-catalogue" class="px-3 pb-0.5 text-eyebrow uppercase text-rail-ink-2">Catalogue</p>    <ul class="flex flex-col gap-0.5" aria-labelledby="rail-grp-catalogue">
+      <li>
+        <a href="/menu" class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption font-medium text-rail-ink hover:bg-rail-raise data-current:border-rail-ink data-current:bg-rail-active data-current:font-semibold"><svg class="rail-icon size-5 text-rail-ink-2" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 6.5C10 5 7 4.5 4 5v13.5c3-.5 6 0 8 1.5 2-1.5 5-2 8-1.5V5c-3-.5-6 0-8 1.5z"></path><path d="M12 6.5V20"></path></svg>Menu</a>
+      </li>
+      <li>
+        <a href="/inventory" class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption font-medium text-rail-ink hover:bg-rail-raise data-current:border-rail-ink data-current:bg-rail-active data-current:font-semibold"><svg class="rail-icon size-5 text-rail-ink-2" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.5 7.5 12 3.5l8.5 4v9L12 20.5l-8.5-4z"></path><path d="M3.5 7.5 12 11.5l8.5-4"></path><path d="M12 11.5v9"></path></svg>Inventory</a>
+      </li>
+    </ul>
+  </div>
+  <div class="flex flex-col gap-1">
+<p id="rail-grp-money" class="px-3 pb-0.5 text-eyebrow uppercase text-rail-ink-2">Money</p>    <ul class="flex flex-col gap-0.5" aria-labelledby="rail-grp-money">
+      <li>
+        <a href="/purchases" class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption font-medium text-rail-ink hover:bg-rail-raise data-current:border-rail-ink data-current:bg-rail-active data-current:font-semibold"><svg class="rail-icon size-5 text-rail-ink-2" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 4h2.2l2.3 11h10.8L20.5 7H6.4"></path><path d="M9 20v.1"></path><path d="M17.5 20v.1"></path></svg>Deliveries</a>
+      </li>
+      <li>
+        <span class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption text-rail-ink-2"><svg class="rail-icon size-5" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"></path><path d="M9 8h6"></path><path d="M9 12h6"></path></svg>Expenses<span class="ml-auto rounded-full border border-rail-line px-1.5 py-0.5 font-mono text-eyebrow uppercase">Soon<span class="sr-only"> — not built yet</span></span></span>
+      </li>
+      <li>
+        <a href="/reports" class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption font-medium text-rail-ink hover:bg-rail-raise data-current:border-rail-ink data-current:bg-rail-active data-current:font-semibold"><svg class="rail-icon size-5 text-rail-ink-2" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20h16"></path><path d="M7 16.5v-5"></path><path d="M12 16.5V7"></path><path d="M17 16.5v-8"></path></svg>Reports</a>
+      </li>
+    </ul>
+  </div>
+  <div class="flex flex-col gap-1">
+<p id="rail-grp-setup" class="px-3 pb-0.5 text-eyebrow uppercase text-rail-ink-2">Setup</p>    <ul class="flex flex-col gap-0.5" aria-labelledby="rail-grp-setup">
+      <li>
+        <a href="/employees" aria-current="page" data-current="true" class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption font-medium text-rail-ink hover:bg-rail-raise data-current:border-rail-ink data-current:bg-rail-active data-current:font-semibold"><svg class="rail-icon size-5 text-rail-ink" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"></path><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"></path><path d="M16 4.3a3.5 3.5 0 0 1 0 6.7"></path><path d="M18.2 14.3c1.7.8 2.8 2.9 2.8 5.7"></path></svg>Employees</a>
+      </li>
+      <li>
+        <a href="/device" class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption font-medium text-rail-ink hover:bg-rail-raise data-current:border-rail-ink data-current:bg-rail-active data-current:font-semibold"><svg class="rail-icon size-5 text-rail-ink-2" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 10.5h16V20H4z"></path><path d="M7 10.5V4h10v6.5"></path><path d="M9.5 7h5"></path><path d="M8 14h2"></path><path d="M14 14h2"></path><path d="M8 17h2"></path><path d="M14 17h2"></path></svg>POS device</a>
+      </li>
+      <li>
+        <a href="/settings" class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption font-medium text-rail-ink hover:bg-rail-raise data-current:border-rail-ink data-current:bg-rail-active data-current:font-semibold"><svg class="rail-icon size-5 text-rail-ink-2" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h9"></path><path d="M17 7h3"></path><path d="M4 17h3"></path><path d="M11 17h9"></path><path d="M15 5v4"></path><path d="M9 15v4"></path></svg>Settings</a>
+      </li>
+    </ul>
+  </div>
+</nav>
+    <div class="flex flex-col gap-3 border-t border-rail-line p-3">
+  <div class="flex items-center gap-3">
+    <span class="grid size-9 shrink-0 place-items-center rounded-full bg-rail-active text-caption font-semibold" aria-hidden="true">TO</span>
+    <div class="flex min-w-0 flex-1 flex-col">
+      <span class="truncate text-caption font-medium">The Owner</span>
+      <span class="text-eyebrow uppercase text-rail-ink-2">Owner</span>
+    </div>
+    <form method="POST" action="/logout"><button type="submit" class="flex min-h-9 items-center gap-1.5 rounded-control border border-rail-line px-2.5 text-caption font-medium hover:bg-rail-raise"><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"></path><path d="M9.5 16.5 5 12l4.5-4.5"></path><path d="M5 12h11"></path></svg>Sign out</button></form>
+  </div>
+  <div role="group" aria-label="Theme" class="grid grid-cols-3 gap-1 rounded-control border border-rail-line p-1">
+    <button type="button" aria-pressed="true" class="flex min-h-8 items-center justify-center gap-1.5 rounded-control text-caption text-rail-ink-2 aria-pressed:bg-rail-ink aria-pressed:font-medium aria-pressed:text-rail"><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 16.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9z"></path><path d="M12 2.5v2"></path><path d="M12 19.5v2"></path><path d="M4.2 4.2l1.4 1.4"></path><path d="M18.4 18.4l1.4 1.4"></path><path d="M2.5 12h2"></path><path d="M19.5 12h2"></path><path d="M4.2 19.8l1.4-1.4"></path><path d="M18.4 5.6l1.4-1.4"></path></svg>Light</button>
+    <button type="button" aria-pressed="false" class="flex min-h-8 items-center justify-center gap-1.5 rounded-control text-caption text-rail-ink-2 aria-pressed:bg-rail-ink aria-pressed:font-medium aria-pressed:text-rail"><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 14.2A8.3 8.3 0 1 1 9.8 4a6.6 6.6 0 0 0 10.2 10.2z"></path></svg>Dark</button>
+    <button type="button" aria-pressed="false" class="flex min-h-8 items-center justify-center gap-1.5 rounded-control text-caption text-rail-ink-2 aria-pressed:bg-rail-ink aria-pressed:font-medium aria-pressed:text-rail"><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 5h18v11H3z"></path><path d="M8.5 20h7"></path><path d="M12 16v4"></path></svg>System</button>
+  </div>
+</div>
+  </aside>
+  <header data-rail class="bg-rail sticky top-0 z-30 flex h-14 items-center gap-3 px-4 text-rail-ink lg:hidden">
+    <button type="button" aria-expanded="false" aria-controls="nav-drawer" class="grid size-10 shrink-0 place-items-center rounded-control border border-rail-line" aria-label="Open navigation"><svg class="pos-icon size-5" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6.5h16"></path><path d="M4 12h16"></path><path d="M4 17.5h16"></path></svg></button>
+    <span class="grid size-8 shrink-0 place-items-center rounded-control bg-rail-ink font-display text-section text-rail" aria-hidden="true">m</span>
+    <h1 class="min-w-0 flex-1 truncate font-sans text-section">Jeddah Buffet</h1>
+    <span class="grid size-9 shrink-0 place-items-center rounded-full bg-rail-active text-caption font-semibold" aria-hidden="true">TO</span>
+  </header>
+  <main id="content" class="flex min-w-0 flex-1 flex-col">
+<header class="border-b border-line bg-raise">
+  <div class="mx-auto flex w-full max-w-page flex-wrap items-center gap-x-6 gap-y-3 px-4 py-4 lg:px-8 lg:py-5">
+    <div class="flex min-w-0 flex-1 basis-80 flex-col gap-1">
+      <p class="text-eyebrow uppercase text-ink-3">Setup</p>
+      <h2 class="text-title">Employees</h2>
+<p class="max-w-measure text-body text-ink-2">The people who sign in at the till, what each may do there, and the PIN each one types.</p>    </div>
+<div class="flex flex-wrap items-center gap-2"><a href="/employees/roles" class="inline-flex min-h-10 items-center justify-center gap-2 rounded-control border px-4 text-sm font-medium border-control-line bg-raise text-ink hover:bg-raise-2 ">Manage roles</a><a href="?add=1#add-employee" class="inline-flex min-h-10 items-center justify-center gap-2 rounded-control border px-4 text-sm font-medium border-transparent bg-accent text-accent-ink xl:hidden"><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>Add an employee</a></div>  </div>
+</header>
+<div class="mx-auto w-full max-w-page px-4 py-6 lg:px-8">
+  <div class="grid items-start gap-6 xl:grid-cols-12">
+    <section aria-labelledby="staff-h" class="rounded-card border border-line bg-raise shadow-card xl:col-span-8">
+      <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-6 py-4">
+        <h3 id="staff-h" class="text-section">Staff</h3>
+        <p class="text-caption text-ink-2">5 people · 4 active · the owner is always listed</p>
+      </div>
+      <table class="w-full">
+        <caption class="sr-only">Staff</caption>
+        <thead class="hidden border-y border-line-soft bg-raise-2 md:table-header-group">
+          <tr><th scope="col" class="px-6 py-2 text-left text-xs font-medium text-ink-2">Name</th><th scope="col" class="px-6 py-2 text-left text-xs font-medium text-ink-2">Role</th><th scope="col" class="px-6 py-2 text-left text-xs font-medium text-ink-2">PIN</th><th scope="col" class="px-6 py-2 text-left text-xs font-medium text-ink-2">Status</th></tr>
+        </thead>
+        <tbody class="divide-y divide-line-soft border-t border-line-soft md:border-t-0">
+          <tr class="block px-6 py-3 md:table-row md:p-0">
+            <td class="flex items-baseline justify-between gap-3 py-0.5 md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">Name</span><a href="#" class="font-medium text-ink underline underline-offset-2">The Owner</a></td>
+            <td class="flex items-baseline justify-between gap-3 py-0.5 text-sm md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">Role</span><span class="">Owner</span></td>
+            <td class="flex items-baseline justify-between gap-3 py-0.5 text-sm md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">PIN</span><span class="text-ink-3"><span class="font-mono" aria-hidden="true">○</span>&#160;No PIN yet</span></td>
+            <td class="flex items-baseline justify-between gap-3 py-0.5 text-sm md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">Status</span><span class="text-ok"><span class="font-mono" aria-hidden="true">●</span>&#160;Active</span></td>
+          </tr>
+          <tr class="block px-6 py-3 md:table-row md:p-0">
+            <td class="flex items-baseline justify-between gap-3 py-0.5 md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">Name</span><a href="#" class="font-medium text-ink underline underline-offset-2">Amina Yusuf</a></td>
+            <td class="flex items-baseline justify-between gap-3 py-0.5 text-sm md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">Role</span><span class="">Cashier</span></td>
+            <td class="flex items-baseline justify-between gap-3 py-0.5 text-sm md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">PIN</span><span class="text-ok"><span class="font-mono" aria-hidden="true">●</span>&#160;PIN set</span></td>
+            <td class="flex items-baseline justify-between gap-3 py-0.5 text-sm md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">Status</span><span class="text-ok"><span class="font-mono" aria-hidden="true">●</span>&#160;Active</span></td>
+          </tr>
+          <tr class="block px-6 py-3 md:table-row md:p-0">
+            <td class="flex items-baseline justify-between gap-3 py-0.5 md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">Name</span><a href="#" class="font-medium text-ink underline underline-offset-2">Hodan Ali</a></td>
+            <td class="flex items-baseline justify-between gap-3 py-0.5 text-sm md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">Role</span><span class="">Waiter</span></td>
+            <td class="flex items-baseline justify-between gap-3 py-0.5 text-sm md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">PIN</span><span class="text-ok"><span class="font-mono" aria-hidden="true">●</span>&#160;PIN set</span></td>
+            <td class="flex items-baseline justify-between gap-3 py-0.5 text-sm md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">Status</span><span class="text-danger"><span class="font-mono" aria-hidden="true">✕</span>&#160;Locked until 00:33</span></td>
+          </tr>
+          <tr class="block px-6 py-3 md:table-row md:p-0">
+            <td class="flex items-baseline justify-between gap-3 py-0.5 md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">Name</span><a href="#" class="font-medium text-ink underline underline-offset-2">Omar Ali</a></td>
+            <td class="flex items-baseline justify-between gap-3 py-0.5 text-sm md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">Role</span><span class="">Waiter</span></td>
+            <td class="flex items-baseline justify-between gap-3 py-0.5 text-sm md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">PIN</span><span class="text-ok"><span class="font-mono" aria-hidden="true">●</span>&#160;PIN set</span></td>
+            <td class="flex items-baseline justify-between gap-3 py-0.5 text-sm md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">Status</span><span class="text-ok"><span class="font-mono" aria-hidden="true">●</span>&#160;Active</span></td>
+          </tr>
+          <tr class="block px-6 py-3 md:table-row md:p-0">
+            <td class="flex items-baseline justify-between gap-3 py-0.5 md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">Name</span><a href="#" class="font-medium text-ink-2 underline underline-offset-2">Farah Omar</a></td>
+            <td class="flex items-baseline justify-between gap-3 py-0.5 text-sm md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">Role</span><span class="text-ink-2">Cashier</span></td>
+            <td class="flex items-baseline justify-between gap-3 py-0.5 text-sm md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">PIN</span><span class="text-ok"><span class="font-mono" aria-hidden="true">●</span>&#160;PIN set</span></td>
+            <td class="flex items-baseline justify-between gap-3 py-0.5 text-sm md:table-cell md:px-6 md:py-3"><span class="text-xs text-ink-3 md:hidden">Status</span><span class="text-ink-3"><span class="font-mono" aria-hidden="true">○</span>&#160;Inactive</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+    <section id="add-employee" aria-labelledby="add-employee-h" class="hidden order-first flex-col rounded-card border border-line bg-raise shadow-card xl:sticky xl:top-6 xl:order-none xl:col-span-4 xl:flex">
+      <div class="flex items-center justify-between gap-3 border-b border-line-soft px-6 py-4">
+        <h3 id="add-employee-h" class="text-section">Add an employee</h3>
+        <svg class="pos-icon size-5 text-ink-3" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9.5 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"></path><path d="M3.5 20c0-3.3 2.7-6 6-6s6 2.7 6 6"></path><path d="M19 8v6"></path><path d="M16 11h6"></path></svg>
+      </div>
+      <form method="POST" action="?/createEmployee" class="flex flex-col gap-4 p-6">
+        <div role="alert" class="flex items-start gap-2 rounded-control border border-ok bg-ok-bg px-3 py-2 text-sm text-ok"><span class="font-mono" aria-hidden="true">✓</span><span>Omar Ali was added. <a href="/employees/omar" class="font-medium underline underline-offset-2">Open his page</a></span></div>
+        <div class="flex flex-col gap-1">
+  <label for="displayName" class="text-sm font-medium text-ink-2">Name</label>
+  <input id="displayName" type="text" value="" class="min-h-10 w-full rounded-control border border-control-line bg-bg px-3 text-ink" />
+</div>
+        <div class="flex flex-col gap-1">
+  <label for="roleId" class="text-sm font-medium text-ink-2">Role</label>
+  <select id="roleId" class="min-h-10 w-full rounded-control border border-control-line bg-bg px-3 text-ink" aria-describedby="roleId-hint"><option>Choose a role</option></select>
+<p id="roleId-hint" class="text-xs text-ink-3">What a role may do at the till is set under Manage roles.</p></div>
+        <div class="flex flex-col gap-1">
+          <label for="new-employee-pin" class="text-sm font-medium text-ink-2">PIN</label>
+          <div class="flex gap-2">
+            <input id="new-employee-pin" type="password" inputmode="numeric" class="min-h-10 w-full rounded-control border border-control-line bg-bg px-3 text-ink min-w-0 flex-1 font-mono" aria-describedby="pin-hint" />
+            <button type="button" class="inline-flex min-h-10 items-center justify-center gap-2 rounded-control border px-4 text-sm font-medium border-transparent text-ink hover:bg-raise-2 ">Show PIN</button>
+          </div>
+          <p id="pin-hint" class="text-xs text-ink-3">4 to 6 digits.</p>
+        </div>
+        <button type="submit" class="inline-flex min-h-10 items-center justify-center gap-2 rounded-control border px-4 text-sm font-medium border-transparent bg-accent text-accent-ink self-start">Create employee</button>
+      </form>
+    </section>
+  </div>
+</div>
+  </main>
+</div>
+
+</div>
+</body>
+</html>
