@@ -404,7 +404,10 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	// 16. The report, on the owner's dashboard.
 	await page.goto('/dashboard');
 	if (/\/login/.test(page.url())) await signIn(page, OWNER);
-	await page.getByRole('link', { name: 'Reports', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Reports', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/reports/);
 	await expect(page.getByRole('heading', { name: `Sales · ${businessDate}` })).toBeVisible();
 	await page.goto('/reports?date=' + businessDate);
@@ -444,7 +447,10 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	await expect(items.nth(1)).toContainText(/Difference\s*−1\.00/);
 	await expect(page.getByRole('alert')).toHaveCount(0);
 
-	await page.getByRole('link', { name: 'Overview', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Overview', exact: true })
+		.click();
 	await expect(page.getByText(/sales await your review/)).toHaveCount(0);
 
 	await till.close();

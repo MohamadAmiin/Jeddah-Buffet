@@ -3,7 +3,7 @@
 	// every amount is the formatter's string. Colour never carries meaning alone —
 	// a reversed delivery shows ↩ and the word, one still owed ◐ and the words.
 	import { resolve } from '$app/paths';
-	import { Button, Card, PageHeader, Table } from '$lib/components/ui';
+	import { Button, Card, PageBody, PageHeader, Table } from '$lib/components/ui';
 
 	let { data } = $props();
 
@@ -31,10 +31,10 @@
 	{/snippet}
 </PageHeader>
 
-<div class="flex flex-col gap-5 px-4 pt-8 pb-16 lg:px-7">
+<PageBody>
 	<Card>
 		<div class="flex flex-col gap-2">
-			<h3 class="text-ink font-semibold">Recent deliveries</h3>
+			<h3 class="text-section text-ink">Recent deliveries</h3>
 			<Table
 				caption="Deliveries"
 				{columns}
@@ -59,11 +59,11 @@
 					{:else if key === 'status'}
 						<span class="text-ink text-sm">
 							{#if row.status === 'reversed'}
-								↩ reversed
+								<span aria-hidden="true" class="font-mono">↩</span> reversed
 							{:else if row.status === 'owed'}
-								◐ still owed
+								<span aria-hidden="true" class="font-mono">◐</span> still owed
 							{:else}
-								● settled
+								<span aria-hidden="true" class="font-mono">●</span> settled
 							{/if}
 						</span>
 					{/if}
@@ -71,4 +71,4 @@
 			</Table>
 		</div>
 	</Card>
-</div>
+</PageBody>

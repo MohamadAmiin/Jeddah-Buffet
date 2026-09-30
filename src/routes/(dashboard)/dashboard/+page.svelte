@@ -1,6 +1,14 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { Alert, Card, PageHeader, StatusMark } from '$lib/components/ui';
+	import {
+		Button,
+		Callout,
+		Icon,
+		PageBody,
+		PageHeader,
+		StatTile,
+		StatusMark
+	} from '$lib/components/ui';
 	import { EVENT_TEXT } from './event-text';
 
 	let { data } = $props();
@@ -108,83 +116,88 @@
 	<title>Overview · matcami</title>
 </svelte:head>
 
-<!-- The page band: a raised strip separated from the working column by one
-     decorative hairline. h2, not h1 — the layout's h1 is the restaurant name, and
+<!-- The page band: title, description, and the restaurant's local date as a
+     header meta chip. h2, not h1 — the layout's h1 is the restaurant name, and
      promoting this would break the document outline on every dashboard screen. -->
 <PageHeader
 	title="Overview"
 	description="Set the restaurant up, then keep it running. This surface is online only — the POS keeps selling when the connection drops, and this one does not pretend to."
-/>
-
-<div class="flex max-w-6xl flex-col gap-10 px-4 pt-8 pb-16 lg:px-7">
-	{#if data.flaggedCount > 0}
-		<Alert tone="info">
-			<span aria-hidden="true" class="text-st-offline font-mono">◆</span>
-			{data.flaggedCount} sales await your review —
-			<a href={resolve('/reports/flagged')} class="text-accent underline underline-offset-2"
-				>Review them</a
+>
+	{#snippet actions()}
+		<p
+			class="rounded-control border-line bg-raise-2 text-caption text-ink-2 flex items-center gap-2 border px-3 py-2"
+		>
+			<Icon name="calendar" class="size-4" />
+			<span
+				><span class="sr-only">Local date: </span>{localDate} ·
+				<span class="font-mono tabular-nums">{localTime}</span> · {tz}</span
 			>
-		</Alert>
+		</p>
+	{/snippet}
+</PageHeader>
+
+<PageBody>
+	{#if data.flaggedCount > 0}
+		<!-- A STANDING notice: role="status" (Callout owns the glyph), never an alert. -->
+		<Callout title={`${data.flaggedCount} sales await your review`}>
+			{#snippet action()}
+				<Button variant="primary" href={resolve('/reports/flagged')}>
+					<Icon name="arrow-right" class="size-4" />Review them
+				</Button>
+			{/snippet}
+		</Callout>
 	{/if}
-	<!-- WHAT IS TRUE RIGHT NOW. Every figure below is read from the database or
-	     computed from the restaurant's own time zone on this render — none of it is
-	     a placeholder, and none of it is money. Takings, covers and stock are the
-	     numbers an owner actually wants here, and they are absent on purpose: no
-	     order, invoice or stock movement exists yet, and a zero on a dashboard is
+
+	<!-- WHAT IS TRUE RIGHT NOW. Every figure below is read from the database on
+	     this render — none of it is a placeholder, and none of it is money. Takings,
+	     covers and stock are absent on purpose: a zero on a dashboard is
 	     indistinguishable from a broken query. They arrive with their features. -->
-	<section class="flex flex-col gap-4">
-		<h3 class="sr-only">At a glance</h3>
-		<dl class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-			<div class="bg-raise border-line rounded-card shadow-flat flex flex-col gap-1 border p-4">
-				<dt class="text-eyebrow text-ink-3 uppercase">Local date</dt>
-				<dd class="text-section">{localDate}</dd>
-				<dd class="text-caption text-ink-2 font-mono tabular-nums">{localTime} · {tz}</dd>
-			</div>
-			<div class="bg-raise border-line rounded-card shadow-flat flex flex-col gap-1 border p-4">
-				<dt class="text-eyebrow text-ink-3 uppercase">Setup</dt>
-				<dd class="text-section font-mono font-medium tabular-nums">
-					{doneCount} of {steps.length}
-				</dd>
-				<dd class="text-caption text-ink-2">steps complete</dd>
-			</div>
-			<div class="bg-raise border-line rounded-card shadow-flat flex flex-col gap-1 border p-4">
-				<dt class="text-eyebrow text-ink-3 uppercase">Recorded events</dt>
-				<dd class="text-section font-mono font-medium tabular-nums">{data.activity.length}</dd>
-				<dd class="text-caption text-ink-2">most recent shown below</dd>
-			</div>
-			<div class="bg-raise border-line rounded-card shadow-flat flex flex-col gap-1 border p-4">
-				<dt class="text-eyebrow text-ink-3 uppercase">Selling</dt>
-				<dd class="text-section flex items-center gap-2">
+	<section aria-labelledby="glance-h">
+		<h3 id="glance-h" class="sr-only">At a glance</h3>
+		<dl class="grid gap-3 sm:grid-cols-3">
+			<StatTile label="Setup" numeric caption="steps complete">
+				{doneCount} of {steps.length}
+			</StatTile>
+			<StatTile label="Recorded events" numeric caption="most recent shown below">
+				{data.activity.length}
+			</StatTile>
+			<StatTile label="Selling" caption="no POS session has been opened">
+				<span class="flex items-center gap-2">
 					<!-- Colour never alone: the glyph and the word both say it. -->
 					<span aria-hidden="true" class="text-st-offline font-mono">◆</span>
 					<span>Not yet</span>
-				</dd>
-				<dd class="text-caption text-ink-2">no POS session has been opened</dd>
-			</div>
+				</span>
+			</StatTile>
 		</dl>
 	</section>
 
-	<!-- REAL ROWS from the append-only audit log, scoped to this restaurant in the
-	     query. `details` never leaves the server: it carries the email a login was
-	     tried with and the old and new values of a settings change, and a dashboard
-	     has no reason to broadcast either. -->
-	<section class="flex flex-col gap-4">
-		<div class="flex flex-col gap-2">
-			<p class="text-eyebrow text-ink-3 uppercase">Activity</p>
-			<h3 class="text-title">What has happened</h3>
-			<p class="text-body text-ink-2 max-w-measure">
-				Every sensitive action is recorded and none of these rows can be edited or deleted — a
-				correction is a new record, never a rewrite.
-			</p>
-		</div>
-
-		<Card>
+	<div class="grid items-start gap-6 xl:grid-cols-5">
+		<!-- REAL ROWS from the append-only audit log, scoped to this restaurant in the
+		     query. `details` never leaves the server: it carries the email a login was
+		     tried with and the old and new values of a settings change, and a
+		     dashboard has no reason to broadcast either. -->
+		<section
+			aria-labelledby="activity-h"
+			class="rounded-card border-line bg-raise shadow-card border xl:col-span-3"
+		>
+			<div
+				class="border-line-soft flex flex-wrap items-end justify-between gap-x-4 gap-y-1 border-b px-6 py-4"
+			>
+				<div class="flex flex-col gap-1">
+					<p class="text-eyebrow text-ink-3 uppercase">Activity</p>
+					<h3 id="activity-h" class="text-section">What has happened</h3>
+				</div>
+				<p class="text-caption text-ink-2 max-w-measure">
+					Every sensitive action is recorded and none of these rows can be edited or deleted — a
+					correction is a new record, never a rewrite.
+				</p>
+			</div>
 			{#if activity.length === 0}
-				<p class="text-body text-ink-2">Nothing recorded yet.</p>
+				<p class="text-body text-ink-2 px-6 py-4">Nothing recorded yet.</p>
 			{:else}
-				<ul class="divide-line-soft -my-2 flex list-none flex-col divide-y p-0">
+				<ul class="divide-line-soft flex list-none flex-col divide-y px-6">
 					{#each activity as row, i (i)}
-						<li class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-3">
+						<li class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 py-2.5">
 							<span class="text-body">{row.text}</span>
 							<span class="text-caption text-ink-2 flex items-baseline gap-3">
 								{#if row.actor}<span>{row.actor}</span>{/if}
@@ -194,83 +207,82 @@
 					{/each}
 				</ul>
 			{/if}
-		</Card>
-	</section>
+		</section>
 
-	<section class="max-w-measure flex flex-col gap-5">
-		<div class="flex flex-col gap-2">
-			<p class="text-eyebrow text-ink-3 uppercase">Onboarding</p>
-			<h3 class="text-title">Getting set up</h3>
-			<p class="text-body text-ink-2">
-				Work down this list in order. Finish the settings, then add your employees, then build the
-				menu. Nothing below is faked: only the first step can be checked, because only its feature
-				exists.
-			</p>
-		</div>
+		<section
+			aria-labelledby="setup-h"
+			class="rounded-card border-line bg-raise shadow-card flex flex-col gap-4 border p-6 xl:col-span-2"
+		>
+			<div class="flex flex-col gap-1">
+				<p class="text-eyebrow text-ink-3 uppercase">Onboarding</p>
+				<h3 id="setup-h" class="text-section">Getting set up</h3>
+				<p class="text-caption text-ink-2">
+					Work down this list in order. Finish the settings, then add your employees, then build the
+					menu. Nothing below is faked.
+				</p>
+			</div>
 
-		<!-- PROGRESS IN WORDS FIRST. The count is the signal; the bar repeats it for
-		     anyone reading the shape rather than the sentence, and is aria-hidden so a
-		     screen reader hears the count once. Colour never carries meaning alone. -->
-		<div class="flex flex-wrap items-center gap-3">
-			<span aria-hidden="true" class="flex gap-1">
-				{#each steps as step (step.label)}
-					<span class={`h-1.5 w-9 rounded-full ${step.done ? 'bg-ok' : 'bg-line'}`}></span>
-				{/each}
-			</span>
-			<span class="text-caption text-ink-2 font-mono tabular-nums">
-				{doneCount} of {steps.length} done
-			</span>
-		</div>
+			<!-- PROGRESS IN WORDS FIRST. The count is the signal; the bar repeats it for
+			     anyone reading the shape rather than the sentence, and is aria-hidden so
+			     a screen reader hears the count once. -->
+			<div class="flex items-center gap-3">
+				<span aria-hidden="true" class="flex flex-1 gap-1">
+					{#each steps as step (step.label)}
+						<span class={`h-1.5 flex-1 rounded-full ${step.done ? 'bg-ok' : 'bg-line'}`}></span>
+					{/each}
+				</span>
+				<span class="text-caption text-ink-2 font-mono tabular-nums">
+					{doneCount} of {steps.length} done
+				</span>
+			</div>
 
-		<!-- ONE Card holding the rows. Cards do not nest inside cards, so each step is
-		     a plain <li> with a divider, not a second Card. The <ol> stays so the
-		     sequence is exposed as an ordered list. -->
-		<Card>
+			<!-- The <ol> stays so the sequence is exposed as an ordered list. Each step
+			     is a plain <li> with a divider: cards do not nest inside cards. -->
 			<ol class="divide-line-soft flex flex-col divide-y">
 				{#each steps as step (step.label)}
-					<li class="flex items-start gap-3.5 py-4 first:pt-0 last:pb-0">
+					<li class="flex items-start gap-3 py-3">
 						<!--
-							A GLYPH as well as a colour. Colour never carries meaning alone
-							(WCAG 1.4.1; roughly one man in twelve has red-green CVD). StatusMark
-							is passed NO label: the screen-reader string and the visible badge
-							below are owned by this page and are asserted by the e2e journey. The
-							chip around it is this page's layout, not StatusMark's business.
+							A GLYPH as well as a colour (WCAG 1.4.1). StatusMark is passed NO
+							label: the screen-reader string and the visible badge below are owned
+							by this page and are asserted by the e2e journey.
 						-->
 						<span
 							class={`grid size-7 flex-none place-items-center rounded-full ${step.done ? 'bg-ok-bg' : 'bg-bg-2'}`}
 						>
 							<StatusMark status={step.done ? 'done' : 'not-started'} />
 						</span>
-						<div class="flex min-w-0 flex-col gap-0.5">
-							<div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+						<div class="flex min-w-0 flex-1 flex-col gap-0.5">
+							<div class="flex items-baseline justify-between gap-3">
 								<!-- font-sans overrides the base layer's display face: a six-row
-								     checklist reads as a list of things to do, not as six headings. -->
-								<h4 class="text-section text-ink font-sans">
+								     checklist reads as a list of things to do, not six headings. -->
+								<h4 class="text-ink font-sans text-sm font-semibold">
 									{step.label}<span class="sr-only"> — {step.done ? 'done' : 'not started'}</span>
 								</h4>
 								<!--
-									aria-hidden, and it must stay that way: the heading's sr-only span
-									already carries the state, so an announced badge would say it twice.
-									The DOM text is the lowercase literal `not started` — e2e/auth.spec.ts
-									asserts getByText('not started', { exact: true }) resolves to exactly
-									six elements on a freshly registered restaurant. `uppercase` changes the rendering only; a capitalised
-									string in the markup would break the count.
+									The badge is on EVERY step, and aria-hidden: the heading's sr-only
+									span already carries the state. The DOM text is the lowercase
+									literal `not started` — e2e/auth.spec.ts asserts
+									getByText('not started', { exact: true }) resolves to exactly six
+									elements on a freshly registered restaurant. `uppercase` changes the
+									rendering only.
 								-->
 								<span
 									aria-hidden="true"
-									class={`text-eyebrow font-mono whitespace-nowrap uppercase ${step.done ? 'text-ok' : 'text-ink-2'}`}
+									class={`text-eyebrow flex-none font-mono whitespace-nowrap uppercase ${step.done ? 'text-ok' : 'text-ink-2'}`}
 									>{step.done ? 'done' : 'not started'}</span
 								>
 							</div>
-							<p class="text-caption text-ink-2">{step.detail}</p>
+							<!-- Its link or its detail: a done step with a link needs no detail;
+							     an unfinished one says what is still needed. -->
+							{#if !step.done || !step.href}
+								<p class="text-caption text-ink-2">{step.detail}</p>
+							{/if}
 							{#if step.href}
-								<!-- The cast is the union of the hrefs the steps array holds, and each
-								     linked step carries its own cta. A later step extends this shape
-								     rather than inventing a second one. -->
-
+								<!-- The cast is the union of the hrefs the steps array holds, and
+								     each linked step carries its own cta. -->
 								<a
 									href={resolve(step.href as '/settings' | '/employees' | '/menu' | '/device')}
-									class="text-caption text-accent mt-1 self-start font-medium underline underline-offset-2"
+									class="text-caption text-accent self-start font-medium underline underline-offset-2"
 								>
 									{step.cta}
 								</a>
@@ -279,13 +291,12 @@
 					</li>
 				{/each}
 			</ol>
-		</Card>
-	</section>
-</div>
+		</section>
+	</div>
+</PageBody>
 
 <!--
-	NO MONEY FIGURES AT ALL — not revenue, not today's takings, not a zero. The
-	money module does not exist, the UI never does money arithmetic, and a zero on
-	a dashboard is indistinguishable from a broken query. Sales reports arrive with
-	their own plan and their own formatter.
+	NO MONEY FIGURES AT ALL — not revenue, not today's takings, not a zero. The UI
+	never does money arithmetic, and a zero on a dashboard is indistinguishable from
+	a broken query. Sales figures live on /reports with their own formatter.
 -->

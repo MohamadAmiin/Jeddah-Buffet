@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { enhance } from '$app/forms';
 	import { page } from '$app/state';
@@ -6,7 +7,10 @@
 		Alert,
 		Button,
 		Card,
+		CreatePanel,
 		Field,
+		PageBody,
+		PageColumns,
 		PageHeader,
 		PinField,
 		SelectField,
@@ -17,6 +21,29 @@
 	let { data, form } = $props();
 
 	const tone = $derived(page.status === 200 ? 'success' : 'danger');
+
+	// The create panel is open below xl when the URL asks for it (?add=1), when the
+	// list is empty, or when this page's one form has just produced a result —
+	// success or failure — so the outcome is on screen with or without JavaScript.
+	let opened = $state(false);
+	const asideOpen = $derived(
+		opened ||
+			page.url.searchParams.get('add') === '1' ||
+			data.employees.length === 0 ||
+			form?.message !== undefined
+	);
+
+	async function openPanel(event: MouseEvent) {
+		event.preventDefault();
+		opened = true;
+		await tick();
+		document.getElementById('displayName')?.focus();
+	}
+
+	const activeCount = $derived(data.employees.filter((employee) => employee.isActive).length);
+	const peopleCaption = $derived(
+		`${data.employees.length} ${data.employees.length === 1 ? 'person' : 'people'} · ${activeCount} active`
+	);
 
 	const columns = [
 		{ key: 'name', label: 'Name' },
@@ -45,26 +72,26 @@
 	description="The people who sign in at the till, what each may do there, and the PIN each one types. The owner's PIN also approves refunds, voids and the other sensitive actions."
 >
 	{#snippet actions()}
-		<Button href="/employees/roles" variant="secondary">Manage roles</Button>
+		<Button href={resolve('/employees/roles')}>Manage roles</Button>
+		<Button href="?add=1#add-employee" variant="primary" class="xl:hidden" onclick={openPanel}>
+			Add an employee
+		</Button>
 	{/snippet}
 </PageHeader>
 
-<div class="flex flex-col gap-5 px-4 pt-8 pb-16 lg:px-7">
-	{#if form?.message}
-		<div class="max-w-form">
-			<Alert {tone}>{form.message}</Alert>
-		</div>
-	{/if}
-
-	<Card class="max-w-page">
-		<div class="flex flex-col gap-2">
-			<h3 class="text-ink font-semibold">Staff</h3>
+<PageBody>
+	<PageColumns collapsible {asideOpen}>
+		<Card class="flex flex-col gap-2">
+			<div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+				<h3 id="staff-h" class="text-section">Staff</h3>
+				<p class="text-caption text-ink-2">{peopleCaption}</p>
+			</div>
 
 			<Table
 				caption="Staff"
 				{columns}
 				rows={data.employees}
-				empty="No staff yet. Add the first person below."
+				empty="No staff yet. Add the first person with Add an employee."
 			>
 				{#snippet cell(employee, key)}
 					{#if key === 'name'}
@@ -106,46 +133,50 @@
 					{/if}
 				{/snippet}
 			</Table>
-		</div>
-	</Card>
+		</Card>
 
-	<Card class="max-w-form">
-		<form method="POST" action="?/createEmployee" class="flex flex-col gap-5" use:enhance>
-			<h3 class="text-ink font-semibold">Add an employee</h3>
+		{#snippet aside()}
+			<CreatePanel id="add-employee" title="Add an employee" icon="user-plus">
+				<form method="POST" action="?/createEmployee" class="flex flex-col gap-4" use:enhance>
+					{#if form?.message}
+						<Alert {tone}>{form.message}</Alert>
+					{/if}
 
-			<Field id="displayName" name="displayName" label="Name" required />
+					<Field id="displayName" name="displayName" label="Name" required />
 
-			{#if data.roles.length > 0}
-				<SelectField
-					id="roleId"
-					name="roleId"
-					label="Role"
-					placeholder="Choose a role"
-					options={data.roles.map((role) => ({
-						value: role.id,
-						label: role.name
-					}))}
-					hint="What a role may do at the till is set under Manage roles."
-					required
-				/>
-			{:else}
-				<SelectField
-					id="roleId"
-					name="roleId"
-					label="Role"
-					placeholder="Choose a role"
-					options={[]}
-					disabled
-					disabledReason="Create a role first"
-					hint="Create a role first under Manage roles."
-				/>
-			{/if}
+					{#if data.roles.length > 0}
+						<SelectField
+							id="roleId"
+							name="roleId"
+							label="Role"
+							placeholder="Choose a role"
+							options={data.roles.map((role) => ({
+								value: role.id,
+								label: role.name
+							}))}
+							hint="What a role may do at the till is set under Manage roles."
+							required
+						/>
+					{:else}
+						<SelectField
+							id="roleId"
+							name="roleId"
+							label="Role"
+							placeholder="Choose a role"
+							options={[]}
+							disabled
+							disabledReason="Create a role first"
+							hint="Create a role first under Manage roles."
+						/>
+					{/if}
 
-			<PinField id="new-employee-pin" name="pin" label="PIN" hint="4 to 6 digits." required />
+					<PinField id="new-employee-pin" name="pin" label="PIN" hint="4 to 6 digits." required />
 
-			<div>
-				<Button type="submit" variant="primary">Create employee</Button>
-			</div>
-		</form>
-	</Card>
-</div>
+					<div>
+						<Button type="submit" variant="primary">Create employee</Button>
+					</div>
+				</form>
+			</CreatePanel>
+		{/snippet}
+	</PageColumns>
+</PageBody>

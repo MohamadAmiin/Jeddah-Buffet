@@ -54,7 +54,10 @@ export async function createEmployee(
 	page: Page,
 	employee: { displayName: string; role: 'cashier' | 'waiter'; pin: string }
 ): Promise<void> {
-	await page.getByRole('link', { name: 'Employees', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Employees', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/employees$/);
 	await page.getByLabel('Name', { exact: true }).fill(employee.displayName);
 	await page
@@ -169,7 +172,10 @@ export async function completeSettings(
 		idleSeconds: number;
 	}
 ): Promise<void> {
-	await page.getByRole('link', { name: 'Settings', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Settings', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/settings$/);
 	await page.getByLabel('Tax mode').fill(s.taxMode);
 	await page.getByLabel('Tax rate (basis points)').fill(String(s.taxRateBp));
@@ -177,7 +183,10 @@ export async function completeSettings(
 	await page.getByRole('button', { name: 'Save settings' }).click();
 	await expect(page.getByRole('alert')).toContainText('Settings saved.');
 
-	await page.getByRole('link', { name: 'POS device', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'POS device', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/device$/);
 	await page.getByLabel('Auto-lock after (seconds)').fill(String(s.idleSeconds));
 	await page.getByRole('button', { name: 'Save auto-lock' }).click();
@@ -185,7 +194,10 @@ export async function completeSettings(
 }
 
 export async function createCategory(page: Page, name: string): Promise<void> {
-	await page.getByRole('link', { name: 'Menu', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Menu', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/menu$/);
 	await page.getByLabel('Category name').fill(name);
 	await page.getByRole('button', { name: 'Add category' }).click();
@@ -209,7 +221,10 @@ export async function createMenuItem(
 		photo?: { name: string; mimeType: string; buffer: Buffer };
 	}
 ): Promise<void> {
-	await page.getByRole('link', { name: 'Menu', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Menu', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/menu$/);
 	await page.getByRole('button', { name: 'Add item', exact: true }).click();
 	await page.getByLabel('Item name').fill(item.name);
@@ -305,7 +320,10 @@ export async function createIngredient(
 	page: Page,
 	i: { name: string; baseUnit: string; unit: { name: string; baseQtyPerUnit: string } }
 ): Promise<void> {
-	await page.getByRole('link', { name: 'Inventory', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Inventory', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/inventory$/);
 	await page.getByLabel('Name', { exact: true }).fill(i.name);
 	await page.getByLabel('Base unit', { exact: true }).fill(i.baseUnit);
@@ -322,7 +340,10 @@ export async function setRecipe(
 	page: Page,
 	r: { itemName: string; rows: { ingredientName: string; qty: string }[] }
 ): Promise<void> {
-	await page.getByRole('link', { name: 'Inventory', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Inventory', exact: true })
+		.click();
 	await page.getByRole('link', { name: 'Recipes', exact: true }).click();
 	await expect(page).toHaveURL(/\/inventory\/recipes/);
 	await page.getByRole('link', { name: r.itemName, exact: true }).click();

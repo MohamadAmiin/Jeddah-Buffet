@@ -196,7 +196,10 @@ test('receipts, kitchen tickets and the drawer: cash prints, a reprint is COPY, 
 		currency: 'USD',
 		idleSeconds: 300
 	});
-	await page.getByRole('link', { name: 'Settings', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Settings', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/settings$/);
 	await page.getByLabel('Address').fill('Makka Al-Mukarama Rd, Km4');
 	await page.getByLabel('Phone').fill('61 555 0142');
@@ -222,7 +225,10 @@ test('receipts, kitchen tickets and the drawer: cash prints, a reprint is COPY, 
 	await expect(burgerTile).toContainText('Modifiers: Extras');
 
 	// 3. The owner's own PIN, a cashier, and the till.
-	await page.getByRole('link', { name: 'Employees', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Employees', exact: true })
+		.click();
 	await page.getByRole('link', { name: /The Owner/ }).click();
 	await expect(page).toHaveURL(/\/employees\/[0-9a-f-]+$/);
 	await page.getByLabel('New PIN').fill(OWNER_PIN);

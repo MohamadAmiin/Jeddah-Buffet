@@ -7,6 +7,8 @@
 		Button,
 		Card,
 		Field,
+		PageBody,
+		PageColumns,
 		PageHeader,
 		PinField,
 		SelectField,
@@ -16,6 +18,17 @@
 	let { data, form } = $props();
 
 	const tone = $derived(page.status === 200 ? 'success' : 'danger');
+
+	// Which form produced `form`: an outcome renders inside the card of the form
+	// that was submitted. With JavaScript the enhance callback records the action;
+	// without it, the POST lands on this URL with the action as its search.
+	let submitted = $state<string | null>(null);
+	const lastAction = $derived(submitted ?? page.url.search);
+	function track({ action }: { action: URL }) {
+		submitted = action.search;
+	}
+	const resultIn = (actions: string[]) =>
+		form?.message !== undefined && actions.some((name) => lastAction === `?/${name}`);
 
 	function formatLockedUntil(value: Date | string, timeZone: string): string {
 		return new Intl.DateTimeFormat('en-GB', {
@@ -42,145 +55,166 @@
 </svelte:head>
 
 <PageHeader
-	eyebrow="Employees"
+	crumbs={[{ label: 'Employees', href: resolve('/employees') }]}
 	title={data.employee.displayName}
 	description={isOwner ? 'Owner · holds every permission' : (data.employee.roleName ?? 'Staff')}
->
-	{#snippet actions()}
-		<Button href={resolve('/employees')} variant="ghost">All employees</Button>
-	{/snippet}
-</PageHeader>
+/>
 
-<div class="flex flex-col gap-5 px-4 pt-8 pb-16 lg:px-7">
-	{#if form?.message}
-		<div class="max-w-form">
-			<Alert {tone}>{form.message}</Alert>
-		</div>
-	{/if}
+<PageBody>
+	<PageColumns>
+		{#if !isOwner}
+			<Card>
+				<form
+					method="POST"
+					action="?/update"
+					class="flex flex-col gap-4"
+					use:enhance={(input) => {
+						track(input);
+						return async ({ update }) => {
+							await update({ reset: false });
+						};
+					}}
+				>
+					<h3 class="text-section">Details</h3>
 
-	{#if !isOwner}
-		<Card class="max-w-form">
-			<form method="POST" action="?/update" class="flex flex-col gap-5" use:enhance>
-				<h3 class="text-ink font-semibold">Details</h3>
+					{#if resultIn(['update'])}
+						<Alert {tone}>{form?.message}</Alert>
+					{/if}
 
-				<Field
-					id="displayName"
-					name="displayName"
-					label="Name"
-					value={data.employee.displayName}
-					required
+					<div class="grid gap-4 md:grid-cols-2">
+						<Field
+							id="displayName"
+							name="displayName"
+							label="Name"
+							value={data.employee.displayName}
+							required
+						/>
+
+						<SelectField
+							id="roleId"
+							name="roleId"
+							label="Role"
+							value={data.employee.roleId ?? ''}
+							options={roleOptions}
+							placeholder="Choose a role"
+							required
+						/>
+					</div>
+
+					<div>
+						<Button type="submit" variant="primary">Save</Button>
+					</div>
+				</form>
+			</Card>
+		{:else}
+			<Card class="flex flex-col gap-2">
+				<h3 class="text-section">Details</h3>
+				<p class="text-ink-2 text-sm">The owner's name is changed on Settings.</p>
+			</Card>
+		{/if}
+
+		<Card class="flex flex-col gap-4">
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<h3 class="text-section">PIN</h3>
+				<StatusMark
+					status={data.employee.hasPin ? 'done' : 'not-started'}
+					label={data.employee.hasPin ? 'PIN set' : 'No PIN yet'}
 				/>
-
-				<SelectField
-					id="roleId"
-					name="roleId"
-					label="Role"
-					value={data.employee.roleId ?? ''}
-					options={roleOptions}
-					placeholder="Choose a role"
-					required
-				/>
-
-				<div>
-					<Button type="submit" variant="primary">Save</Button>
-				</div>
-			</form>
-		</Card>
-	{:else}
-		<Card class="max-w-form">
-			<h3 class="text-ink font-semibold">Details</h3>
-			<p class="text-ink-2 mt-2 text-sm">The owner's name is changed on Settings.</p>
-		</Card>
-	{/if}
-
-	<Card class="max-w-form">
-		<div class="flex flex-col gap-5">
-			<div>
-				<h3 class="text-ink font-semibold">PIN</h3>
-
-				<div class="mt-2">
-					<StatusMark
-						status={data.employee.hasPin ? 'done' : 'not-started'}
-						label={data.employee.hasPin ? 'PIN set' : 'No PIN yet'}
-					/>
-				</div>
 			</div>
 
-			<form method="POST" action="?/setPin" class="flex flex-col gap-5" use:enhance>
+			<form method="POST" action="?/setPin" class="flex flex-col gap-4" use:enhance={track}>
+				{#if resultIn(['setPin'])}
+					<Alert {tone}>{form?.message}</Alert>
+				{/if}
+
 				<PinField id="new-pin" name="pin" label="New PIN" hint="4 to 6 digits." required />
 
 				<div>
-					<Button type="submit" variant="secondary">Set PIN</Button>
+					<Button type="submit">Set PIN</Button>
 				</div>
 			</form>
+		</Card>
 
-			<div class="border-line flex flex-col gap-3 border-t pt-4">
-				{#if data.employee.lockedUntil}
-					<div class="flex flex-wrap items-center gap-2">
+		{#snippet aside()}
+			<Card class="flex flex-col gap-4">
+				<h3 class="text-section">Status</h3>
+
+				{#if resultIn(['clearLockout', 'deactivate', 'reactivate'])}
+					<Alert {tone}>{form?.message}</Alert>
+				{/if}
+
+				{#if !isOwner}
+					<StatusMark
+						status={data.employee.isActive ? 'done' : 'not-started'}
+						label={data.employee.isActive ? 'Active' : 'Inactive'}
+					/>
+				{/if}
+
+				<div class="flex flex-col gap-3">
+					{#if data.employee.lockedUntil}
 						<StatusMark
 							status="blocked"
 							label={`Locked until ${formatLockedUntil(data.employee.lockedUntil, data.timeZone)} after 5 wrong attempts`}
 						/>
 
-						<form method="POST" action="?/clearLockout" use:enhance>
-							<Button type="submit" variant="secondary">Clear lockout</Button>
+						<form method="POST" action="?/clearLockout" use:enhance={track}>
+							<Button type="submit">Clear lockout</Button>
 						</form>
-					</div>
-				{:else if data.employee.failedPinCount > 0}
-					<div class="flex flex-wrap items-center gap-2">
+					{:else if data.employee.failedPinCount > 0}
 						<span class="text-ink-2 text-sm">
 							{data.employee.failedPinCount} wrong attempts so far
 						</span>
 
-						<form method="POST" action="?/clearLockout" use:enhance>
-							<Button type="submit" variant="secondary">Clear lockout</Button>
+						<form method="POST" action="?/clearLockout" use:enhance={track}>
+							<Button type="submit">Clear lockout</Button>
 						</form>
-					</div>
-				{:else}
-					<p class="text-ink-2 text-sm">No lockout.</p>
-				{/if}
-			</div>
-		</div>
-	</Card>
+					{:else}
+						<p class="text-ink-2 text-sm">No lockout.</p>
+					{/if}
+				</div>
 
-	{#if !isOwner}
-		<Card class="max-w-form">
-			<div class="flex flex-col gap-5">
-				<h3 class="text-ink font-semibold">Status</h3>
+				{#if !isOwner}
+					<div class="border-line-soft flex flex-col gap-3 border-t pt-4">
+						{#if data.employee.isActive}
+							<p class="text-ink-2 text-sm">
+								They disappear from the till the next time it loads the staff list; nothing they did
+								is deleted.
+							</p>
 
-				{#if data.employee.isActive}
-					<StatusMark status="done" label="Active" />
+							<form method="POST" action="?/deactivate" use:enhance={track}>
+								<Button type="submit" variant="danger">Deactivate</Button>
+							</form>
+						{:else}
+							<form
+								method="POST"
+								action="?/reactivate"
+								class="flex flex-col gap-3"
+								use:enhance={track}
+							>
+								{#if data.employee.roleArchived}
+									<SelectField
+										id="reactivate-roleId"
+										name="roleId"
+										label="Role"
+										options={roleOptions.filter((role) => !role.disabled)}
+										placeholder="Choose a role"
+										hint={`${data.employee.roleName} is archived; choose a role to reactivate.`}
+										required
+									/>
+								{/if}
 
-					<form method="POST" action="?/deactivate" use:enhance>
-						<Button type="submit" variant="danger">Deactivate</Button>
-					</form>
+								<p class="text-ink-2 text-sm">
+									They return to the till the next time it loads the staff list.
+								</p>
 
-					<p class="text-ink-2 text-sm">
-						They disappear from the till the next time it loads the staff list; nothing they did is
-						deleted.
-					</p>
-				{:else}
-					<StatusMark status="not-started" label="Inactive" />
-
-					<form method="POST" action="?/reactivate" class="flex flex-col gap-5" use:enhance>
-						{#if data.employee.roleArchived}
-							<SelectField
-								id="reactivate-roleId"
-								name="roleId"
-								label="Role"
-								options={roleOptions.filter((role) => !role.disabled)}
-								placeholder="Choose a role"
-								hint={`${data.employee.roleName} is archived; choose a role to reactivate.`}
-								required
-							/>
+								<div>
+									<Button type="submit">Reactivate</Button>
+								</div>
+							</form>
 						{/if}
-
-						<div>
-							<Button type="submit" variant="secondary">Reactivate</Button>
-						</div>
-					</form>
+					</div>
 				{/if}
-			</div>
-		</Card>
-	{/if}
-</div>
+			</Card>
+		{/snippet}
+	</PageColumns>
+</PageBody>

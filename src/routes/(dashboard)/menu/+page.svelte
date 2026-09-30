@@ -21,7 +21,15 @@
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import type { SubmitFunction } from '@sveltejs/kit';
-	import { Alert, Button, Card, Field, PageHeader, SelectField } from '$lib/components/ui';
+	import {
+		Alert,
+		Button,
+		Card,
+		Field,
+		PageBody,
+		PageHeader,
+		SelectField
+	} from '$lib/components/ui';
 	import { resizePhoto } from '$lib/image-resize';
 
 	let { data, form } = $props();
@@ -29,6 +37,52 @@
 
 	// Tone follows the outcome: page.status is 400 after a fail() and 200 otherwise.
 	const tone = $derived(page.status === 200 ? 'success' : 'danger');
+
+	// WHICH form produced `form.message`, so its Alert renders inside the card of
+	// that form (docs/redesign section 11) rather than at the top of the page. The
+	// actions return only { message }, so the page tracks the source itself: an
+	// enhanced submit records it through `from()` (which returns nothing, so
+	// enhance keeps its default behaviour), and a no-JavaScript POST leaves the
+	// action name in the URL (`?/createCategory`). Still EXACTLY ONE role="alert":
+	// only the matching card renders the message.
+	type Source = 'panel' | 'tile' | 'categories' | 'addCategory' | 'addGroup' | 'addModifier';
+	const SOURCE_OF: Record<string, Source> = {
+		createItem: 'panel',
+		updateItem: 'panel',
+		removeImage: 'panel',
+		linkGroup: 'panel',
+		unlinkGroup: 'panel',
+		archiveItem: 'panel',
+		setImage: 'panel',
+		setAvailability: 'tile',
+		renameCategory: 'categories',
+		archiveCategory: 'categories',
+		createCategory: 'addCategory',
+		createModifierGroup: 'addGroup',
+		createModifier: 'addModifier'
+	};
+	let submitted = $state<{ source: Source; itemId: string | null } | null>(null);
+	const fromUrl = $derived(
+		page.url.search.startsWith('?/') ? (SOURCE_OF[page.url.search.slice(2)] ?? null) : null
+	);
+	const origin = $derived(
+		submitted ?? (fromUrl ? { source: fromUrl, itemId: null } : { source: 'panel', itemId: null })
+	);
+	/** The outcome for one card, or '' when another form produced it. */
+	const messageFor = (source: Source, itemId: string | null = null): string => {
+		if (!form?.message) return '';
+		// A no-JavaScript availability toggle does not say which tile: the panel shows it.
+		const where =
+			origin.source === 'tile' && origin.itemId === null
+				? { source: 'panel', itemId: null }
+				: origin;
+		return where.source === source && where.itemId === itemId ? form.message : '';
+	};
+	const from =
+		(source: Source, itemId: string | null = null): SubmitFunction =>
+		() => {
+			submitted = { source, itemId };
+		};
 
 	// No currency, no exponent, no way to read a typed price: the gate the server
 	// enforces, said on screen beside every control it disables.
@@ -124,6 +178,7 @@
 	// The item fields go first; the photo follows in its own request, only once
 	// the server has answered success and given (or confirmed) the item's id.
 	const submitItem: SubmitFunction = ({ formData }) => {
+		submitted = { source: 'panel', itemId: null };
 		formData.delete('image');
 		const held = photoBlob;
 		const editedId = editing?.id ?? null;
@@ -202,14 +257,9 @@
 	{/snippet}
 </PageHeader>
 
-<div class="flex flex-col gap-5 px-4 pt-8 pb-16 lg:px-7">
-	<!-- EXACTLY ONE role="alert" region: the form's message, and nothing else. -->
-	{#if form?.message}
-		<div class="max-w-form">
-			<Alert {tone}>{form.message}</Alert>
-		</div>
-	{/if}
-
+<PageBody>
+	<!-- EXACTLY ONE role="alert" region: the form's message, inside the card of
+	     the form that produced it (messageFor), and nothing else. -->
 	{#if !ready}
 		<Card class="max-w-form">
 			<p class="text-ink-2">
@@ -253,7 +303,7 @@
 
 	<div class="grid gap-6 lg:grid-cols-3">
 		<!-- The photo grid: tiles on the page ground, so nothing nests in a card. -->
-		<div class="flex flex-col gap-4 lg:col-span-2">
+		<div class="flex min-w-0 flex-col gap-4 lg:col-span-2">
 			{#if data.items.length === 0}
 				<p class="text-ink-2">
 					<span aria-hidden="true" class="font-mono">○</span>
@@ -330,6 +380,9 @@
 								<a class="text-ink underline" href={recipeHref('item', item.id)}>Edit recipe</a>
 								<!-- eslint-enable svelte/no-navigation-without-resolve -->
 							</div>
+							{#if messageFor('tile', item.id)}
+								<Alert {tone}>{messageFor('tile', item.id)}</Alert>
+							{/if}
 							<div class="flex flex-wrap items-center justify-between gap-2">
 								{#if item.isAvailable}
 									<span class="text-ok"
@@ -341,7 +394,11 @@
 									>
 								{/if}
 								<div class="flex flex-wrap gap-2">
-									<form method="POST" action="?/setAvailability" use:enhance>
+									<form
+										method="POST"
+										action="?/setAvailability"
+										use:enhance={from('tile', item.id)}
+									>
 										<input type="hidden" name="itemId" value={item.id} />
 										<input type="hidden" name="available" value={item.isAvailable ? 'no' : 'yes'} />
 										<Button type="submit" variant="secondary">
@@ -363,8 +420,13 @@
 		</div>
 
 		<!-- THE panel: one Card, sticky beside the grid on wide screens. -->
-		<div bind:this={panel} class="self-start lg:sticky lg:top-6">
+		<div bind:this={panel} class="min-w-0 self-start lg:sticky lg:top-6">
 			<Card>
+				{#if messageFor('panel')}
+					<div class="mb-4">
+						<Alert {tone}>{messageFor('panel')}</Alert>
+					</div>
+				{/if}
 				{#key editing?.id ?? 'add'}
 					<!-- multipart: the form holds a file input, and SvelteKit's enhance refuses
 					     to submit such a form in dev without it. The photo is still deleted
@@ -465,7 +527,7 @@
 					{#if mode === 'edit' && editing}
 						<div class="border-line mt-4 flex flex-col gap-4 border-t pt-4">
 							{#if editing.imageUrl}
-								<form method="POST" action="?/removeImage" use:enhance>
+								<form method="POST" action="?/removeImage" use:enhance={from('panel')}>
 									<input type="hidden" name="itemId" value={editing.id} />
 									<Button type="submit" variant="secondary">Remove photo</Button>
 								</form>
@@ -480,7 +542,7 @@
 									{#each editing.groupIds as groupId (groupId)}
 										<li class="flex items-center justify-between gap-2">
 											<span class="text-ink-2 text-sm">{groupName(groupId)}</span>
-											<form method="POST" action="?/unlinkGroup" use:enhance>
+											<form method="POST" action="?/unlinkGroup" use:enhance={from('panel')}>
 												<input type="hidden" name="itemId" value={editing.id} />
 												<input type="hidden" name="groupId" value={groupId} />
 												<Button type="submit" variant="ghost" disabled={!ready}>Detach</Button>
@@ -493,7 +555,7 @@
 										method="POST"
 										action="?/linkGroup"
 										class="flex flex-wrap items-end gap-2"
-										use:enhance
+										use:enhance={from('panel')}
 									>
 										<input type="hidden" name="itemId" value={editing.id} />
 										<label class="text-ink-2 text-sm" for="panel-link">Modifier group</label>
@@ -515,7 +577,7 @@
 									<p class="text-ink-2 text-sm">
 										It leaves the till and this page, and stays on past receipts and reports.
 									</p>
-									<form method="POST" action="?/archiveItem" use:enhance>
+									<form method="POST" action="?/archiveItem" use:enhance={from('panel')}>
 										<input type="hidden" name="itemId" value={editing.id} />
 										<Button type="submit" variant="danger" disabled={!ready}>Archive item</Button>
 									</form>
@@ -532,6 +594,9 @@
 		<Card>
 			<div class="flex flex-col gap-4">
 				<h3 class="text-ink font-semibold">Categories</h3>
+				{#if messageFor('categories')}
+					<Alert {tone}>{messageFor('categories')}</Alert>
+				{/if}
 				{#if data.categories.length === 0}
 					<p class="text-ink-2">
 						<span aria-hidden="true" class="font-mono">○</span>
@@ -545,7 +610,7 @@
 								method="POST"
 								action="?/renameCategory"
 								class="flex flex-wrap items-end gap-2"
-								use:enhance
+								use:enhance={from('categories')}
 							>
 								<input type="hidden" name="categoryId" value={category.id} />
 								<div class="grow">
@@ -568,7 +633,7 @@
 										Its {category.itemCount} item(s) move to No category. Past receipts and reports keep
 										their category.
 									</p>
-									<form method="POST" action="?/archiveCategory" use:enhance>
+									<form method="POST" action="?/archiveCategory" use:enhance={from('categories')}>
 										<input type="hidden" name="categoryId" value={category.id} />
 										<Button type="submit" variant="danger">Archive category</Button>
 									</form>
@@ -581,8 +646,16 @@
 		</Card>
 
 		<Card>
-			<form method="POST" action="?/createCategory" class="flex flex-col gap-4" use:enhance>
+			<form
+				method="POST"
+				action="?/createCategory"
+				class="flex flex-col gap-4"
+				use:enhance={from('addCategory')}
+			>
 				<h3 class="text-ink font-semibold">Add a category</h3>
+				{#if messageFor('addCategory')}
+					<Alert {tone}>{messageFor('addCategory')}</Alert>
+				{/if}
 				<Field id="category-name" name="name" label="Category name" required />
 				<div>
 					<Button type="submit" variant="secondary" disabled={!ready} disabledReason={NO_CURRENCY}
@@ -639,8 +712,16 @@
 
 	<div class="grid gap-5 lg:grid-cols-2">
 		<Card>
-			<form method="POST" action="?/createModifierGroup" class="flex flex-col gap-4" use:enhance>
+			<form
+				method="POST"
+				action="?/createModifierGroup"
+				class="flex flex-col gap-4"
+				use:enhance={from('addGroup')}
+			>
 				<h3 class="text-ink font-semibold">Add a modifier group</h3>
+				{#if messageFor('addGroup')}
+					<Alert {tone}>{messageFor('addGroup')}</Alert>
+				{/if}
 				<Field id="group-name" name="name" label="Group name" required />
 				<Field
 					id="group-min"
@@ -665,8 +746,16 @@
 		</Card>
 
 		<Card>
-			<form method="POST" action="?/createModifier" class="flex flex-col gap-4" use:enhance>
+			<form
+				method="POST"
+				action="?/createModifier"
+				class="flex flex-col gap-4"
+				use:enhance={from('addModifier')}
+			>
 				<h3 class="text-ink font-semibold">Add a modifier</h3>
+				{#if messageFor('addModifier')}
+					<Alert {tone}>{messageFor('addModifier')}</Alert>
+				{/if}
 				<div class="flex flex-col gap-1">
 					<label class="text-ink-2 text-sm font-medium" for="modifier-group">Group</label>
 					<select id="modifier-group" name="groupId" class={selectClass} required>
@@ -697,4 +786,4 @@
 			</form>
 		</Card>
 	</div>
-</div>
+</PageBody>

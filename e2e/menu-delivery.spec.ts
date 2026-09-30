@@ -134,7 +134,10 @@ test('menu photos, optional categories and a Delivery sale, online and offline',
 	]);
 
 	// 6. The dashboard report lists the Delivery row: one sale, 8.80.
-	await page.getByRole('link', { name: 'Reports', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Reports', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/reports/);
 	const byOrderType = page
 		.getByRole('heading', { name: 'By order type' })
@@ -142,7 +145,10 @@ test('menu photos, optional categories and a Delivery sale, online and offline',
 	await expect(byOrderType).toContainText(/Delivery\s*1\s*8\.80/);
 
 	// 7. Sold out and archived on the dashboard; the till re-syncs on employee select.
-	await page.getByRole('link', { name: 'Menu', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Menu', exact: true })
+		.click();
 	await page
 		.getByRole('listitem')
 		.filter({ hasText: 'Tea' })

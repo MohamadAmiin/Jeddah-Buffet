@@ -16,7 +16,8 @@
 		children,
 		collapsible = false,
 		asideOpen = false,
-		asideFirst = false
+		asideFirst = false,
+		showAside = true
 	}: {
 		aside: Snippet;
 		children: Snippet;
@@ -24,6 +25,9 @@
 		/** Read only when collapsible. */
 		asideOpen?: boolean;
 		asideFirst?: boolean;
+		/** False when the aside has nothing to show: the main content then takes the
+		 * full width instead of leaving an empty column. */
+		showAside?: boolean;
 	} = $props();
 
 	const shown = $derived(!collapsible || asideOpen);
@@ -39,8 +43,12 @@
 	</div>
 {/snippet}
 
-<div class="grid items-start gap-6 xl:grid-cols-12">
-	{#if asideFirst}{@render side()}{/if}
-	<div class="flex min-w-0 flex-col gap-6 xl:col-span-8">{@render children()}</div>
-	{#if !asideFirst}{@render side()}{/if}
-</div>
+{#if showAside}
+	<div class="grid items-start gap-6 xl:grid-cols-12">
+		{#if asideFirst}{@render side()}{/if}
+		<div class="flex min-w-0 flex-col gap-6 xl:col-span-8">{@render children()}</div>
+		{#if !asideFirst}{@render side()}{/if}
+	</div>
+{:else}
+	<div class="flex min-w-0 flex-col gap-6">{@render children()}</div>
+{/if}
