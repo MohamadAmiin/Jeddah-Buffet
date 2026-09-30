@@ -40,7 +40,11 @@ export default defineConfig({
 			// rules. http://localhost is the one origin where SvelteKit omits the
 			// Secure flag, which is why the journey can hold a session at all — and a
 			// loopback ORIGIN is also why a missing ADDRESS_HEADER is only a warning.
-			ORIGIN: 'http://localhost:4173'
+			ORIGIN: 'http://localhost:4173',
+			// Every spec signs in from 127.0.0.1 against this one server, so the whole
+			// suite shares one login-throttle bucket; at the real 10 per 10 minutes it
+			// sits at the edge. env.ts refuses this setting on a non-loopback ORIGIN.
+			LOGIN_THROTTLE_CAPACITY: '100'
 		}
 	},
 	use: { baseURL: 'http://localhost:4173' }

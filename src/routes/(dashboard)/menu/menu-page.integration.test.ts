@@ -9,6 +9,10 @@ import { menuCategories, menuImages, menuItems } from '$lib/server/db/schema/men
 import type { Principal } from '$lib/server/auth/session';
 import { onRestaurantCreated, updateSettings } from '$lib/server/restaurants';
 import { createCategory, listMenu } from '$lib/server/menu';
+import { applyMovements, createIngredient, setRecipe } from '$lib/server/inventory';
+import { minor } from '$lib/money';
+import { formatAmount, moneyFormatFor } from '$lib/money/format';
+import { qty } from '$lib/money/quantity';
 import { load, actions } from './+page.server';
 
 const db = testDb();
@@ -177,6 +181,84 @@ describe('the /menu page', () => {
 		const serialised = JSON.stringify(data);
 		expect(serialised).toContain('"price":"1,234.50"');
 		expect(serialised).toContain('"taxRate":"restaurant rate"');
+	});
+
+	// tasks/inventory-cogs T-34: cost and margin, read-only, from the ledger's
+	// averages. Spec 16's burger (150 g meat at 0.55¢/g, a 25¢ bun, a 12¢ cheese
+	// slice) costs 119.5 → 1.20; at $8.00 exclusive of 10% tax the net price is
+	// 8.00, so the margin is 6.80 (T-11).
+	it("shows each item's recipe cost and margin as formatted strings", async () => {
+		const r = await makeRestaurant({ currency: true });
+		const asOwner = principal(r.ownerId, r.restaurantId, 'owner');
+		const ctx = { actorUserId: r.ownerId, ip: null, userAgent: null };
+		await db.transaction((tx) =>
+			updateSettings(tx, r.restaurantId, { taxMode: 'exclusive', taxRateBp: 1000 }, ctx)
+		);
+		await act(
+			'createItem',
+			makeEvent(asOwner, { categoryId: r.categoryId, name: 'Burger', price: '8.00', taxRateBp: '' })
+		);
+		await act(
+			'createItem',
+			makeEvent(asOwner, { categoryId: r.categoryId, name: 'Water', price: '1.00', taxRateBp: '' })
+		);
+		const [burger] = await db.select().from(menuItems).where(eq(menuItems.name, 'Burger'));
+
+		const inv = { restaurantId: r.restaurantId, ...ctx, actorUserId: r.ownerId };
+		await db.transaction(async (tx) => {
+			const lines: { ingredientId: string; qty: ReturnType<typeof qty> }[] = [];
+			for (const [name, unit, bought, cost, used] of [
+				['Meat', 'g', 1000000n, 550n, 150000n],
+				['Bun', 'pcs', 1000n, 25n, 1000n],
+				['Cheese', 'slice', 1000n, 12n, 1000n]
+			] as const) {
+				const ingredient = await createIngredient(tx, inv, { name, baseUnit: unit });
+				if (!ingredient.ok) throw new Error(ingredient.reason);
+				await applyMovements(
+					tx,
+					{
+						restaurantId: r.restaurantId,
+						sourceType: 'purchase',
+						sourceId: crypto.randomUUID(),
+						businessDate: '2026-09-28',
+						occurredAt: new Date(),
+						recordedByUserId: r.ownerId
+					},
+					[
+						{
+							kind: 'inbound',
+							type: 'purchase',
+							ingredientId: ingredient.id,
+							qty: qty(bought),
+							costMinor: minor(cost)
+						}
+					]
+				);
+				lines.push({ ingredientId: ingredient.id, qty: qty(used) });
+			}
+			const set = await setRecipe(tx, inv, { owner: { kind: 'item', id: burger.id }, lines });
+			if (!set.ok) throw new Error(set.reason);
+		});
+
+		const data = (await load(makeEvent(asOwner) as never)) as {
+			items: { name: string; cost: { text: string } | null; margin: { text: string } | null }[];
+		};
+		const usd = moneyFormatFor('USD');
+		const byName = new Map(data.items.map((item) => [item.name, item]));
+		expect(byName.get('Burger')!.cost).toEqual({
+			text: formatAmount(minor(120n), usd),
+			negative: false
+		});
+		expect(byName.get('Burger')!.margin).toEqual({
+			text: formatAmount(minor(680n), usd),
+			negative: false,
+			unset: false
+		});
+		expect(formatAmount(minor(120n), usd)).toBe('1.20');
+		// An item with no recipe has no cost and no margin.
+		expect(byName.get('Water')!.cost).toBeNull();
+		expect(byName.get('Water')!.margin).toBeNull();
+		expect(() => JSON.stringify(data)).not.toThrow();
 	});
 });
 

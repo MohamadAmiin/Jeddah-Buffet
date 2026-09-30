@@ -12,6 +12,10 @@ import {
 	SESSION_STATUSES
 } from '$lib/sync-ops';
 import { testDb, closeTestDb } from '../test/db';
+// The ledger writer's own lists (tasks/inventory-cogs T-16), imported rather
+// than restated so a new movement type is spelled in one place; the test below
+// pins them to the stock_movements CHECK literals.
+import { MOVEMENT_TYPES, MOVEMENT_SOURCES } from '../../inventory/movements';
 import { menuItems } from '../schema/menu';
 import { orders, payments } from '../schema/orders';
 import { posSessions } from '../schema/pos-sessions';
@@ -1061,8 +1065,8 @@ describe('roles constraints', () => {
 });
 
 // T-13 exports POSTING_EVENTS from src/lib/server/accounting/posting-rules.ts;
-// this local restates the six literals and is swapped for an import once T-13
-// has landed. Keeping it local now keeps the schema tests independent of the
+// this local restates the fourteen literals (pos-sales' six plus
+// tasks/inventory-cogs' eight) and is swapped for an import once T-13 has landed. Keeping it local now keeps the schema tests independent of the
 // domain module that has not been written.
 const POSTING_EVENTS = [
 	'cash_sale',
@@ -1070,7 +1074,27 @@ const POSTING_EVENTS = [
 	'mobile_sale',
 	'cost_of_goods_sold',
 	'cash_shortage_at_close',
-	'cash_overage_at_close'
+	'cash_overage_at_close',
+	'purchase_paid',
+	'purchase_on_credit',
+	'supplier_paid',
+	'waste',
+	'stock_count_shortfall',
+	'stock_count_surplus',
+	'inventory_revaluation',
+	'opening_stock'
+] as const;
+
+// tasks/inventory-cogs T-13 exports JOURNAL_SOURCE_TYPES beside POSTING_EVENTS;
+// restated here for the same reason.
+const JOURNAL_SOURCE_TYPES = [
+	'order',
+	'pos_session',
+	'purchase',
+	'supplier_payment',
+	'waste_entry',
+	'stock_count',
+	'opening_stock'
 ] as const;
 
 type MakeSessionOverrides = {
@@ -1422,7 +1446,7 @@ describe('value sets are pinned to the isomorphic constants (T-08)', () => {
 			try {
 				await client.query(
 					`insert into journal_entries (restaurant_id, business_date, event, source_type,
-					 source_id, memo) values ($1, '2026-09-28', 'cash_sale', 'purchase',
+					 source_id, memo) values ($1, '2026-09-28', 'cash_sale', 'expense',
 					 gen_random_uuid(), 'test')`,
 					[r]
 				);
@@ -1460,15 +1484,45 @@ describe('value sets are pinned to the isomorphic constants (T-08)', () => {
 		expect(error.constraint).toBe('accounts_type_valid');
 	});
 
-	it('POSTING_EVENTS restated locally matches the six wire literals', () => {
+	it('POSTING_EVENTS restated locally matches the fourteen wire literals', () => {
 		expect([...POSTING_EVENTS]).toEqual([
 			'cash_sale',
 			'card_sale',
 			'mobile_sale',
 			'cost_of_goods_sold',
 			'cash_shortage_at_close',
-			'cash_overage_at_close'
+			'cash_overage_at_close',
+			'purchase_paid',
+			'purchase_on_credit',
+			'supplier_paid',
+			'waste',
+			'stock_count_shortfall',
+			'stock_count_surplus',
+			'inventory_revaluation',
+			'opening_stock'
 		]);
+	});
+
+	it('journal_entries accepts every POSTING_EVENTS and JOURNAL_SOURCE_TYPES value', async () => {
+		const r = await makeRestaurant('vs-journal-all');
+		await withRollback(async (client) => {
+			for (const event of POSTING_EVENTS) {
+				const { rowCount } = await client.query(
+					`insert into journal_entries (restaurant_id, business_date, event, source_type,
+					 source_id, memo) values ($1, '2026-09-28', $2, 'order', gen_random_uuid(), 'test')`,
+					[r, event]
+				);
+				expect(rowCount).toBe(1);
+			}
+			for (const sourceType of JOURNAL_SOURCE_TYPES) {
+				const { rowCount } = await client.query(
+					`insert into journal_entries (restaurant_id, business_date, event, source_type,
+					 source_id, memo) values ($1, '2026-09-28', 'cash_sale', $2, gen_random_uuid(), 'test')`,
+					[r, sourceType]
+				);
+				expect(rowCount).toBe(1);
+			}
+		});
 	});
 });
 
@@ -2153,6 +2207,351 @@ describe('accounting constraints (T-08)', () => {
 				[entryId]
 			);
 			expect(debitRows[0].debit_text).toBe('1100');
+		});
+	});
+});
+
+async function makeIngredient(
+	restaurantId: string,
+	name = 'Flour',
+	overrides: { onHandQty?: string; valueMinor?: number | bigint; avgMicro?: number | bigint } = {}
+): Promise<string> {
+	const { rows } = await pool.query<{ id: string }>(
+		`insert into ingredients (restaurant_id, name, base_unit, on_hand_qty,
+		 inventory_value_minor, avg_unit_cost_micro)
+		 values ($1, $2, 'g', $3, $4, $5) returning id`,
+		[
+			restaurantId,
+			name,
+			overrides.onHandQty ?? '0.000',
+			overrides.valueMinor ?? 0,
+			overrides.avgMicro ?? 0
+		]
+	);
+	return rows[0].id;
+}
+
+async function makeModifier(restaurantId: string): Promise<string> {
+	const { rows: groupRows } = await pool.query<{ id: string }>(
+		`insert into modifier_groups (restaurant_id, name) values ($1, 'Extras') returning id`,
+		[restaurantId]
+	);
+	const { rows } = await pool.query<{ id: string }>(
+		`insert into modifiers (restaurant_id, group_id, name, price_delta_minor)
+		 values ($1, $2, 'No cheese', -50) returning id`,
+		[restaurantId, groupRows[0].id]
+	);
+	return rows[0].id;
+}
+
+function insertMovement(
+	restaurantId: string,
+	ingredientId: string,
+	movementType: string,
+	qty: string,
+	costMinor: number,
+	sourceType = 'purchase'
+): Promise<pg.QueryResult> {
+	return pool.query(
+		`insert into stock_movements (restaurant_id, ingredient_id, movement_type, qty, cost_minor,
+		 source_type, source_id, business_date, occurred_at)
+		 values ($1, $2, $3, $4, $5, $6, gen_random_uuid(), '2026-09-28', now())`,
+		[restaurantId, ingredientId, movementType, qty, costMinor, sourceType]
+	);
+}
+
+describe('inventory constraints (inventory-cogs T-07)', () => {
+	it("the ledger writer's MOVEMENT_TYPES and MOVEMENT_SOURCES match the CHECK literals", () => {
+		expect([...MOVEMENT_TYPES]).toEqual([
+			'purchase',
+			'purchase_reversal',
+			'opening_stock',
+			'sale_consumption',
+			'waste',
+			'count_adjustment',
+			'comp',
+			'revaluation'
+		]);
+		expect([...MOVEMENT_SOURCES]).toEqual([
+			'purchase',
+			'order',
+			'waste_entry',
+			'stock_count',
+			'opening_stock'
+		]);
+	});
+
+	it('stock_movements accepts every MOVEMENT_TYPES and MOVEMENT_SOURCES value and rejects others', async () => {
+		const r = await makeRestaurant('inv-movement-sets');
+		const i = await makeIngredient(r);
+		const sample: Record<(typeof MOVEMENT_TYPES)[number], [string, number]> = {
+			purchase: ['1.000', 100],
+			purchase_reversal: ['-1.000', -100],
+			opening_stock: ['1.000', 100],
+			sale_consumption: ['-1.000', -100],
+			waste: ['-1.000', -100],
+			count_adjustment: ['1.000', 100],
+			comp: ['-1.000', -100],
+			revaluation: ['0.000', 5]
+		};
+		for (const type of MOVEMENT_TYPES) {
+			const [qty, cost] = sample[type];
+			const { rowCount } = await insertMovement(r, i, type, qty, cost);
+			expect(rowCount).toBe(1);
+		}
+		for (const source of MOVEMENT_SOURCES) {
+			const { rowCount } = await insertMovement(r, i, 'purchase', '1.000', 1, source);
+			expect(rowCount).toBe(1);
+		}
+
+		const badType = await expectError(
+			`insert into stock_movements (restaurant_id, ingredient_id, movement_type, qty, cost_minor,
+			 source_type, source_id, business_date, occurred_at)
+			 values ($1, $2, 'theft', '-1.000', -1, 'purchase', gen_random_uuid(), '2026-09-28', now())`,
+			[r, i]
+		);
+		expect(badType.code).toBe('23514');
+		expect(['stock_movements_type_valid', 'stock_movements_sign_by_type']).toContain(
+			badType.constraint
+		);
+
+		const badSource = await expectError(
+			`insert into stock_movements (restaurant_id, ingredient_id, movement_type, qty, cost_minor,
+			 source_type, source_id, business_date, occurred_at)
+			 values ($1, $2, 'purchase', '1.000', 1, 'expense', gen_random_uuid(), '2026-09-28', now())`,
+			[r, i]
+		);
+		expect(badSource.code).toBe('23514');
+		expect(badSource.constraint).toBe('stock_movements_source_valid');
+	});
+
+	it('ingredients: the three costing CHECKs', async () => {
+		const r = await makeRestaurant('inv-costing-checks');
+
+		const negativeAvg = await expectError(
+			`insert into ingredients (restaurant_id, name, base_unit, avg_unit_cost_micro)
+			 values ($1, 'Salt', 'g', -1)`,
+			[r]
+		);
+		expect(negativeAvg.code).toBe('23514');
+		expect(negativeAvg.constraint).toBe('ingredients_avg_non_negative');
+
+		const zeroQtyValue = await expectError(
+			`insert into ingredients (restaurant_id, name, base_unit, on_hand_qty, inventory_value_minor)
+			 values ($1, 'Sugar', 'g', '0.000', 5)`,
+			[r]
+		);
+		expect(zeroQtyValue.code).toBe('23514');
+		expect(zeroQtyValue.constraint).toBe('ingredients_zero_qty_zero_value');
+
+		const negativeValue = await expectError(
+			`insert into ingredients (restaurant_id, name, base_unit, on_hand_qty, inventory_value_minor)
+			 values ($1, 'Rice', 'g', '1.000', -1)`,
+			[r]
+		);
+		expect(negativeValue.code).toBe('23514');
+		expect(negativeValue.constraint).toBe('ingredients_positive_qty_non_negative_value');
+
+		// Negative stock may hold a negative value (sold before its delivery was entered).
+		const negativeStock = await makeIngredient(r, 'Oil', { onHandQty: '-2.000', valueMinor: -30 });
+		expect(negativeStock).toBeTruthy();
+	});
+
+	it('ingredients_name_unique is case-insensitive among live rows; archiving frees the name', async () => {
+		const r = await makeRestaurant('inv-name-unique');
+		const meat = await makeIngredient(r, 'Meat');
+		const dup = await expectError(
+			`insert into ingredients (restaurant_id, name, base_unit) values ($1, 'meat', 'g')`,
+			[r]
+		);
+		expect(dup.code).toBe('23505');
+		expect(dup.constraint).toBe('ingredients_name_unique');
+
+		await pool.query('update ingredients set archived_at = now() where id = $1', [meat]);
+		const again = await makeIngredient(r, 'meat');
+		expect(again).toBeTruthy();
+	});
+
+	it('recipe_lines: exactly one owner, and the sign rule by owner', async () => {
+		const r = await makeRestaurant('inv-recipe-lines');
+		const item = await makeMenuItem(r);
+		const modifier = await makeModifier(r);
+		const i = await makeIngredient(r, 'Cheese');
+
+		const both = await expectError(
+			`insert into recipe_lines (restaurant_id, menu_item_id, modifier_id, ingredient_id, qty)
+			 values ($1, $2, $3, $4, '1.000')`,
+			[r, item, modifier, i]
+		);
+		expect(both.code).toBe('23514');
+		expect(both.constraint).toBe('recipe_lines_one_owner');
+
+		const neither = await expectError(
+			`insert into recipe_lines (restaurant_id, ingredient_id, qty) values ($1, $2, '1.000')`,
+			[r, i]
+		);
+		expect(neither.code).toBe('23514');
+		expect(neither.constraint).toBe('recipe_lines_one_owner');
+
+		const negativeItemLine = await expectError(
+			`insert into recipe_lines (restaurant_id, menu_item_id, ingredient_id, qty)
+			 values ($1, $2, $3, '-1.000')`,
+			[r, item, i]
+		);
+		expect(negativeItemLine.code).toBe('23514');
+		expect(negativeItemLine.constraint).toBe('recipe_lines_qty_sign');
+
+		const { rowCount } = await pool.query(
+			`insert into recipe_lines (restaurant_id, modifier_id, ingredient_id, qty)
+			 values ($1, $2, $3, '-30.000')`,
+			[r, modifier, i]
+		);
+		expect(rowCount).toBe(1);
+	});
+
+	it('stock_movements_sign_by_type rejects a positive consumption and a revaluation that moves goods', async () => {
+		const r = await makeRestaurant('inv-sign-by-type');
+		const i = await makeIngredient(r);
+
+		const positiveConsumption = await expectError(
+			`insert into stock_movements (restaurant_id, ingredient_id, movement_type, qty, cost_minor,
+			 source_type, source_id, business_date, occurred_at)
+			 values ($1, $2, 'sale_consumption', '1.000', 0, 'order', gen_random_uuid(), '2026-09-28', now())`,
+			[r, i]
+		);
+		expect(positiveConsumption.code).toBe('23514');
+		expect(positiveConsumption.constraint).toBe('stock_movements_sign_by_type');
+
+		const revaluationWithGoods = await expectError(
+			`insert into stock_movements (restaurant_id, ingredient_id, movement_type, qty, cost_minor,
+			 source_type, source_id, business_date, occurred_at)
+			 values ($1, $2, 'revaluation', '1.000', 5, 'purchase', gen_random_uuid(), '2026-09-28', now())`,
+			[r, i]
+		);
+		expect(revaluationWithGoods.code).toBe('23514');
+		expect(revaluationWithGoods.constraint).toBe('stock_movements_sign_by_type');
+
+		const { rowCount } = await insertMovement(r, i, 'revaluation', '0.000', 5);
+		expect(rowCount).toBe(1);
+	});
+
+	it("waste_entries_note_for_other requires a note when the reason is 'other'", async () => {
+		const r = await makeRestaurant('inv-waste-note');
+		const o = await makeOwner(r, 'inv-waste-note@example.com');
+		const i = await makeIngredient(r);
+		const error = await expectError(
+			`insert into waste_entries (restaurant_id, ingredient_id, qty, reason, business_date,
+			 recorded_by_user_id) values ($1, $2, '1.000', 'other', '2026-09-28', $3)`,
+			[r, i, o]
+		);
+		expect(error.code).toBe('23514');
+		expect(error.constraint).toBe('waste_entries_note_for_other');
+	});
+
+	it('stock_count_lines_difference holds difference = counted − system', async () => {
+		const r = await makeRestaurant('inv-count-difference');
+		const o = await makeOwner(r, 'inv-count-difference@example.com');
+		const i = await makeIngredient(r);
+		const { rows } = await pool.query<{ id: string }>(
+			`insert into stock_counts (restaurant_id, business_date, counted_at, recorded_by_user_id)
+			 values ($1, '2026-09-28', now(), $2) returning id`,
+			[r, o]
+		);
+		const error = await expectError(
+			`insert into stock_count_lines (restaurant_id, count_id, ingredient_id, system_qty,
+			 counted_qty, difference_qty, cost_minor) values ($1, $2, $3, '10.000', '8.000', '2.000', 0)`,
+			[r, rows[0].id, i]
+		);
+		expect(error.code).toBe('23514');
+		expect(error.constraint).toBe('stock_count_lines_difference');
+	});
+
+	it('opening_stock_entries_ingredient_unique allows one opening entry per ingredient', async () => {
+		const r = await makeRestaurant('inv-opening-unique');
+		const o = await makeOwner(r, 'inv-opening-unique@example.com');
+		const i = await makeIngredient(r);
+		const insert = `insert into opening_stock_entries (restaurant_id, ingredient_id,
+			purchase_unit_name, unit_qty, base_qty_per_unit, base_qty, unit_cost_minor, value_minor,
+			business_date, recorded_by_user_id)
+			values ($1, $2, 'kg', '2.000', '1000.000', '2000.000', 550, 1100, '2026-09-28', $3)`;
+		await pool.query(insert, [r, i, o]);
+		const error = await expectError(insert, [r, i, o]);
+		expect(error.code).toBe('23505');
+		expect(error.constraint).toBe('opening_stock_entries_ingredient_unique');
+	});
+
+	it('purchases_reversal_fields refuses a reversal stamp without a reason', async () => {
+		const r = await makeRestaurant('inv-purchase-reversal');
+		const o = await makeOwner(r, 'inv-purchase-reversal@example.com');
+		const error = await expectError(
+			`insert into purchases (restaurant_id, supplier_name, business_date, paid_by, total_minor,
+			 recorded_by_user_id, reversed_at, reversed_by_user_id)
+			 values ($1, 'Market', '2026-09-28', 'cash', 1100, $2, now(), $2)`,
+			[r, o]
+		);
+		expect(error.code).toBe('23514');
+		expect(error.constraint).toBe('purchases_reversal_fields');
+	});
+
+	it('journal_entries_reverses_entry_unique allows one reversal per entry', async () => {
+		const r = await makeRestaurant('inv-one-reversal');
+		const cash = await makeAccount(r, '1000');
+		const inventory = await makeAccount(r, '1200', 'Inventory', 'asset');
+		await withRollback(async (client) => {
+			const insertEntry = async (reverses: string | null): Promise<string> => {
+				const { rows } = await client.query<{ id: string }>(
+					`insert into journal_entries (restaurant_id, business_date, event, source_type,
+					 source_id, memo, reverses_entry_id)
+					 values ($1, '2026-09-28', 'purchase_paid', 'purchase', gen_random_uuid(), 'test', $2)
+					 returning id`,
+					[r, reverses]
+				);
+				const id = rows[0].id;
+				// Balanced lines, so the deferred balance trigger would pass: the
+				// unique index is the only thing that can fail below.
+				await client.query(
+					`insert into journal_entry_lines (restaurant_id, entry_id, account_id, line_no,
+					 debit_minor, credit_minor) values ($1, $2, $3, 1, 1100, 0), ($1, $2, $4, 2, 0, 1100)`,
+					[r, id, reverses ? cash : inventory, reverses ? inventory : cash]
+				);
+				return id;
+			};
+			const original = await insertEntry(null);
+			await insertEntry(original);
+			try {
+				await insertEntry(original);
+				throw new Error('expected 23505');
+			} catch (error) {
+				expect((error as pg.DatabaseError).code).toBe('23505');
+				expect((error as pg.DatabaseError).constraint).toBe(
+					'journal_entries_reverses_entry_unique'
+				);
+			}
+		});
+	});
+
+	it("journal_entries accepts 'purchase_paid' from 'purchase' and rejects source 'expense'", async () => {
+		const r = await makeRestaurant('inv-journal-sources');
+		await withRollback(async (client) => {
+			const { rowCount } = await client.query(
+				`insert into journal_entries (restaurant_id, business_date, event, source_type,
+				 source_id, memo) values ($1, '2026-09-28', 'purchase_paid', 'purchase',
+				 gen_random_uuid(), 'test')`,
+				[r]
+			);
+			expect(rowCount).toBe(1);
+			try {
+				await client.query(
+					`insert into journal_entries (restaurant_id, business_date, event, source_type,
+					 source_id, memo) values ($1, '2026-09-28', 'purchase_paid', 'expense',
+					 gen_random_uuid(), 'test')`,
+					[r]
+				);
+				throw new Error('expected 23514');
+			} catch (error) {
+				expect((error as pg.DatabaseError).code).toBe('23514');
+				expect((error as pg.DatabaseError).constraint).toBe('journal_entries_source_type_valid');
+			}
 		});
 	});
 });

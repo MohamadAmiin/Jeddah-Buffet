@@ -72,6 +72,42 @@ export const SIGNUP_OPEN: boolean = SIGNUP_SETTING !== 'closed';
  */
 export const ORIGIN: string | null = env.ORIGIN || null;
 
+function isLoopbackOrigin(origin: string | null): boolean {
+	if (!origin) return false;
+	try {
+		const { hostname } = new URL(origin);
+		return hostname === 'localhost' || hostname === '127.0.0.1';
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Raises the password-login throttle's per-address capacity (default 10 per 10
+ * minutes). It exists for ONE caller: the Playwright journey, where every spec
+ * signs in from 127.0.0.1 against one preview server, so the whole suite shares
+ * one throttle bucket and sits at the edge of the real limit. Unset means the
+ * real limit. It is refused unless ORIGIN is loopback, in every mode, so it can
+ * never loosen a real deployment: a server reachable by anyone else is not on
+ * http://localhost.
+ */
+const THROTTLE_SETTING = (env.LOGIN_THROTTLE_CAPACITY ?? '').trim();
+if (THROTTLE_SETTING !== '') {
+	if (!/^[1-9][0-9]{0,5}$/.test(THROTTLE_SETTING)) {
+		throw new Error(
+			`LOGIN_THROTTLE_CAPACITY must be a whole number from 1 to 999999 (got "${env.LOGIN_THROTTLE_CAPACITY}").`
+		);
+	}
+	if (!isLoopbackOrigin(ORIGIN)) {
+		throw new Error(
+			'LOGIN_THROTTLE_CAPACITY is set but ORIGIN is not http://localhost or http://127.0.0.1. ' +
+				'It loosens the login throttle and exists only for the local e2e journey; unset it.'
+		);
+	}
+}
+export const LOGIN_THROTTLE_CAPACITY: number | undefined =
+	THROTTLE_SETTING === '' ? undefined : Number.parseInt(THROTTLE_SETTING, 10);
+
 const IS_PRODUCTION = env.NODE_ENV === 'production' || process.env.NODE_ENV === 'production';
 
 // `building` matters: `vite build` runs with NODE_ENV=production and SvelteKit
@@ -98,7 +134,7 @@ if (!building && IS_PRODUCTION) {
 		throw new Error(`ORIGIN is not a valid URL: set it to e.g. https://pos.example.com`);
 	}
 
-	const isLoopback = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+	const isLoopback = isLoopbackOrigin(ORIGIN);
 
 	if (parsed.protocol !== 'https:' && !isLoopback) {
 		throw new Error(

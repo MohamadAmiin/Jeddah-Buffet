@@ -1,6 +1,6 @@
 {
-  "id": "dbf45a57-99ab-4364-bd56-a066047608af",
-  "prevId": "b21f1cfa-63f8-449b-b419-d23173900548",
+  "id": "f397f936-394e-4e12-8a88-c242d4e96b62",
+  "prevId": "21dcc212-0a9d-4d1d-9c28-77a7f3dc7a37",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -59,43 +59,43 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "accounts_restaurant_id_restaurants_id_fk": {
           "name": "accounts_restaurant_id_restaurants_id_fk",
           "tableFrom": "accounts",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "accounts_restaurant_code_unique": {
           "name": "accounts_restaurant_code_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "restaurant_id",
             "code"
-          ]
+          ],
+          "nullsNotDistinct": false
         },
         "accounts_id_restaurant_unique": {
           "name": "accounts_id_restaurant_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "id",
             "restaurant_id"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
@@ -197,9 +197,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "journal_entries_source_idx": {
           "name": "journal_entries_source_idx",
@@ -218,59 +218,75 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
+        },
+        "journal_entries_reverses_entry_unique": {
+          "name": "journal_entries_reverses_entry_unique",
+          "columns": [
+            {
+              "expression": "reverses_entry_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "with": {},
+          "method": "btree",
+          "where": "\"journal_entries\".\"reverses_entry_id\" is not null",
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "journal_entries_restaurant_id_restaurants_id_fk": {
           "name": "journal_entries_restaurant_id_restaurants_id_fk",
           "tableFrom": "journal_entries",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "journal_entries_reverses_entry_id_journal_entries_id_fk": {
           "name": "journal_entries_reverses_entry_id_journal_entries_id_fk",
           "tableFrom": "journal_entries",
-          "tableTo": "journal_entries",
           "columnsFrom": [
             "reverses_entry_id"
           ],
+          "tableTo": "journal_entries",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "journal_entries_id_restaurant_unique": {
           "name": "journal_entries_id_restaurant_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "id",
             "restaurant_id"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
       "checkConstraints": {
         "journal_entries_event_valid": {
           "name": "journal_entries_event_valid",
-          "value": "\"journal_entries\".\"event\" in ('cash_sale', 'card_sale', 'mobile_sale', 'cost_of_goods_sold', 'cash_shortage_at_close', 'cash_overage_at_close')"
+          "value": "\"journal_entries\".\"event\" in ('cash_sale', 'card_sale', 'mobile_sale', 'cost_of_goods_sold', 'cash_shortage_at_close', 'cash_overage_at_close', 'purchase_paid', 'purchase_on_credit', 'supplier_paid', 'waste', 'stock_count_shortfall', 'stock_count_surplus', 'inventory_revaluation', 'opening_stock')"
         },
         "journal_entries_source_type_valid": {
           "name": "journal_entries_source_type_valid",
-          "value": "\"journal_entries\".\"source_type\" in ('order', 'pos_session')"
+          "value": "\"journal_entries\".\"source_type\" in ('order', 'pos_session', 'purchase', 'supplier_payment', 'waste_entry', 'stock_count', 'opening_stock')"
         }
       },
       "isRLSEnabled": false
@@ -285,15 +301,15 @@
           "primaryKey": true,
           "notNull": true,
           "identity": {
-            "type": "always",
             "name": "journal_entry_lines_id_seq",
-            "schema": "public",
             "increment": "1",
-            "startWith": "1",
             "minValue": "1",
             "maxValue": "9223372036854775807",
+            "startWith": "1",
             "cache": "1",
-            "cycle": false
+            "cycle": false,
+            "schema": "public",
+            "type": "always"
           }
         },
         "restaurant_id": {
@@ -354,9 +370,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "journal_entry_lines_entry_idx": {
           "name": "journal_entry_lines_entry_idx",
@@ -369,65 +385,65 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "journal_entry_lines_restaurant_id_restaurants_id_fk": {
           "name": "journal_entry_lines_restaurant_id_restaurants_id_fk",
           "tableFrom": "journal_entry_lines",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "journal_entry_lines_entry_fk": {
           "name": "journal_entry_lines_entry_fk",
           "tableFrom": "journal_entry_lines",
-          "tableTo": "journal_entries",
           "columnsFrom": [
             "restaurant_id",
             "entry_id"
           ],
+          "tableTo": "journal_entries",
           "columnsTo": [
             "restaurant_id",
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "journal_entry_lines_account_fk": {
           "name": "journal_entry_lines_account_fk",
           "tableFrom": "journal_entry_lines",
-          "tableTo": "accounts",
           "columnsFrom": [
             "restaurant_id",
             "account_id"
           ],
+          "tableTo": "accounts",
           "columnsTo": [
             "restaurant_id",
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "journal_entry_lines_entry_line_no_unique": {
           "name": "journal_entry_lines_entry_line_no_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "entry_id",
             "line_no"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
@@ -453,15 +469,15 @@
           "primaryKey": true,
           "notNull": true,
           "identity": {
-            "type": "always",
             "name": "audit_log_id_seq",
-            "schema": "public",
             "increment": "1",
-            "startWith": "1",
             "minValue": "1",
             "maxValue": "9223372036854775807",
+            "startWith": "1",
             "cache": "1",
-            "cycle": false
+            "cycle": false,
+            "schema": "public",
+            "type": "always"
           }
         },
         "restaurant_id": {
@@ -545,15 +561,15 @@
             },
             {
               "expression": "\"created_at\" desc",
-              "asc": true,
               "isExpression": true,
+              "asc": true,
               "nulls": "last"
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "audit_log_device_client_op_unique": {
           "name": "audit_log_device_client_op_unique",
@@ -572,70 +588,1340 @@
             }
           ],
           "isUnique": true,
-          "where": "\"audit_log\".\"client_op_id\" is not null",
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "where": "\"audit_log\".\"client_op_id\" is not null",
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "audit_log_restaurant_id_restaurants_id_fk": {
           "name": "audit_log_restaurant_id_restaurants_id_fk",
           "tableFrom": "audit_log",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "audit_log_actor_user_id_users_id_fk": {
           "name": "audit_log_actor_user_id_users_id_fk",
           "tableFrom": "audit_log",
-          "tableTo": "users",
           "columnsFrom": [
             "actor_user_id"
           ],
+          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "audit_log_subject_user_id_users_id_fk": {
           "name": "audit_log_subject_user_id_users_id_fk",
           "tableFrom": "audit_log",
-          "tableTo": "users",
           "columnsFrom": [
             "subject_user_id"
           ],
+          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "audit_log_device_id_pos_devices_id_fk": {
           "name": "audit_log_device_id_pos_devices_id_fk",
           "tableFrom": "audit_log",
-          "tableTo": "pos_devices",
           "columnsFrom": [
             "device_id"
           ],
+          "tableTo": "pos_devices",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.ingredient_purchase_units": {
+      "name": "ingredient_purchase_units",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "restaurant_id": {
+          "name": "restaurant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ingredient_id": {
+          "name": "ingredient_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_qty_per_unit": {
+          "name": "base_qty_per_unit",
+          "type": "numeric(12, 3)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "archived_at": {
+          "name": "archived_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "ingredient_purchase_units_name_unique": {
+          "name": "ingredient_purchase_units_name_unique",
+          "columns": [
+            {
+              "expression": "ingredient_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lower(\"name\")",
+              "isExpression": true,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "with": {},
+          "method": "btree",
+          "where": "\"ingredient_purchase_units\".\"archived_at\" is null",
+          "concurrently": false
+        },
+        "ingredient_purchase_units_ingredient_idx": {
+          "name": "ingredient_purchase_units_ingredient_idx",
+          "columns": [
+            {
+              "expression": "ingredient_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        }
+      },
+      "foreignKeys": {
+        "ingredient_purchase_units_restaurant_id_restaurants_id_fk": {
+          "name": "ingredient_purchase_units_restaurant_id_restaurants_id_fk",
+          "tableFrom": "ingredient_purchase_units",
+          "columnsFrom": [
+            "restaurant_id"
+          ],
+          "tableTo": "restaurants",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "ingredient_purchase_units_ingredient_fk": {
+          "name": "ingredient_purchase_units_ingredient_fk",
+          "tableFrom": "ingredient_purchase_units",
+          "columnsFrom": [
+            "restaurant_id",
+            "ingredient_id"
+          ],
+          "tableTo": "ingredients",
+          "columnsTo": [
+            "restaurant_id",
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "ingredient_purchase_units_id_restaurant_unique": {
+          "name": "ingredient_purchase_units_id_restaurant_unique",
+          "columns": [
+            "id",
+            "restaurant_id"
+          ],
+          "nullsNotDistinct": false
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ingredient_purchase_units_name_length": {
+          "name": "ingredient_purchase_units_name_length",
+          "value": "char_length(btrim(\"ingredient_purchase_units\".\"name\")) between 1 and 24"
+        },
+        "ingredient_purchase_units_factor_positive": {
+          "name": "ingredient_purchase_units_factor_positive",
+          "value": "\"ingredient_purchase_units\".\"base_qty_per_unit\" > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.ingredients": {
+      "name": "ingredients",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "restaurant_id": {
+          "name": "restaurant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_unit": {
+          "name": "base_unit",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "on_hand_qty": {
+          "name": "on_hand_qty",
+          "type": "numeric(12, 3)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "inventory_value_minor": {
+          "name": "inventory_value_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "0"
+        },
+        "avg_unit_cost_micro": {
+          "name": "avg_unit_cost_micro",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "0"
+        },
+        "archived_at": {
+          "name": "archived_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "ingredients_name_unique": {
+          "name": "ingredients_name_unique",
+          "columns": [
+            {
+              "expression": "restaurant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "lower(\"name\")",
+              "isExpression": true,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "with": {},
+          "method": "btree",
+          "where": "\"ingredients\".\"archived_at\" is null",
+          "concurrently": false
+        },
+        "ingredients_restaurant_id_idx": {
+          "name": "ingredients_restaurant_id_idx",
+          "columns": [
+            {
+              "expression": "restaurant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        }
+      },
+      "foreignKeys": {
+        "ingredients_restaurant_id_restaurants_id_fk": {
+          "name": "ingredients_restaurant_id_restaurants_id_fk",
+          "tableFrom": "ingredients",
+          "columnsFrom": [
+            "restaurant_id"
+          ],
+          "tableTo": "restaurants",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "ingredients_id_restaurant_unique": {
+          "name": "ingredients_id_restaurant_unique",
+          "columns": [
+            "id",
+            "restaurant_id"
+          ],
+          "nullsNotDistinct": false
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "ingredients_name_length": {
+          "name": "ingredients_name_length",
+          "value": "char_length(btrim(\"ingredients\".\"name\")) between 1 and 80"
+        },
+        "ingredients_base_unit_length": {
+          "name": "ingredients_base_unit_length",
+          "value": "char_length(btrim(\"ingredients\".\"base_unit\")) between 1 and 16"
+        },
+        "ingredients_avg_non_negative": {
+          "name": "ingredients_avg_non_negative",
+          "value": "\"ingredients\".\"avg_unit_cost_micro\" >= 0"
+        },
+        "ingredients_zero_qty_zero_value": {
+          "name": "ingredients_zero_qty_zero_value",
+          "value": "\"ingredients\".\"on_hand_qty\" <> 0 or \"ingredients\".\"inventory_value_minor\" = 0"
+        },
+        "ingredients_positive_qty_non_negative_value": {
+          "name": "ingredients_positive_qty_non_negative_value",
+          "value": "\"ingredients\".\"on_hand_qty\" <= 0 or \"ingredients\".\"inventory_value_minor\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.opening_stock_entries": {
+      "name": "opening_stock_entries",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "restaurant_id": {
+          "name": "restaurant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ingredient_id": {
+          "name": "ingredient_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "purchase_unit_name": {
+          "name": "purchase_unit_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "unit_qty": {
+          "name": "unit_qty",
+          "type": "numeric(12, 3)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_qty_per_unit": {
+          "name": "base_qty_per_unit",
+          "type": "numeric(12, 3)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_qty": {
+          "name": "base_qty",
+          "type": "numeric(12, 3)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "unit_cost_minor": {
+          "name": "unit_cost_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "value_minor": {
+          "name": "value_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "business_date": {
+          "name": "business_date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recorded_by_user_id": {
+          "name": "recorded_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "opening_stock_entries_ingredient_unique": {
+          "name": "opening_stock_entries_ingredient_unique",
+          "columns": [
+            {
+              "expression": "ingredient_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        }
+      },
+      "foreignKeys": {
+        "opening_stock_entries_restaurant_id_restaurants_id_fk": {
+          "name": "opening_stock_entries_restaurant_id_restaurants_id_fk",
+          "tableFrom": "opening_stock_entries",
+          "columnsFrom": [
+            "restaurant_id"
+          ],
+          "tableTo": "restaurants",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "opening_stock_entries_recorded_by_user_id_users_id_fk": {
+          "name": "opening_stock_entries_recorded_by_user_id_users_id_fk",
+          "tableFrom": "opening_stock_entries",
+          "columnsFrom": [
+            "recorded_by_user_id"
+          ],
+          "tableTo": "users",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "opening_stock_entries_ingredient_fk": {
+          "name": "opening_stock_entries_ingredient_fk",
+          "tableFrom": "opening_stock_entries",
+          "columnsFrom": [
+            "restaurant_id",
+            "ingredient_id"
+          ],
+          "tableTo": "ingredients",
+          "columnsTo": [
+            "restaurant_id",
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "opening_stock_entries_amounts_valid": {
+          "name": "opening_stock_entries_amounts_valid",
+          "value": "\"opening_stock_entries\".\"unit_qty\" > 0 and \"opening_stock_entries\".\"base_qty_per_unit\" > 0 and \"opening_stock_entries\".\"base_qty\" > 0 and \"opening_stock_entries\".\"unit_cost_minor\" >= 0 and \"opening_stock_entries\".\"value_minor\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.recipe_lines": {
+      "name": "recipe_lines",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "restaurant_id": {
+          "name": "restaurant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "menu_item_id": {
+          "name": "menu_item_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "modifier_id": {
+          "name": "modifier_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ingredient_id": {
+          "name": "ingredient_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "qty": {
+          "name": "qty",
+          "type": "numeric(12, 3)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "recipe_lines_item_ingredient_unique": {
+          "name": "recipe_lines_item_ingredient_unique",
+          "columns": [
+            {
+              "expression": "menu_item_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "ingredient_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "with": {},
+          "method": "btree",
+          "where": "\"recipe_lines\".\"menu_item_id\" is not null",
+          "concurrently": false
+        },
+        "recipe_lines_modifier_ingredient_unique": {
+          "name": "recipe_lines_modifier_ingredient_unique",
+          "columns": [
+            {
+              "expression": "modifier_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "ingredient_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "with": {},
+          "method": "btree",
+          "where": "\"recipe_lines\".\"modifier_id\" is not null",
+          "concurrently": false
+        },
+        "recipe_lines_ingredient_idx": {
+          "name": "recipe_lines_ingredient_idx",
+          "columns": [
+            {
+              "expression": "ingredient_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        }
+      },
+      "foreignKeys": {
+        "recipe_lines_restaurant_id_restaurants_id_fk": {
+          "name": "recipe_lines_restaurant_id_restaurants_id_fk",
+          "tableFrom": "recipe_lines",
+          "columnsFrom": [
+            "restaurant_id"
+          ],
+          "tableTo": "restaurants",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "recipe_lines_modifier_id_modifiers_id_fk": {
+          "name": "recipe_lines_modifier_id_modifiers_id_fk",
+          "tableFrom": "recipe_lines",
+          "columnsFrom": [
+            "modifier_id"
+          ],
+          "tableTo": "modifiers",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "recipe_lines_menu_item_fk": {
+          "name": "recipe_lines_menu_item_fk",
+          "tableFrom": "recipe_lines",
+          "columnsFrom": [
+            "restaurant_id",
+            "menu_item_id"
+          ],
+          "tableTo": "menu_items",
+          "columnsTo": [
+            "restaurant_id",
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "recipe_lines_ingredient_fk": {
+          "name": "recipe_lines_ingredient_fk",
+          "tableFrom": "recipe_lines",
+          "columnsFrom": [
+            "restaurant_id",
+            "ingredient_id"
+          ],
+          "tableTo": "ingredients",
+          "columnsTo": [
+            "restaurant_id",
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "recipe_lines_one_owner": {
+          "name": "recipe_lines_one_owner",
+          "value": "(\"recipe_lines\".\"menu_item_id\" is null) <> (\"recipe_lines\".\"modifier_id\" is null)"
+        },
+        "recipe_lines_qty_sign": {
+          "name": "recipe_lines_qty_sign",
+          "value": "(\"recipe_lines\".\"menu_item_id\" is not null and \"recipe_lines\".\"qty\" > 0) or (\"recipe_lines\".\"modifier_id\" is not null and \"recipe_lines\".\"qty\" <> 0)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.stock_count_lines": {
+      "name": "stock_count_lines",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "restaurant_id": {
+          "name": "restaurant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "count_id": {
+          "name": "count_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ingredient_id": {
+          "name": "ingredient_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "system_qty": {
+          "name": "system_qty",
+          "type": "numeric(12, 3)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "counted_qty": {
+          "name": "counted_qty",
+          "type": "numeric(12, 3)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "difference_qty": {
+          "name": "difference_qty",
+          "type": "numeric(12, 3)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cost_minor": {
+          "name": "cost_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "stock_count_lines_count_ingredient_unique": {
+          "name": "stock_count_lines_count_ingredient_unique",
+          "columns": [
+            {
+              "expression": "count_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "ingredient_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        }
+      },
+      "foreignKeys": {
+        "stock_count_lines_restaurant_id_restaurants_id_fk": {
+          "name": "stock_count_lines_restaurant_id_restaurants_id_fk",
+          "tableFrom": "stock_count_lines",
+          "columnsFrom": [
+            "restaurant_id"
+          ],
+          "tableTo": "restaurants",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "stock_count_lines_count_fk": {
+          "name": "stock_count_lines_count_fk",
+          "tableFrom": "stock_count_lines",
+          "columnsFrom": [
+            "restaurant_id",
+            "count_id"
+          ],
+          "tableTo": "stock_counts",
+          "columnsTo": [
+            "restaurant_id",
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "stock_count_lines_ingredient_fk": {
+          "name": "stock_count_lines_ingredient_fk",
+          "tableFrom": "stock_count_lines",
+          "columnsFrom": [
+            "restaurant_id",
+            "ingredient_id"
+          ],
+          "tableTo": "ingredients",
+          "columnsTo": [
+            "restaurant_id",
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "stock_count_lines_counted_non_negative": {
+          "name": "stock_count_lines_counted_non_negative",
+          "value": "\"stock_count_lines\".\"counted_qty\" >= 0"
+        },
+        "stock_count_lines_difference": {
+          "name": "stock_count_lines_difference",
+          "value": "\"stock_count_lines\".\"difference_qty\" = \"stock_count_lines\".\"counted_qty\" - \"stock_count_lines\".\"system_qty\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.stock_counts": {
+      "name": "stock_counts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "restaurant_id": {
+          "name": "restaurant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "business_date": {
+          "name": "business_date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "counted_at": {
+          "name": "counted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recorded_by_user_id": {
+          "name": "recorded_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "stock_counts_restaurant_business_date_idx": {
+          "name": "stock_counts_restaurant_business_date_idx",
+          "columns": [
+            {
+              "expression": "restaurant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "business_date",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        }
+      },
+      "foreignKeys": {
+        "stock_counts_restaurant_id_restaurants_id_fk": {
+          "name": "stock_counts_restaurant_id_restaurants_id_fk",
+          "tableFrom": "stock_counts",
+          "columnsFrom": [
+            "restaurant_id"
+          ],
+          "tableTo": "restaurants",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "stock_counts_recorded_by_user_id_users_id_fk": {
+          "name": "stock_counts_recorded_by_user_id_users_id_fk",
+          "tableFrom": "stock_counts",
+          "columnsFrom": [
+            "recorded_by_user_id"
+          ],
+          "tableTo": "users",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "stock_counts_id_restaurant_unique": {
+          "name": "stock_counts_id_restaurant_unique",
+          "columns": [
+            "id",
+            "restaurant_id"
+          ],
+          "nullsNotDistinct": false
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.stock_movements": {
+      "name": "stock_movements",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "bigint",
+          "primaryKey": true,
+          "notNull": true,
+          "identity": {
+            "name": "stock_movements_id_seq",
+            "increment": "1",
+            "minValue": "1",
+            "maxValue": "9223372036854775807",
+            "startWith": "1",
+            "cache": "1",
+            "cycle": false,
+            "schema": "public",
+            "type": "always"
+          }
+        },
+        "restaurant_id": {
+          "name": "restaurant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ingredient_id": {
+          "name": "ingredient_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "movement_type": {
+          "name": "movement_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "qty": {
+          "name": "qty",
+          "type": "numeric(12, 3)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cost_minor": {
+          "name": "cost_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_type": {
+          "name": "source_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source_id": {
+          "name": "source_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "business_date": {
+          "name": "business_date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "occurred_at": {
+          "name": "occurred_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recorded_by_user_id": {
+          "name": "recorded_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "stock_movements_ingredient_time_idx": {
+          "name": "stock_movements_ingredient_time_idx",
+          "columns": [
+            {
+              "expression": "restaurant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "ingredient_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "occurred_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        },
+        "stock_movements_restaurant_business_date_idx": {
+          "name": "stock_movements_restaurant_business_date_idx",
+          "columns": [
+            {
+              "expression": "restaurant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "business_date",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        },
+        "stock_movements_source_idx": {
+          "name": "stock_movements_source_idx",
+          "columns": [
+            {
+              "expression": "source_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        }
+      },
+      "foreignKeys": {
+        "stock_movements_restaurant_id_restaurants_id_fk": {
+          "name": "stock_movements_restaurant_id_restaurants_id_fk",
+          "tableFrom": "stock_movements",
+          "columnsFrom": [
+            "restaurant_id"
+          ],
+          "tableTo": "restaurants",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "stock_movements_recorded_by_user_id_users_id_fk": {
+          "name": "stock_movements_recorded_by_user_id_users_id_fk",
+          "tableFrom": "stock_movements",
+          "columnsFrom": [
+            "recorded_by_user_id"
+          ],
+          "tableTo": "users",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "stock_movements_ingredient_fk": {
+          "name": "stock_movements_ingredient_fk",
+          "tableFrom": "stock_movements",
+          "columnsFrom": [
+            "restaurant_id",
+            "ingredient_id"
+          ],
+          "tableTo": "ingredients",
+          "columnsTo": [
+            "restaurant_id",
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "stock_movements_type_valid": {
+          "name": "stock_movements_type_valid",
+          "value": "\"stock_movements\".\"movement_type\" in ('purchase', 'purchase_reversal', 'opening_stock', 'sale_consumption', 'waste', 'count_adjustment', 'comp', 'revaluation')"
+        },
+        "stock_movements_source_valid": {
+          "name": "stock_movements_source_valid",
+          "value": "\"stock_movements\".\"source_type\" in ('purchase', 'order', 'waste_entry', 'stock_count', 'opening_stock')"
+        },
+        "stock_movements_sign_by_type": {
+          "name": "stock_movements_sign_by_type",
+          "value": "(\"stock_movements\".\"movement_type\" in ('purchase', 'opening_stock') and \"stock_movements\".\"qty\" > 0 and \"stock_movements\".\"cost_minor\" >= 0) or (\"stock_movements\".\"movement_type\" in ('purchase_reversal', 'sale_consumption', 'waste', 'comp') and \"stock_movements\".\"qty\" < 0 and \"stock_movements\".\"cost_minor\" <= 0) or (\"stock_movements\".\"movement_type\" = 'count_adjustment' and \"stock_movements\".\"qty\" <> 0) or (\"stock_movements\".\"movement_type\" = 'revaluation' and \"stock_movements\".\"qty\" = 0 and \"stock_movements\".\"cost_minor\" <> 0)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.waste_entries": {
+      "name": "waste_entries",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "restaurant_id": {
+          "name": "restaurant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ingredient_id": {
+          "name": "ingredient_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "qty": {
+          "name": "qty",
+          "type": "numeric(12, 3)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "business_date": {
+          "name": "business_date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recorded_by_user_id": {
+          "name": "recorded_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "waste_entries_restaurant_business_date_idx": {
+          "name": "waste_entries_restaurant_business_date_idx",
+          "columns": [
+            {
+              "expression": "restaurant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "business_date",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        }
+      },
+      "foreignKeys": {
+        "waste_entries_restaurant_id_restaurants_id_fk": {
+          "name": "waste_entries_restaurant_id_restaurants_id_fk",
+          "tableFrom": "waste_entries",
+          "columnsFrom": [
+            "restaurant_id"
+          ],
+          "tableTo": "restaurants",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "waste_entries_recorded_by_user_id_users_id_fk": {
+          "name": "waste_entries_recorded_by_user_id_users_id_fk",
+          "tableFrom": "waste_entries",
+          "columnsFrom": [
+            "recorded_by_user_id"
+          ],
+          "tableTo": "users",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "waste_entries_ingredient_fk": {
+          "name": "waste_entries_ingredient_fk",
+          "tableFrom": "waste_entries",
+          "columnsFrom": [
+            "restaurant_id",
+            "ingredient_id"
+          ],
+          "tableTo": "ingredients",
+          "columnsTo": [
+            "restaurant_id",
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "waste_entries_qty_positive": {
+          "name": "waste_entries_qty_positive",
+          "value": "\"waste_entries\".\"qty\" > 0"
+        },
+        "waste_entries_reason_valid": {
+          "name": "waste_entries_reason_valid",
+          "value": "\"waste_entries\".\"reason\" in ('spoilage', 'preparation_error', 'breakage', 'other')"
+        },
+        "waste_entries_note_for_other": {
+          "name": "waste_entries_note_for_other",
+          "value": "\"waste_entries\".\"reason\" <> 'other' or (\"waste_entries\".\"note\" is not null and char_length(btrim(\"waste_entries\".\"note\")) between 3 and 200)"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.menu_categories": {
@@ -701,9 +1987,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "menu_categories_name_unique": {
           "name": "menu_categories_name_unique",
@@ -716,149 +2002,46 @@
             },
             {
               "expression": "lower(\"name\")",
-              "asc": true,
               "isExpression": true,
+              "asc": true,
               "nulls": "last"
             }
           ],
           "isUnique": true,
-          "where": "\"menu_categories\".\"archived_at\" is null",
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "where": "\"menu_categories\".\"archived_at\" is null",
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "menu_categories_restaurant_id_restaurants_id_fk": {
           "name": "menu_categories_restaurant_id_restaurants_id_fk",
           "tableFrom": "menu_categories",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "menu_categories_id_restaurant_unique": {
           "name": "menu_categories_id_restaurant_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "id",
             "restaurant_id"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
       "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.menu_images": {
-      "name": "menu_images",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "restaurant_id": {
-          "name": "restaurant_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "content_type": {
-          "name": "content_type",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "byte_size": {
-          "name": "byte_size",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "bytes": {
-          "name": "bytes",
-          "type": "bytea",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "menu_images_restaurant_id_idx": {
-          "name": "menu_images_restaurant_id_idx",
-          "columns": [
-            {
-              "expression": "restaurant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "menu_images_restaurant_id_restaurants_id_fk": {
-          "name": "menu_images_restaurant_id_restaurants_id_fk",
-          "tableFrom": "menu_images",
-          "tableTo": "restaurants",
-          "columnsFrom": [
-            "restaurant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "menu_images_id_restaurant_unique": {
-          "name": "menu_images_id_restaurant_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "id",
-            "restaurant_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {
-        "menu_images_content_type_valid": {
-          "name": "menu_images_content_type_valid",
-          "value": "\"menu_images\".\"content_type\" in ('image/jpeg', 'image/png', 'image/webp')"
-        },
-        "menu_images_byte_size_range": {
-          "name": "menu_images_byte_size_range",
-          "value": "\"menu_images\".\"byte_size\" between 1 and 409600"
-        },
-        "menu_images_byte_size_matches": {
-          "name": "menu_images_byte_size_matches",
-          "value": "octet_length(\"menu_images\".\"bytes\") = \"menu_images\".\"byte_size\""
-        }
-      },
       "isRLSEnabled": false
     },
     "public.menu_item_modifier_groups": {
@@ -910,54 +2093,54 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "menu_item_modifier_groups_restaurant_id_restaurants_id_fk": {
           "name": "menu_item_modifier_groups_restaurant_id_restaurants_id_fk",
           "tableFrom": "menu_item_modifier_groups",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "menu_item_modifier_groups_item_fk": {
           "name": "menu_item_modifier_groups_item_fk",
           "tableFrom": "menu_item_modifier_groups",
-          "tableTo": "menu_items",
           "columnsFrom": [
             "restaurant_id",
             "menu_item_id"
           ],
+          "tableTo": "menu_items",
           "columnsTo": [
             "restaurant_id",
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "menu_item_modifier_groups_group_fk": {
           "name": "menu_item_modifier_groups_group_fk",
           "tableFrom": "menu_item_modifier_groups",
-          "tableTo": "modifier_groups",
           "columnsFrom": [
             "restaurant_id",
             "modifier_group_id"
           ],
+          "tableTo": "modifier_groups",
           "columnsTo": [
             "restaurant_id",
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {
@@ -995,7 +2178,7 @@
           "name": "category_id",
           "type": "uuid",
           "primaryKey": false,
-          "notNull": false
+          "notNull": true
         },
         "name": {
           "name": "name",
@@ -1028,12 +2211,6 @@
           "primaryKey": false,
           "notNull": true,
           "default": 0
-        },
-        "image_id": {
-          "name": "image_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
         },
         "archived_at": {
           "name": "archived_at",
@@ -1074,80 +2251,50 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
-        },
-        "menu_items_image_idx": {
-          "name": "menu_items_image_idx",
-          "columns": [
-            {
-              "expression": "image_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "menu_items_restaurant_id_restaurants_id_fk": {
           "name": "menu_items_restaurant_id_restaurants_id_fk",
           "tableFrom": "menu_items",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "menu_items_category_fk": {
           "name": "menu_items_category_fk",
           "tableFrom": "menu_items",
-          "tableTo": "menu_categories",
           "columnsFrom": [
             "restaurant_id",
             "category_id"
           ],
+          "tableTo": "menu_categories",
           "columnsTo": [
             "restaurant_id",
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "menu_items_image_fk": {
-          "name": "menu_items_image_fk",
-          "tableFrom": "menu_items",
-          "tableTo": "menu_images",
-          "columnsFrom": [
-            "restaurant_id",
-            "image_id"
-          ],
-          "columnsTo": [
-            "restaurant_id",
-            "id"
-          ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "menu_items_id_restaurant_unique": {
           "name": "menu_items_id_restaurant_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "id",
             "restaurant_id"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
@@ -1233,35 +2380,35 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "modifier_groups_restaurant_id_restaurants_id_fk": {
           "name": "modifier_groups_restaurant_id_restaurants_id_fk",
           "tableFrom": "modifier_groups",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "modifier_groups_id_restaurant_unique": {
           "name": "modifier_groups_id_restaurant_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "id",
             "restaurant_id"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
@@ -1347,39 +2494,39 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "modifiers_restaurant_id_restaurants_id_fk": {
           "name": "modifiers_restaurant_id_restaurants_id_fk",
           "tableFrom": "modifiers",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "modifiers_group_fk": {
           "name": "modifiers_group_fk",
           "tableFrom": "modifiers",
-          "tableTo": "modifier_groups",
           "columnsFrom": [
             "restaurant_id",
             "group_id"
           ],
+          "tableTo": "modifier_groups",
           "columnsTo": [
             "restaurant_id",
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
@@ -1454,69 +2601,69 @@
         "invoices_restaurant_id_restaurants_id_fk": {
           "name": "invoices_restaurant_id_restaurants_id_fk",
           "tableFrom": "invoices",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "invoices_device_id_pos_devices_id_fk": {
           "name": "invoices_device_id_pos_devices_id_fk",
           "tableFrom": "invoices",
-          "tableTo": "pos_devices",
           "columnsFrom": [
             "device_id"
           ],
+          "tableTo": "pos_devices",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "invoices_order_fk": {
           "name": "invoices_order_fk",
           "tableFrom": "invoices",
-          "tableTo": "orders",
           "columnsFrom": [
             "restaurant_id",
             "order_id"
           ],
+          "tableTo": "orders",
           "columnsTo": [
             "restaurant_id",
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "invoices_order_unique": {
           "name": "invoices_order_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "order_id"
-          ]
+          ],
+          "nullsNotDistinct": false
         },
         "invoices_device_number_unique": {
           "name": "invoices_device_number_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "device_id",
             "invoice_number"
-          ]
+          ],
+          "nullsNotDistinct": false
         },
         "invoices_device_seq_unique": {
           "name": "invoices_device_seq_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "device_id",
             "invoice_seq"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
@@ -1593,52 +2740,52 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "order_line_modifiers_restaurant_id_restaurants_id_fk": {
           "name": "order_line_modifiers_restaurant_id_restaurants_id_fk",
           "tableFrom": "order_line_modifiers",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "order_line_modifiers_modifier_id_modifiers_id_fk": {
           "name": "order_line_modifiers_modifier_id_modifiers_id_fk",
           "tableFrom": "order_line_modifiers",
-          "tableTo": "modifiers",
           "columnsFrom": [
             "modifier_id"
           ],
+          "tableTo": "modifiers",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "order_line_modifiers_line_fk": {
           "name": "order_line_modifiers_line_fk",
           "tableFrom": "order_line_modifiers",
-          "tableTo": "order_lines",
           "columnsFrom": [
             "restaurant_id",
             "order_line_id"
           ],
+          "tableTo": "order_lines",
           "columnsTo": [
             "restaurant_id",
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
@@ -1739,73 +2886,73 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "order_lines_restaurant_id_restaurants_id_fk": {
           "name": "order_lines_restaurant_id_restaurants_id_fk",
           "tableFrom": "order_lines",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "order_lines_order_fk": {
           "name": "order_lines_order_fk",
           "tableFrom": "order_lines",
-          "tableTo": "orders",
           "columnsFrom": [
             "restaurant_id",
             "order_id"
           ],
+          "tableTo": "orders",
           "columnsTo": [
             "restaurant_id",
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "order_lines_menu_item_fk": {
           "name": "order_lines_menu_item_fk",
           "tableFrom": "order_lines",
-          "tableTo": "menu_items",
           "columnsFrom": [
             "restaurant_id",
             "menu_item_id"
           ],
+          "tableTo": "menu_items",
           "columnsTo": [
             "restaurant_id",
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "order_lines_id_restaurant_unique": {
           "name": "order_lines_id_restaurant_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "id",
             "restaurant_id"
-          ]
+          ],
+          "nullsNotDistinct": false
         },
         "order_lines_order_line_no_unique": {
           "name": "order_lines_order_line_no_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "order_id",
             "line_no"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
@@ -1876,12 +3023,6 @@
         },
         "table_label": {
           "name": "table_label",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "note": {
-          "name": "note",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -1993,9 +3134,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "orders_session_idx": {
           "name": "orders_session_idx",
@@ -2008,9 +3149,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "orders_employee_idx": {
           "name": "orders_employee_idx",
@@ -2023,91 +3164,87 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "orders_restaurant_id_restaurants_id_fk": {
           "name": "orders_restaurant_id_restaurants_id_fk",
           "tableFrom": "orders",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "orders_device_id_pos_devices_id_fk": {
           "name": "orders_device_id_pos_devices_id_fk",
           "tableFrom": "orders",
-          "tableTo": "pos_devices",
           "columnsFrom": [
             "device_id"
           ],
+          "tableTo": "pos_devices",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "orders_employee_user_id_users_id_fk": {
           "name": "orders_employee_user_id_users_id_fk",
           "tableFrom": "orders",
-          "tableTo": "users",
           "columnsFrom": [
             "employee_user_id"
           ],
+          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "orders_session_fk": {
           "name": "orders_session_fk",
           "tableFrom": "orders",
-          "tableTo": "pos_sessions",
           "columnsFrom": [
             "restaurant_id",
             "pos_session_id"
           ],
+          "tableTo": "pos_sessions",
           "columnsTo": [
             "restaurant_id",
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "orders_id_restaurant_unique": {
           "name": "orders_id_restaurant_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "id",
             "restaurant_id"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
       "checkConstraints": {
         "orders_order_type_valid": {
           "name": "orders_order_type_valid",
-          "value": "\"orders\".\"order_type\" in ('dine_in', 'takeaway', 'delivery')"
+          "value": "\"orders\".\"order_type\" in ('dine_in', 'takeaway')"
         },
         "orders_table_label_length": {
           "name": "orders_table_label_length",
           "value": "\"orders\".\"table_label\" is null or char_length(\"orders\".\"table_label\") between 1 and 32"
-        },
-        "orders_note_length": {
-          "name": "orders_note_length",
-          "value": "\"orders\".\"note\" is null or char_length(\"orders\".\"note\") between 1 and 140"
         },
         "orders_status_valid": {
           "name": "orders_status_valid",
@@ -2212,39 +3349,39 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "payments_restaurant_id_restaurants_id_fk": {
           "name": "payments_restaurant_id_restaurants_id_fk",
           "tableFrom": "payments",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "payments_order_fk": {
           "name": "payments_order_fk",
           "tableFrom": "payments",
-          "tableTo": "orders",
           "columnsFrom": [
             "restaurant_id",
             "order_id"
           ],
+          "tableTo": "orders",
           "columnsTo": [
             "restaurant_id",
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
@@ -2345,9 +3482,9 @@
             }
           ],
           "isUnique": true,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "pos_devices_restaurant_device_code_unique": {
           "name": "pos_devices_restaurant_device_code_unique",
@@ -2366,9 +3503,9 @@
             }
           ],
           "isUnique": true,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "pos_devices_restaurant_id_idx": {
           "name": "pos_devices_restaurant_id_idx",
@@ -2381,50 +3518,50 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "pos_devices_restaurant_id_restaurants_id_fk": {
           "name": "pos_devices_restaurant_id_restaurants_id_fk",
           "tableFrom": "pos_devices",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "pos_devices_registered_by_user_id_users_id_fk": {
           "name": "pos_devices_registered_by_user_id_users_id_fk",
           "tableFrom": "pos_devices",
-          "tableTo": "users",
           "columnsFrom": [
             "registered_by_user_id"
           ],
+          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "pos_devices_revoked_by_user_id_users_id_fk": {
           "name": "pos_devices_revoked_by_user_id_users_id_fk",
           "tableFrom": "pos_devices",
-          "tableTo": "users",
           "columnsFrom": [
             "revoked_by_user_id"
           ],
+          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
@@ -2554,10 +3691,10 @@
             }
           ],
           "isUnique": true,
-          "where": "\"pos_sessions\".\"status\" = 'open'",
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "where": "\"pos_sessions\".\"status\" = 'open'",
+          "concurrently": false
         },
         "pos_sessions_restaurant_business_date_idx": {
           "name": "pos_sessions_restaurant_business_date_idx",
@@ -2576,9 +3713,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "pos_sessions_device_status_idx": {
           "name": "pos_sessions_device_status_idx",
@@ -2597,87 +3734,87 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "pos_sessions_restaurant_id_restaurants_id_fk": {
           "name": "pos_sessions_restaurant_id_restaurants_id_fk",
           "tableFrom": "pos_sessions",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "pos_sessions_device_id_pos_devices_id_fk": {
           "name": "pos_sessions_device_id_pos_devices_id_fk",
           "tableFrom": "pos_sessions",
-          "tableTo": "pos_devices",
           "columnsFrom": [
             "device_id"
           ],
+          "tableTo": "pos_devices",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "pos_sessions_opened_by_user_id_users_id_fk": {
           "name": "pos_sessions_opened_by_user_id_users_id_fk",
           "tableFrom": "pos_sessions",
-          "tableTo": "users",
           "columnsFrom": [
             "opened_by_user_id"
           ],
+          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "pos_sessions_closed_by_user_id_users_id_fk": {
           "name": "pos_sessions_closed_by_user_id_users_id_fk",
           "tableFrom": "pos_sessions",
-          "tableTo": "users",
           "columnsFrom": [
             "closed_by_user_id"
           ],
+          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "pos_sessions_closed_from_device_id_pos_devices_id_fk": {
           "name": "pos_sessions_closed_from_device_id_pos_devices_id_fk",
           "tableFrom": "pos_sessions",
-          "tableTo": "pos_devices",
           "columnsFrom": [
             "closed_from_device_id"
           ],
+          "tableTo": "pos_devices",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "pos_sessions_id_restaurant_unique": {
           "name": "pos_sessions_id_restaurant_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "id",
             "restaurant_id"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
@@ -2707,15 +3844,15 @@
           "primaryKey": true,
           "notNull": true,
           "identity": {
-            "type": "always",
             "name": "pos_sync_ops_id_seq",
-            "schema": "public",
             "increment": "1",
-            "startWith": "1",
             "minValue": "1",
             "maxValue": "9223372036854775807",
+            "startWith": "1",
             "cache": "1",
-            "cycle": false
+            "cycle": false,
+            "schema": "public",
+            "type": "always"
           }
         },
         "restaurant_id": {
@@ -2866,9 +4003,9 @@
             }
           ],
           "isUnique": true,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "pos_sync_ops_restaurant_unresolved_idx": {
           "name": "pos_sync_ops_restaurant_unresolved_idx",
@@ -2887,10 +4024,10 @@
             }
           ],
           "isUnique": false,
-          "where": "\"pos_sync_ops\".\"status\" <> 'accepted' and \"pos_sync_ops\".\"resolved_at\" is null",
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "where": "\"pos_sync_ops\".\"status\" <> 'accepted' and \"pos_sync_ops\".\"resolved_at\" is null",
+          "concurrently": false
         },
         "pos_sync_ops_session_idx": {
           "name": "pos_sync_ops_session_idx",
@@ -2903,9 +4040,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "pos_sync_ops_device_invoice_seq_idx": {
           "name": "pos_sync_ops_device_invoice_seq_idx",
@@ -2924,76 +4061,76 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "pos_sync_ops_restaurant_id_restaurants_id_fk": {
           "name": "pos_sync_ops_restaurant_id_restaurants_id_fk",
           "tableFrom": "pos_sync_ops",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "pos_sync_ops_device_id_pos_devices_id_fk": {
           "name": "pos_sync_ops_device_id_pos_devices_id_fk",
           "tableFrom": "pos_sync_ops",
-          "tableTo": "pos_devices",
           "columnsFrom": [
             "device_id"
           ],
+          "tableTo": "pos_devices",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "pos_sync_ops_received_via_device_id_pos_devices_id_fk": {
           "name": "pos_sync_ops_received_via_device_id_pos_devices_id_fk",
           "tableFrom": "pos_sync_ops",
-          "tableTo": "pos_devices",
           "columnsFrom": [
             "received_via_device_id"
           ],
+          "tableTo": "pos_devices",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "pos_sync_ops_employee_user_id_users_id_fk": {
           "name": "pos_sync_ops_employee_user_id_users_id_fk",
           "tableFrom": "pos_sync_ops",
-          "tableTo": "users",
           "columnsFrom": [
             "employee_user_id"
           ],
+          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "pos_sync_ops_resolved_by_user_id_users_id_fk": {
           "name": "pos_sync_ops_resolved_by_user_id_users_id_fk",
           "tableFrom": "pos_sync_ops",
-          "tableTo": "users",
           "columnsFrom": [
             "resolved_by_user_id"
           ],
+          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
@@ -3011,6 +4148,598 @@
         "pos_sync_ops_resolution_valid": {
           "name": "pos_sync_ops_resolution_valid",
           "value": "\"pos_sync_ops\".\"resolution\" is null or \"pos_sync_ops\".\"resolution\" in ('retried', 'dismissed')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.purchase_lines": {
+      "name": "purchase_lines",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "restaurant_id": {
+          "name": "restaurant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "purchase_id": {
+          "name": "purchase_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "line_no": {
+          "name": "line_no",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ingredient_id": {
+          "name": "ingredient_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "purchase_unit_name": {
+          "name": "purchase_unit_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "unit_qty": {
+          "name": "unit_qty",
+          "type": "numeric(12, 3)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_qty_per_unit": {
+          "name": "base_qty_per_unit",
+          "type": "numeric(12, 3)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "base_qty": {
+          "name": "base_qty",
+          "type": "numeric(12, 3)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "line_cost_minor": {
+          "name": "line_cost_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "purchase_lines_ingredient_idx": {
+          "name": "purchase_lines_ingredient_idx",
+          "columns": [
+            {
+              "expression": "ingredient_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        }
+      },
+      "foreignKeys": {
+        "purchase_lines_restaurant_id_restaurants_id_fk": {
+          "name": "purchase_lines_restaurant_id_restaurants_id_fk",
+          "tableFrom": "purchase_lines",
+          "columnsFrom": [
+            "restaurant_id"
+          ],
+          "tableTo": "restaurants",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "purchase_lines_purchase_fk": {
+          "name": "purchase_lines_purchase_fk",
+          "tableFrom": "purchase_lines",
+          "columnsFrom": [
+            "restaurant_id",
+            "purchase_id"
+          ],
+          "tableTo": "purchases",
+          "columnsTo": [
+            "restaurant_id",
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "purchase_lines_ingredient_fk": {
+          "name": "purchase_lines_ingredient_fk",
+          "tableFrom": "purchase_lines",
+          "columnsFrom": [
+            "restaurant_id",
+            "ingredient_id"
+          ],
+          "tableTo": "ingredients",
+          "columnsTo": [
+            "restaurant_id",
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "purchase_lines_purchase_line_no_unique": {
+          "name": "purchase_lines_purchase_line_no_unique",
+          "columns": [
+            "purchase_id",
+            "line_no"
+          ],
+          "nullsNotDistinct": false
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "purchase_lines_amounts_valid": {
+          "name": "purchase_lines_amounts_valid",
+          "value": "\"purchase_lines\".\"unit_qty\" > 0 and \"purchase_lines\".\"base_qty_per_unit\" > 0 and \"purchase_lines\".\"base_qty\" > 0 and \"purchase_lines\".\"line_cost_minor\" >= 0 and \"purchase_lines\".\"line_no\" >= 1"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.purchases": {
+      "name": "purchases",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "restaurant_id": {
+          "name": "restaurant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "supplier_name": {
+          "name": "supplier_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "business_date": {
+          "name": "business_date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "paid_by": {
+          "name": "paid_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "total_minor": {
+          "name": "total_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recorded_by_user_id": {
+          "name": "recorded_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recorded_at": {
+          "name": "recorded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "journal_entry_id": {
+          "name": "journal_entry_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reversed_at": {
+          "name": "reversed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reversed_by_user_id": {
+          "name": "reversed_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reversal_reason": {
+          "name": "reversal_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reversal_entry_id": {
+          "name": "reversal_entry_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "purchases_restaurant_business_date_idx": {
+          "name": "purchases_restaurant_business_date_idx",
+          "columns": [
+            {
+              "expression": "restaurant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "business_date",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        },
+        "purchases_restaurant_recorded_idx": {
+          "name": "purchases_restaurant_recorded_idx",
+          "columns": [
+            {
+              "expression": "restaurant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "\"recorded_at\" desc",
+              "isExpression": true,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        }
+      },
+      "foreignKeys": {
+        "purchases_restaurant_id_restaurants_id_fk": {
+          "name": "purchases_restaurant_id_restaurants_id_fk",
+          "tableFrom": "purchases",
+          "columnsFrom": [
+            "restaurant_id"
+          ],
+          "tableTo": "restaurants",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "purchases_recorded_by_user_id_users_id_fk": {
+          "name": "purchases_recorded_by_user_id_users_id_fk",
+          "tableFrom": "purchases",
+          "columnsFrom": [
+            "recorded_by_user_id"
+          ],
+          "tableTo": "users",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "purchases_journal_entry_id_journal_entries_id_fk": {
+          "name": "purchases_journal_entry_id_journal_entries_id_fk",
+          "tableFrom": "purchases",
+          "columnsFrom": [
+            "journal_entry_id"
+          ],
+          "tableTo": "journal_entries",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "purchases_reversed_by_user_id_users_id_fk": {
+          "name": "purchases_reversed_by_user_id_users_id_fk",
+          "tableFrom": "purchases",
+          "columnsFrom": [
+            "reversed_by_user_id"
+          ],
+          "tableTo": "users",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "purchases_reversal_entry_id_journal_entries_id_fk": {
+          "name": "purchases_reversal_entry_id_journal_entries_id_fk",
+          "tableFrom": "purchases",
+          "columnsFrom": [
+            "reversal_entry_id"
+          ],
+          "tableTo": "journal_entries",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "purchases_id_restaurant_unique": {
+          "name": "purchases_id_restaurant_unique",
+          "columns": [
+            "id",
+            "restaurant_id"
+          ],
+          "nullsNotDistinct": false
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "purchases_supplier_name_length": {
+          "name": "purchases_supplier_name_length",
+          "value": "char_length(btrim(\"purchases\".\"supplier_name\")) between 1 and 120"
+        },
+        "purchases_paid_by_valid": {
+          "name": "purchases_paid_by_valid",
+          "value": "\"purchases\".\"paid_by\" in ('cash', 'bank', 'credit')"
+        },
+        "purchases_total_non_negative": {
+          "name": "purchases_total_non_negative",
+          "value": "\"purchases\".\"total_minor\" >= 0"
+        },
+        "purchases_reversal_fields": {
+          "name": "purchases_reversal_fields",
+          "value": "(\"purchases\".\"reversed_at\" is null) = (\"purchases\".\"reversed_by_user_id\" is null) and (\"purchases\".\"reversed_at\" is null) = (\"purchases\".\"reversal_reason\" is null) and (\"purchases\".\"reversal_reason\" is null or char_length(btrim(\"purchases\".\"reversal_reason\")) between 3 and 200)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.supplier_payments": {
+      "name": "supplier_payments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "restaurant_id": {
+          "name": "restaurant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "purchase_id": {
+          "name": "purchase_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "amount_minor": {
+          "name": "amount_minor",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "paid_from": {
+          "name": "paid_from",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "business_date": {
+          "name": "business_date",
+          "type": "date",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recorded_by_user_id": {
+          "name": "recorded_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "recorded_at": {
+          "name": "recorded_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "journal_entry_id": {
+          "name": "journal_entry_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reversed_at": {
+          "name": "reversed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reversed_by_user_id": {
+          "name": "reversed_by_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reversal_reason": {
+          "name": "reversal_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reversal_entry_id": {
+          "name": "reversal_entry_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "supplier_payments_purchase_idx": {
+          "name": "supplier_payments_purchase_idx",
+          "columns": [
+            {
+              "expression": "purchase_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "with": {},
+          "method": "btree",
+          "concurrently": false
+        }
+      },
+      "foreignKeys": {
+        "supplier_payments_restaurant_id_restaurants_id_fk": {
+          "name": "supplier_payments_restaurant_id_restaurants_id_fk",
+          "tableFrom": "supplier_payments",
+          "columnsFrom": [
+            "restaurant_id"
+          ],
+          "tableTo": "restaurants",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "supplier_payments_recorded_by_user_id_users_id_fk": {
+          "name": "supplier_payments_recorded_by_user_id_users_id_fk",
+          "tableFrom": "supplier_payments",
+          "columnsFrom": [
+            "recorded_by_user_id"
+          ],
+          "tableTo": "users",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "supplier_payments_journal_entry_id_journal_entries_id_fk": {
+          "name": "supplier_payments_journal_entry_id_journal_entries_id_fk",
+          "tableFrom": "supplier_payments",
+          "columnsFrom": [
+            "journal_entry_id"
+          ],
+          "tableTo": "journal_entries",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "supplier_payments_reversed_by_user_id_users_id_fk": {
+          "name": "supplier_payments_reversed_by_user_id_users_id_fk",
+          "tableFrom": "supplier_payments",
+          "columnsFrom": [
+            "reversed_by_user_id"
+          ],
+          "tableTo": "users",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "supplier_payments_reversal_entry_id_journal_entries_id_fk": {
+          "name": "supplier_payments_reversal_entry_id_journal_entries_id_fk",
+          "tableFrom": "supplier_payments",
+          "columnsFrom": [
+            "reversal_entry_id"
+          ],
+          "tableTo": "journal_entries",
+          "columnsTo": [
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        },
+        "supplier_payments_purchase_fk": {
+          "name": "supplier_payments_purchase_fk",
+          "tableFrom": "supplier_payments",
+          "columnsFrom": [
+            "restaurant_id",
+            "purchase_id"
+          ],
+          "tableTo": "purchases",
+          "columnsTo": [
+            "restaurant_id",
+            "id"
+          ],
+          "onUpdate": "no action",
+          "onDelete": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "supplier_payments_amount_positive": {
+          "name": "supplier_payments_amount_positive",
+          "value": "\"supplier_payments\".\"amount_minor\" > 0"
+        },
+        "supplier_payments_paid_from_valid": {
+          "name": "supplier_payments_paid_from_valid",
+          "value": "\"supplier_payments\".\"paid_from\" in ('cash', 'bank')"
+        },
+        "supplier_payments_reversal_fields": {
+          "name": "supplier_payments_reversal_fields",
+          "value": "(\"supplier_payments\".\"reversed_at\" is null) = (\"supplier_payments\".\"reversed_by_user_id\" is null) and (\"supplier_payments\".\"reversed_at\" is null) = (\"supplier_payments\".\"reversal_reason\" is null) and (\"supplier_payments\".\"reversal_reason\" is null or char_length(btrim(\"supplier_payments\".\"reversal_reason\")) between 3 and 200)"
         }
       },
       "isRLSEnabled": false
@@ -3067,30 +4796,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "receipt_address": {
-          "name": "receipt_address",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "receipt_phone": {
-          "name": "receipt_phone",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "tax_registration_number": {
-          "name": "tax_registration_number",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "receipt_footer": {
-          "name": "receipt_footer",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "menu_version": {
           "name": "menu_version",
           "type": "integer",
@@ -3111,15 +4816,15 @@
         "restaurant_settings_restaurant_id_restaurants_id_fk": {
           "name": "restaurant_settings_restaurant_id_restaurants_id_fk",
           "tableFrom": "restaurant_settings",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
@@ -3137,22 +4842,6 @@
         "restaurant_settings_currency_code_format": {
           "name": "restaurant_settings_currency_code_format",
           "value": "\"restaurant_settings\".\"currency_code\" is null or \"restaurant_settings\".\"currency_code\" ~ '^[A-Z]{3}$'"
-        },
-        "restaurant_settings_receipt_address_length": {
-          "name": "restaurant_settings_receipt_address_length",
-          "value": "\"restaurant_settings\".\"receipt_address\" is null or char_length(\"restaurant_settings\".\"receipt_address\") between 1 and 120"
-        },
-        "restaurant_settings_receipt_phone_length": {
-          "name": "restaurant_settings_receipt_phone_length",
-          "value": "\"restaurant_settings\".\"receipt_phone\" is null or char_length(\"restaurant_settings\".\"receipt_phone\") between 1 and 40"
-        },
-        "restaurant_settings_tax_registration_number_length": {
-          "name": "restaurant_settings_tax_registration_number_length",
-          "value": "\"restaurant_settings\".\"tax_registration_number\" is null or char_length(\"restaurant_settings\".\"tax_registration_number\") between 1 and 40"
-        },
-        "restaurant_settings_receipt_footer_length": {
-          "name": "restaurant_settings_receipt_footer_length",
-          "value": "\"restaurant_settings\".\"receipt_footer\" is null or char_length(\"restaurant_settings\".\"receipt_footer\") between 1 and 120"
         }
       },
       "isRLSEnabled": false
@@ -3239,39 +4928,39 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "role_permissions_restaurant_id_restaurants_id_fk": {
           "name": "role_permissions_restaurant_id_restaurants_id_fk",
           "tableFrom": "role_permissions",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "role_permissions_role_fk": {
           "name": "role_permissions_role_fk",
           "tableFrom": "role_permissions",
-          "tableTo": "roles",
           "columnsFrom": [
             "restaurant_id",
             "role_id"
           ],
+          "tableTo": "roles",
           "columnsTo": [
             "restaurant_id",
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {
@@ -3349,9 +5038,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "roles_name_unique": {
           "name": "roles_name_unique",
@@ -3364,42 +5053,42 @@
             },
             {
               "expression": "lower(\"name\")",
-              "asc": true,
               "isExpression": true,
+              "asc": true,
               "nulls": "last"
             }
           ],
           "isUnique": true,
-          "where": "\"roles\".\"archived_at\" is null",
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "where": "\"roles\".\"archived_at\" is null",
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "roles_restaurant_id_restaurants_id_fk": {
           "name": "roles_restaurant_id_restaurants_id_fk",
           "tableFrom": "roles",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
         "roles_id_restaurant_unique": {
           "name": "roles_id_restaurant_unique",
-          "nullsNotDistinct": false,
           "columns": [
             "id",
             "restaurant_id"
-          ]
+          ],
+          "nullsNotDistinct": false
         }
       },
       "policies": {},
@@ -3464,9 +5153,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "sessions_expires_at_idx": {
           "name": "sessions_expires_at_idx",
@@ -3479,24 +5168,24 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "sessions_user_id_users_id_fk": {
           "name": "sessions_user_id_users_id_fk",
           "tableFrom": "sessions",
-          "tableTo": "users",
           "columnsFrom": [
             "user_id"
           ],
+          "tableTo": "users",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "cascade"
         }
       },
       "compositePrimaryKeys": {},
@@ -3613,16 +5302,16 @@
           "columns": [
             {
               "expression": "lower(\"email\")",
-              "asc": true,
               "isExpression": true,
+              "asc": true,
               "nulls": "last"
             }
           ],
           "isUnique": true,
-          "where": "\"users\".\"email\" is not null",
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "where": "\"users\".\"email\" is not null",
+          "concurrently": false
         },
         "users_one_owner_per_restaurant": {
           "name": "users_one_owner_per_restaurant",
@@ -3635,10 +5324,10 @@
             }
           ],
           "isUnique": true,
-          "where": "\"users\".\"role\" = 'owner'",
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "where": "\"users\".\"role\" = 'owner'",
+          "concurrently": false
         },
         "users_restaurant_id_idx": {
           "name": "users_restaurant_id_idx",
@@ -3651,9 +5340,9 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         },
         "users_role_id_idx": {
           "name": "users_role_id_idx",
@@ -3666,39 +5355,39 @@
             }
           ],
           "isUnique": false,
-          "concurrently": false,
+          "with": {},
           "method": "btree",
-          "with": {}
+          "concurrently": false
         }
       },
       "foreignKeys": {
         "users_restaurant_id_restaurants_id_fk": {
           "name": "users_restaurant_id_restaurants_id_fk",
           "tableFrom": "users",
-          "tableTo": "restaurants",
           "columnsFrom": [
             "restaurant_id"
           ],
+          "tableTo": "restaurants",
           "columnsTo": [
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         },
         "users_role_fk": {
           "name": "users_role_fk",
           "tableFrom": "users",
-          "tableTo": "roles",
           "columnsFrom": [
             "restaurant_id",
             "role_id"
           ],
+          "tableTo": "roles",
           "columnsTo": [
             "restaurant_id",
             "id"
           ],
-          "onDelete": "restrict",
-          "onUpdate": "no action"
+          "onUpdate": "no action",
+          "onDelete": "restrict"
         }
       },
       "compositePrimaryKeys": {},
@@ -3732,10 +5421,10 @@
     }
   },
   "schemas": {},
+  "views": {},
   "sequences": {},
   "roles": {},
   "policies": {},
-  "views": {},
   "_meta": {
     "columns": {},
     "schemas": {},

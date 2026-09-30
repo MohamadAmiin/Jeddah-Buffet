@@ -19,6 +19,9 @@ import {
 	setItemAvailability,
 	setItemImage
 } from '$lib/server/menu';
+import { applyMovements, createIngredient, setRecipe } from '$lib/server/inventory';
+import { minor } from '$lib/money';
+import { qty } from '$lib/money/quantity';
 import { GET } from './+server';
 import { GET as versionGet } from './version/+server';
 
@@ -326,5 +329,60 @@ describe('GET /api/menu', () => {
 		expect(payload.items.every((item) => 'imageId' in item)).toBe(true);
 		expect(byId.get(plain)!.imageId).toBeNull();
 		expect(byId.get(pictured)!.imageId).toBe(set.imageId);
+	});
+
+	// tasks/inventory-cogs T-34: recipe cost and margin are dashboard-only. The
+	// till's snapshot must never carry them, at any depth (the risk panel's
+	// minor finding) — even for an item whose recipe has a real cost.
+	it('never carries a cost or a margin, even for an item with a costed recipe', async () => {
+		const a = await makeRestaurant('Cafe One');
+		const itemId = await addItem(a, 'Burger', 800n);
+		const ctx = { restaurantId: a.restaurantId, actorUserId: a.ownerId, ip: null, userAgent: null };
+		await db.transaction(async (tx) => {
+			const meat = await createIngredient(tx, ctx, { name: 'Meat', baseUnit: 'g' });
+			if (!meat.ok) throw new Error(meat.reason);
+			await applyMovements(
+				tx,
+				{
+					restaurantId: a.restaurantId,
+					sourceType: 'purchase',
+					sourceId: crypto.randomUUID(),
+					businessDate: '2026-09-28',
+					occurredAt: new Date(),
+					recordedByUserId: a.ownerId
+				},
+				[
+					{
+						kind: 'inbound',
+						type: 'purchase',
+						ingredientId: meat.id,
+						qty: qty(1000000n),
+						costMinor: minor(550n)
+					}
+				]
+			);
+			const recipe = await setRecipe(tx, ctx, {
+				owner: { kind: 'item', id: itemId },
+				lines: [{ ingredientId: meat.id, qty: qty(150000n) }]
+			});
+			if (!recipe.ok) throw new Error(recipe.reason);
+		});
+
+		const result = await call(GET, '/api/menu', { [DEVICE_COOKIE]: a.token });
+		expect(result.status).toBe(200);
+		const forbidden = new Set(['cost', 'costMinor', 'margin', 'marginMinor']);
+		const found: string[] = [];
+		const walk = (value: unknown, path: string): void => {
+			if (Array.isArray(value)) value.forEach((v, i) => walk(v, `${path}[${i}]`));
+			else if (value && typeof value === 'object') {
+				for (const [key, v] of Object.entries(value)) {
+					if (forbidden.has(key)) found.push(`${path}.${key}`);
+					walk(v, `${path}.${key}`);
+				}
+			}
+		};
+		walk(JSON.parse(result.text), '$');
+		expect(found).toEqual([]);
+		expect(result.text).toContain('Burger');
 	});
 });

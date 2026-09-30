@@ -522,7 +522,7 @@ describe('chart backfill (T-09)', () => {
 		expect(await accountId(r2, '1000')).toBeTruthy();
 	});
 
-	it('the triggers are deferrable and initially deferred; the four append-only triggers exist', async () => {
+	it('the triggers are deferrable and initially deferred; the nine append-only triggers exist', async () => {
 		const { rows: deferred } = await pool.query<{
 			tgname: string;
 			tgdeferrable: boolean;
@@ -537,9 +537,21 @@ describe('chart backfill (T-09)', () => {
 			expect(row.tginitdeferred).toBe(true);
 		}
 
-		const { rows: appendOnly } = await pool.query<{ c: string }>(
-			`select count(*)::text as c from pg_trigger where tgname like '%_append_only'`
+		// The exact set, not a count: pos-sales' four plus tasks/inventory-cogs
+		// migration 0014's five (T-08).
+		const { rows: appendOnly } = await pool.query<{ tgname: string }>(
+			`select tgname from pg_trigger where tgname like '%_append_only' order by tgname`
 		);
-		expect(appendOnly[0].c).toBe('4');
+		expect(appendOnly.map((row) => row.tgname)).toEqual([
+			'invoices_append_only',
+			'journal_entries_append_only',
+			'journal_entry_lines_append_only',
+			'opening_stock_entries_append_only',
+			'payments_append_only',
+			'purchase_lines_append_only',
+			'stock_count_lines_append_only',
+			'stock_movements_append_only',
+			'waste_entries_append_only'
+		]);
 	});
 });

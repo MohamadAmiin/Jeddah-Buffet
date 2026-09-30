@@ -23,6 +23,8 @@ import * as accountingSchema from '../schema/accounting';
 import * as posSessionsSchema from '../schema/pos-sessions';
 import * as ordersSchema from '../schema/orders';
 import * as posSyncSchema from '../schema/pos-sync';
+import * as inventorySchema from '../schema/inventory';
+import * as purchasesSchema from '../schema/purchases';
 import { TABLES } from '../test/reset';
 
 // Tables are DISCOVERED from the schema modules' exports, never from a
@@ -47,7 +49,9 @@ const modules = {
 	...accountingSchema,
 	...posSessionsSchema,
 	...ordersSchema,
-	...posSyncSchema
+	...posSyncSchema,
+	...inventorySchema,
+	...purchasesSchema
 };
 
 // Every file in src/lib/server/db/schema/ that is imported above. A schema file
@@ -56,11 +60,13 @@ const modules = {
 const IMPORTED_SCHEMA_FILES = [
 	'accounting.ts',
 	'audit.ts',
+	'inventory.ts',
 	'menu.ts',
 	'orders.ts',
 	'pos-devices.ts',
 	'pos-sessions.ts',
 	'pos-sync.ts',
+	'purchases.ts',
 	'restaurant-settings.ts',
 	'restaurants.ts',
 	'roles.ts',
@@ -114,7 +120,9 @@ const MONEY_NAME_EXEMPT: Record<string, string> = {
 	// trips MONEY_NAME (tasks/menu-and-printing T-20). It is text, so the numeric
 	// guard would not fire anyway; the entry records the decision.
 	'restaurant_settings.tax_registration_number':
-		"a registration identifier, not money — the word 'tax' trips MONEY_NAME"
+		"a registration identifier, not money — the word 'tax' trips MONEY_NAME",
+	'ingredients.avg_unit_cost_micro':
+		'weighted-average unit cost in MICRO minor units per base unit (minor × 1,000,000): a per-gram cost is a fraction of a cent, so it cannot be a _minor integer; a plan decision (tasks/inventory-cogs assumption 6), never a convenience'
 };
 
 const MONEY_NAME =
@@ -196,6 +204,8 @@ describe('schema guards every future aggregate inherits', () => {
 		expect(tables.map((t) => t.name).sort()).toEqual([
 			'accounts',
 			'audit_log',
+			'ingredient_purchase_units',
+			'ingredients',
 			'invoices',
 			'journal_entries',
 			'journal_entry_lines',
@@ -205,6 +215,7 @@ describe('schema guards every future aggregate inherits', () => {
 			'menu_items',
 			'modifier_groups',
 			'modifiers',
+			'opening_stock_entries',
 			'order_line_modifiers',
 			'order_lines',
 			'orders',
@@ -212,12 +223,20 @@ describe('schema guards every future aggregate inherits', () => {
 			'pos_devices',
 			'pos_sessions',
 			'pos_sync_ops',
+			'purchase_lines',
+			'purchases',
+			'recipe_lines',
 			'restaurant_settings',
 			'restaurants',
 			'role_permissions',
 			'roles',
 			'sessions',
-			'users'
+			'stock_count_lines',
+			'stock_counts',
+			'stock_movements',
+			'supplier_payments',
+			'users',
+			'waste_entries'
 		]);
 	});
 

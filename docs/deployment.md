@@ -212,6 +212,7 @@ The printing rules the code enforces, for whoever operates the till:
 | `XFF_DEPTH` | behind a proxy | `1` for a single proxy. |
 | `SIGNUP` | optional | `open` (the default when unset) or `closed`. Anything else stops the app at boot. |
 | `BODY_SIZE_LIMIT` | optional | adapter-node's request body cap, default `512K`. Menu photos are capped at 400 KB (`src/lib/menu-images.ts`); do not set it lower. |
+| `LOGIN_THROTTLE_CAPACITY` | e2e only | Leave unset. Raises the per-address login throttle for the local Playwright journey; the app refuses to start with it on a non-localhost `ORIGIN`. |
 
 **One open question, recorded rather than decided.** `env.ts` currently *requires*
 `MIGRATE_DATABASE_URL` at application startup, which puts the **owner** credential

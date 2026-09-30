@@ -129,7 +129,84 @@ export type AuditEvent =
 	  }
 	| { event: 'sync.op_dismissed'; details: { opId: string; reason: string } }
 	| { event: 'pos.pin.offline_success'; details: { deviceCode: string } }
-	| { event: 'pos.pin.offline_failed'; details: { deviceCode: string; reason: 'bad_pin' } };
+	| { event: 'pos.pin.offline_failed'; details: { deviceCode: string; reason: 'bad_pin' } }
+	// tasks/inventory-cogs (T-15). Amounts and quantities are decimal STRINGS —
+	// jsonb cannot hold a bigint — and no key may contain "pin" (shipping,
+	// mapping, grouping…) or any other word assertNoSecrets refuses.
+	| {
+			event: 'ingredient.created';
+			details: { ingredientId: string; name: string; baseUnit: string };
+	  }
+	| {
+			event: 'ingredient.updated';
+			details: { ingredientId: string; changes: Record<string, { old: unknown; new: unknown }> };
+	  }
+	| { event: 'ingredient.archived'; details: { ingredientId: string; name: string } }
+	| {
+			event: 'purchase_unit.added';
+			details: { ingredientId: string; unitName: string; baseQtyPerUnit: string };
+	  }
+	| { event: 'purchase_unit.archived'; details: { ingredientId: string; unitName: string } }
+	| {
+			event: 'recipe.changed';
+			details: {
+				ownerKind: 'item' | 'modifier';
+				ownerId: string;
+				ownerName: string;
+				before: { ingredientId: string; qty: string }[];
+				after: { ingredientId: string; qty: string }[];
+			};
+	  }
+	| {
+			event: 'purchase.recorded';
+			details: {
+				purchaseId: string;
+				supplierName: string;
+				paidBy: 'cash' | 'bank' | 'credit';
+				totalMinor: string;
+				lineCount: number;
+			};
+	  }
+	| {
+			event: 'purchase.reversed';
+			details: { purchaseId: string; totalMinor: string; reason: string; revaluationMinor: string };
+	  }
+	| {
+			event: 'supplier.paid';
+			details: {
+				paymentId: string;
+				purchaseId: string;
+				amountMinor: string;
+				paidFrom: 'cash' | 'bank';
+			};
+	  }
+	| {
+			event: 'supplier.payment_reversed';
+			details: { paymentId: string; purchaseId: string; amountMinor: string; reason: string };
+	  }
+	| {
+			event: 'waste.recorded';
+			details: {
+				wasteId: string;
+				ingredientId: string;
+				qty: string;
+				reason: string;
+				costMinor: string;
+			};
+	  }
+	| {
+			event: 'stock.counted';
+			details: {
+				countId: string;
+				lineCount: number;
+				shortfallMinor: string;
+				surplusMinor: string;
+			};
+	  }
+	| {
+			event: 'opening_stock.recorded';
+			details: { entryId: string; ingredientId: string; qty: string; valueMinor: string };
+	  };
 
 export type AuditEventName = AuditEvent['event'];
 
@@ -167,7 +244,20 @@ export const AUDIT_EVENT_NAMES = [
 	'sync.op_retried',
 	'sync.op_dismissed',
 	'pos.pin.offline_success',
-	'pos.pin.offline_failed'
+	'pos.pin.offline_failed',
+	'ingredient.created',
+	'ingredient.updated',
+	'ingredient.archived',
+	'purchase_unit.added',
+	'purchase_unit.archived',
+	'recipe.changed',
+	'purchase.recorded',
+	'purchase.reversed',
+	'supplier.paid',
+	'supplier.payment_reversed',
+	'waste.recorded',
+	'stock.counted',
+	'opening_stock.recorded'
 ] as const satisfies readonly AuditEventName[];
 
 type AssertTrue<T extends true> = T;
