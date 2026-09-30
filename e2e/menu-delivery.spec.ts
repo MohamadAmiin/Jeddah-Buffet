@@ -127,7 +127,7 @@ test('menu photos, optional categories and a Delivery sale, online and offline',
 	await chooseOrderType(tillPage, 'Delivery');
 	await addItem(tillPage, 'Burger');
 	await payCash(tillPage, 1000n);
-	await expect(tillPage.getByText('● Paid')).toBeVisible();
+	await expect(tillPage.getByText('● Paid', { exact: true })).toBeVisible();
 	await expect(status).toContainText('0 unsynced');
 	expect(await dbRows('select order_type, table_label, status from orders')).toEqual([
 		{ order_type: 'delivery', table_label: null, status: 'paid' }

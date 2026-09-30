@@ -275,13 +275,13 @@ export async function payCash(tillPage: Page, tenderedMinor: bigint): Promise<vo
 	await expect(tillPage).toHaveURL(/\/pos\/pay$/);
 	await expect(tillPage.getByRole('heading', { name: 'Amount due' })).toBeVisible();
 	await tillPage
-		.getByRole('group', { name: 'Tender' })
-		.getByRole('button', { name: 'Cash', exact: true })
+		.getByRole('radiogroup', { name: 'Tender' })
+		.getByRole('radio', { name: 'Cash', exact: true })
 		.click();
 	await typeMinor(tillPage, tenderedMinor);
 	await expect(tillPage.getByText('Change due')).toBeVisible();
 	await tillPage.getByRole('button', { name: /^Pay · Cash/ }).click();
-	await expect(tillPage.getByText('● Paid')).toBeVisible();
+	await expect(tillPage.getByText('● Paid', { exact: true })).toBeVisible();
 }
 
 export async function closeSession(tillPage: Page, countedCashMinor: bigint): Promise<void> {

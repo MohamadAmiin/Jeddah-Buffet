@@ -346,8 +346,8 @@ test('receipts, kitchen tickets and the drawer: cash prints, a reprint is COPY, 
 	await tillPage.getByRole('link', { name: /^Pay\b/ }).click();
 	await expect(tillPage).toHaveURL(/\/pos\/pay$/);
 	await tillPage
-		.getByRole('group', { name: 'Tender' })
-		.getByRole('button', { name: /^Card/ })
+		.getByRole('radiogroup', { name: 'Tender' })
+		.getByRole('radio', { name: /^Card/ })
 		.click();
 	const receiptBeforeCard = receipt.bytes().length;
 	const kitchenBeforeCard = kitchen.bytes().length;

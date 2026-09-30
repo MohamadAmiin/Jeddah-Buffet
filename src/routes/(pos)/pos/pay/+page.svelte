@@ -1,4 +1,9 @@
 <script lang="ts">
+	// /pos/pay — the tender step (docs/redesign Phase 3): the tender pane on the
+	// left, THE SAME Check as the order screen on the right in `bill` mode — so
+	// modifiers, unit prices and tax rates stay visible — and the closer pinned to
+	// the bottom-right, the spot where Pay was. The document never scrolls.
+	//
 	// /pos/pay — the tender step. A completed CASH sale is a recorded fact the
 	// moment completeSale resolves, online or not. Card and mobile never complete
 	// offline: their keys are disabled with the reason written on them BEFORE the
@@ -30,6 +35,14 @@
 		type LocalMenu,
 		type LocalSession
 	} from '$lib/pos/store';
+	import { formatTaxRate } from '$lib/pos/menu-view';
+	import Icon, { type IconName } from '$lib/components/ui/Icon.svelte';
+	import Check from '$lib/components/pos/Check.svelte';
+	import Closer from '$lib/components/pos/Closer.svelte';
+	import Keypad, { type KeypadKey } from '$lib/components/pos/Keypad.svelte';
+	import TillBanner from '$lib/components/pos/TillBanner.svelte';
+	import type { CheckLineView } from '$lib/components/pos/CheckLine.svelte';
+	import { KEY, KEY_CHOSEN } from '$lib/components/pos/keys';
 
 	const restored = getContext<Promise<void>>(RESTORED_CONTEXT) ?? Promise.resolve();
 
@@ -66,7 +79,8 @@
 	let refusalReason = $state('');
 	let waitingForNetwork = $state(false);
 	// What printing said, AFTER the sale is already recorded and shown (invariant 4).
-	let printLine = $state('');
+	// Words only: TillBanner draws the glyph.
+	let print = $state<{ ok: boolean; text: string } | null>(null);
 	let drawerLine = $state('');
 
 	const figures = $derived(
@@ -104,7 +118,7 @@
 					: null
 	);
 
-	function press(key: string) {
+	function press(key: KeypadKey) {
 		if (key === 'back') digits = digits.slice(0, -1);
 		else if (key === 'clear') digits = '';
 		else if (digits.length < 12) digits = digits + key;
@@ -202,7 +216,7 @@
 			return;
 		}
 		if (deviceCode === null) {
-			failure = '✕ This till has no device code cached — go back to employee select once online';
+			failure = 'This till has no device code cached — go back to employee select once online';
 			return;
 		}
 		busy = true;
@@ -236,14 +250,14 @@
 				// Fire-and-report: the sale is complete on the device; the printer
 				// never holds up ● Paid (invariant 4). Card and mobile print from the
 				// layout's auto-printer once the server confirms (invariant 5).
-				printLine = '';
+				print = null;
 				drawerLine = '';
 				void printOriginals(result.orderId, { drawer: true }).then(describePrint, () => {
-					printLine = '◆ Not printed — reprint it from Sales';
+					print = { ok: false, text: 'Not printed — reprint it from Sales' };
 				});
 			}
 		} catch (err) {
-			failure = `✕ ${err instanceof Error ? err.message : 'The sale could not be recorded'}`;
+			failure = `${err instanceof Error ? err.message : 'The sale could not be recorded'}`;
 		} finally {
 			busy = false;
 		}
@@ -251,10 +265,12 @@
 
 	function describePrint(result: OriginalsResult) {
 		const printed = result.receipt === 'queued' || result.receipt === 'duplicate';
-		printLine = printed ? '● Receipt sent to the printer' : '◆ Not printed — reprint it from Sales';
+		print = printed
+			? { ok: true, text: 'Receipt sent to the printer' }
+			: { ok: false, text: 'Not printed — reprint it from Sales' };
 		drawerLine =
 			result.drawer === 'too_late' || result.drawer === 'printer_unreachable'
-				? '◆ The drawer did not open'
+				? 'The drawer did not open'
 				: '';
 	}
 
@@ -267,213 +283,315 @@
 		}
 	}
 
-	const key =
-		'min-h-touch-lg min-w-touch-lg border border-control-line rounded-control bg-raise text-ink font-mono font-medium text-title';
-	const closer =
-		'min-h-touch-xl w-full border border-control-line rounded-control font-semibold text-pos';
+	// The tender radio group: only the checked radio is in the tab order, and the
+	// arrow keys move the choice, skipping a tender that is disabled.
+	const TENDERS: { id: Tender; icon: IconName }[] = [
+		{ id: 'cash', icon: 'cash' },
+		{ id: 'card', icon: 'card' },
+		{ id: 'mobile', icon: 'phone' }
+	];
+	let tenderRadios = $state<HTMLButtonElement[]>([]);
+	function tenderKey(event: KeyboardEvent, index: number) {
+		const step =
+			event.key === 'ArrowRight' || event.key === 'ArrowDown'
+				? 1
+				: event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+					? -1
+					: 0;
+		if (step === 0) return;
+		event.preventDefault();
+		for (let n = 1; n < TENDERS.length; n++) {
+			const next = (index + step * n + TENDERS.length) % TENDERS.length;
+			if (reasonFor(TENDERS[next].id) === null) {
+				tender = TENDERS[next].id;
+				tenderRadios[next]?.focus();
+				return;
+			}
+		}
+	}
+
+	// "Keys enter cents: 2000 is 20.00 USD", built from the cached currency's own
+	// format rather than written for one currency.
+	const keypadHint = $derived.by(() => {
+		if (!format) return '';
+		if (format.exponent === 0) return 'Keys enter whole amounts';
+		const digits = `20${'0'.repeat(format.exponent)}`;
+		return `Keys enter cents: ${digits} is ${formatMoney(minor(BigInt(digits)), format)}`;
+	});
+
+	// The check's lines and totals as strings — the money module formats them.
+	const checkLines = $derived.by((): CheckLineView[] => {
+		if (!cart || !figures || !format) return [];
+		const money = format;
+		return cart.lines.map((line, i) => ({
+			id: line.lineId,
+			quantity: line.quantity,
+			name: line.itemName,
+			modifiers: line.modifiers.map((m) => ({
+				id: m.modifierId,
+				name: m.modifierName,
+				delta: formatAmount(minor(m.priceDeltaMinor), money),
+				negative: m.priceDeltaMinor < 0n
+			})),
+			unitPrice: formatAmount(minor(line.unitPriceMinor), money),
+			taxRate: formatTaxRate(line.taxRateBp),
+			amount: formatAmount(figures.amounts[i], money)
+		}));
+	});
+	const checkTotals = $derived.by(() => {
+		if (!figures || !format) return null;
+		return {
+			subtotal: formatMoney(figures.totals.subtotal, format),
+			discount:
+				figures.totals.discount !== 0n ? formatMoney(figures.totals.discount, format) : null,
+			tax: formatMoney(figures.totals.tax, format),
+			taxMode,
+			total: formatMoney(figures.totals.total, format)
+		};
+	});
+	const checkPill = $derived(
+		sale === null
+			? { glyph: '◐' as const, word: 'BILLED' }
+			: outcome === 'paid'
+				? { glyph: '●' as const, word: 'PAID' }
+				: outcome === 'pending'
+					? { glyph: '◐' as const, word: 'PENDING' }
+					: outcome === 'review'
+						? { glyph: '◆' as const, word: 'FOR REVIEW' }
+						: { glyph: '✕' as const, word: 'NOT RECORDED' }
+	);
+	const caption = $derived(
+		cart === null
+			? ''
+			: cart.orderType === 'takeaway'
+				? 'Takeaway'
+				: cart.orderType === 'delivery'
+					? 'Delivery'
+					: cart.tableLabel
+						? `Dine in · Table ${cart.tableLabel}`
+						: 'Dine in'
+	);
 </script>
 
 <svelte:head><title>Pay · matcami</title></svelte:head>
 
-<main class="text-pos flex flex-col gap-6 overflow-x-hidden px-4 py-6 md:flex-row md:items-start">
-	{#if !ready || !figures || !format || !cart}
-		<p class="text-ink-2">Loading the bill…</p>
-	{:else if sale}
-		<section class="mx-auto flex w-full max-w-xl flex-col gap-4" aria-live="polite">
-			{#if outcome === 'paid'}
-				<p class="bg-st-paid-bg text-st-paid rounded-control px-3 py-2 font-semibold">● Paid</p>
-				{#if printLine}
-					<p
-						data-testid="print-line"
-						class="rounded-control px-3 py-2 {printLine.startsWith('●')
-							? 'bg-ok-bg text-ok'
-							: 'bg-st-offline-bg text-st-offline'}"
-					>
-						{printLine}
-					</p>
-				{/if}
-				{#if drawerLine}
-					<p class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">{drawerLine}</p>
-				{/if}
-			{:else if outcome === 'pending'}
-				<p class="bg-st-billed-bg text-st-billed rounded-control px-3 py-2">
-					◐ Waiting for the server to confirm…
-				</p>
-				<p
-					class="bg-st-billed-bg text-st-billed rounded-control px-3 py-2"
-					data-testid="print-line"
-				>
-					◐ The receipt prints once the payment is confirmed
-				</p>
-				{#if waitingForNetwork}
-					<p class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">
-						◆ Waiting for a connection
-					</p>
-				{/if}
-			{:else if outcome === 'review'}
-				<p class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">
-					◆ Recorded for the owner's review — not confirmed as paid
-				</p>
-			{:else}
-				<p class="bg-danger-bg text-danger rounded-control px-3 py-2">
-					✕ Not recorded: {refusalReason}
-				</p>
-				<p class="text-ink-2">The card terminal's charge, if any, must be voided on the terminal</p>
-			{/if}
-			<p class="font-mono">Invoice {sale.invoiceNumber}</p>
-			<dl class="grid grid-cols-2 gap-y-1">
-				<dt class="text-ink-2">Total</dt>
-				<dd class="text-right font-mono tabular-nums">{formatMoney(sale.total, format)}</dd>
-				{#if sale.method === 'cash' && sale.tendered !== null && sale.changeMinor !== null}
-					<dt class="text-ink-2">Tendered</dt>
-					<dd class="text-right font-mono tabular-nums">{formatMoney(sale.tendered, format)}</dd>
-					<dt class="text-ink-2">Change</dt>
-					<dd class="text-right font-mono tabular-nums">
-						{formatMoney(minor(sale.changeMinor), format)}
-					</dd>
-				{/if}
-			</dl>
+<!-- The closer slot: Pay · {tender} before the sale; New sale or Back to order
+     after it. Always the bottom-right of the check (or the pinned row on a phone). -->
+{#snippet closers(uid: string)}
+	{#if figures && format}
+		{#if sale}
 			{#if outcome === 'review' || outcome === 'refused'}
-				<a
-					class="{closer} bg-raise text-ink flex items-center justify-center"
-					href={resolve('/pos/order')}>Back to order</a
-				>
+				<Closer href={resolve('/pos/order')} tone="raise">Back to order</Closer>
 			{:else}
-				{#if outcome === 'pending'}
-					<button
-						type="button"
-						class="min-h-touch-lg border-control-line rounded-control bg-raise text-ink border px-4"
-						onclick={cancelPending}>Cancel</button
-					>
-				{/if}
-				<a
-					class="{closer} bg-accent text-accent-ink flex items-center justify-center"
-					href={resolve('/pos/order')}>New sale</a
-				>
+				<Closer href={resolve('/pos/order')}>New sale</Closer>
 			{/if}
-		</section>
-	{:else}
-		<section aria-label="Bill" class="flex min-w-0 flex-1 flex-col gap-4">
-			<div class="flex items-center justify-between gap-2">
-				<h1 class="text-title text-ink">Amount due</h1>
-				<span class="bg-st-billed-bg text-st-billed rounded-control px-2">◐ BILLED</span>
-			</div>
-			<p class="text-total text-ink text-right font-mono tabular-nums">
-				{formatMoney(figures.totals.total, format)}
-			</p>
-			<ul class="flex flex-col gap-1">
-				{#each cart.lines as line, i (line.lineId)}
-					<li class="flex justify-between gap-2">
-						<span>{line.itemName} ×{line.quantity}</span>
-						<span class="font-mono tabular-nums">{formatAmount(figures.amounts[i], format)}</span>
-					</li>
-				{/each}
-			</ul>
-			<dl class="text-ink-2 grid grid-cols-2 gap-y-1">
-				<dt>Subtotal</dt>
-				<dd class="text-right font-mono tabular-nums">
-					{formatMoney(figures.totals.subtotal, format)}
-				</dd>
-				{#if figures.totals.discount !== 0n}
-					<dt>Discount</dt>
-					<dd class="text-right font-mono tabular-nums">
-						{formatMoney(figures.totals.discount, format)}
-					</dd>
-				{/if}
-				<dt>Tax</dt>
-				<dd class="text-right font-mono tabular-nums">{formatMoney(figures.totals.tax, format)}</dd>
-				<dt>Total</dt>
-				<dd class="text-right font-mono tabular-nums">
-					{formatMoney(figures.totals.total, format)}
-				</dd>
-			</dl>
-
-			<div role="group" aria-label="Tender" class="grid grid-cols-3 gap-2">
-				{#each ['cash', 'card', 'mobile'] as const as t (t)}
-					{@const why = reasonFor(t)}
-					<button
-						type="button"
-						aria-pressed={tender === t}
-						disabled={why !== null}
-						aria-describedby={why !== null ? `why-${t}` : undefined}
-						class="min-h-touch-lg border-control-line rounded-control flex flex-col items-center justify-center border px-2 {why !==
-						null
-							? 'bg-disabled-bg text-disabled-ink'
-							: tender === t
-								? 'bg-accent text-accent-ink'
-								: 'bg-raise text-ink'}"
-						onclick={() => (tender = t)}
-					>
-						<span>{TENDER_LABEL[t]}</span>
-						{#if why}<span class="text-caption">{why}</span>{/if}
-					</button>
-				{/each}
-			</div>
-			{#each ['card', 'mobile'] as const as t (t)}
-				{@const why = reasonFor(t)}
-				{#if why}<p id="why-{t}" class="sr-only">{TENDER_LABEL[t]}: {why}</p>{/if}
-			{/each}
-		</section>
-
-		<section aria-label="Payment" class="flex min-w-0 flex-1 flex-col gap-4">
-			{#if tender === 'cash'}
-				<h2 class="text-section text-ink">Quick cash</h2>
-				<div class="flex flex-wrap gap-2">
-					{#each quick as value, i (value)}
-						<button
-							type="button"
-							class="min-h-touch-lg border-control-line rounded-control bg-raise text-ink border px-4 font-mono"
-							onclick={() => chooseQuick(value)}
-						>
-							{i === 0 ? 'Exact' : formatMoney(value, format)}
-						</button>
-					{/each}
-				</div>
-				<section aria-label="Amount tendered" class="flex flex-col gap-3">
-					<p class="text-right font-mono tabular-nums">
-						Amount tendered: {formatMoney(tendered ?? minor(0n), format)}
-					</p>
-					<div class="grid grid-cols-3 gap-2">
-						{#each ['1', '2', '3', '4', '5', '6', '7', '8', '9'] as d (d)}
-							<button type="button" class={key} onclick={() => press(d)}>{d}</button>
-						{/each}
-						<button type="button" class={key} onclick={() => press('clear')}>Clear</button>
-						<button type="button" class={key} onclick={() => press('0')}>0</button>
-						<button type="button" class={key} onclick={() => press('back')}>
-							<span aria-hidden="true">⌫</span><span class="sr-only">Delete the last digit</span>
-						</button>
-					</div>
-				</section>
-				<div>
-					<p class="text-ink-2">Change due</p>
-					{#if change !== null}
-						<p class="text-total text-right font-mono tabular-nums">
-							{formatMoney(change, format)}
-						</p>
-					{:else}
-						<p class="text-ink-2">Tendered is less than the amount due</p>
-					{/if}
-				</div>
-			{/if}
-
-			{#if failure}
-				<p class="bg-danger-bg text-danger rounded-control px-3 py-2">{failure}</p>
-			{/if}
-			<button
-				type="button"
+		{:else}
+			<Closer
 				disabled={payBlocked !== null}
-				class="{closer} {payBlocked !== null
-					? 'bg-disabled-bg text-disabled-ink'
-					: 'bg-accent text-accent-ink'}"
+				reason={payBlocked ?? undefined}
+				reasonId="{uid}-why-pay"
 				onclick={pay}
 			>
-				{#if payBlocked !== null}
-					{payBlocked}
-				{:else}
-					Pay · {TENDER_LABEL[tender as Tender]} {formatMoney(figures.totals.total, format)}
+				Pay · {TENDER_LABEL[tender ?? 'cash']}
+				<span class="font-mono font-medium tabular-nums"
+					>{formatMoney(figures.totals.total, format)}</span
+				>
+			</Closer>
+		{/if}
+	{/if}
+{/snippet}
+
+<main class="flex min-h-0 flex-1 flex-col gap-3 p-3 md:flex-row md:gap-4 md:p-4 lg:px-6">
+	{#if !ready || !figures || !format || !cart || !checkTotals}
+		<p class="text-ink-2 m-auto">Loading the bill…</p>
+	{:else}
+		{@const money = format}
+		<section
+			aria-labelledby="pay-h"
+			class="rounded-card border-line bg-raise shadow-flat flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden border"
+		>
+			<div class="border-line-soft flex shrink-0 flex-wrap items-center gap-3 border-b p-3 md:p-4">
+				{#if !sale}
+					<a
+						href={resolve('/pos/order')}
+						class="min-h-touch-min flex items-center gap-2 px-4 {KEY}"
+					>
+						<Icon name="arrow-left" class="size-5" />
+						Back to the check
+					</a>
 				{/if}
-			</button>
-			<a class="text-ink-2 text-center underline" href={resolve('/pos/order')}>Back to the check</a>
+				<h1 id="pay-h" class="text-title">{sale ? 'Sale' : 'Amount due'}</h1>
+				<p class="text-title ml-auto font-mono font-medium tabular-nums">
+					{formatMoney(figures.totals.total, money)}
+				</p>
+			</div>
+
+			<div class="relative min-h-0 flex-1 overflow-y-auto p-3 md:p-4">
+				<!-- Mounted before it has content, so the first outcome is announced. -->
+				<div aria-live="polite" class="flex flex-col gap-3">
+					{#if sale}
+						{#if outcome === 'paid'}
+							<TillBanner tone="ok">Paid</TillBanner>
+							{#if print}
+								<TillBanner tone={print.ok ? 'ok' : 'offline'} testid="print-line"
+									>{print.text}</TillBanner
+								>
+							{/if}
+							{#if drawerLine}
+								<TillBanner tone="offline">{drawerLine}</TillBanner>
+							{/if}
+						{:else if outcome === 'pending'}
+							<TillBanner tone="pending">Waiting for the server to confirm…</TillBanner>
+							<TillBanner tone="pending" testid="print-line"
+								>The receipt prints once the payment is confirmed</TillBanner
+							>
+							{#if waitingForNetwork}
+								<TillBanner tone="offline">Waiting for a connection</TillBanner>
+							{/if}
+						{:else if outcome === 'review'}
+							<TillBanner tone="offline"
+								>Recorded for the owner's review — not confirmed as paid</TillBanner
+							>
+						{:else}
+							<TillBanner tone="danger">Not recorded: {refusalReason}</TillBanner>
+							<p class="text-ink-2">
+								The card terminal's charge, if any, must be voided on the terminal
+							</p>
+						{/if}
+					{/if}
+				</div>
+
+				{#if sale}
+					<div class="mt-4 flex flex-col gap-3">
+						<p class="text-title font-mono font-medium">Invoice {sale.invoiceNumber}</p>
+						<dl class="rounded-card border-line bg-raise-2 flex flex-col gap-2 border p-4">
+							<div class="flex items-baseline justify-between gap-3">
+								<dt class="text-ink-2">Total</dt>
+								<dd class="font-mono tabular-nums">{formatMoney(sale.total, money)}</dd>
+							</div>
+							{#if sale.method === 'cash' && sale.tendered !== null && sale.changeMinor !== null}
+								<div class="flex items-baseline justify-between gap-3">
+									<dt class="text-ink-2">Tendered</dt>
+									<dd class="font-mono tabular-nums">{formatMoney(sale.tendered, money)}</dd>
+								</div>
+								<div class="border-line flex flex-col gap-1 border-t pt-3">
+									<dt class="text-ink-2">Change</dt>
+									<dd class="text-total text-right font-mono tabular-nums">
+										{formatMoney(minor(sale.changeMinor), money)}
+									</dd>
+								</div>
+							{/if}
+						</dl>
+						{#if outcome === 'pending'}
+							<button
+								type="button"
+								class="min-h-touch-lg self-start px-6 {KEY}"
+								onclick={cancelPending}>Cancel</button
+							>
+						{/if}
+					</div>
+				{:else}
+					<div class="flex flex-col gap-5">
+						<div class="flex flex-col gap-2">
+							<p id="tender-l" class="font-semibold">Tender</p>
+							<div role="radiogroup" aria-labelledby="tender-l" class="grid grid-cols-3 gap-3">
+								{#each TENDERS as t, i (t.id)}
+									{@const why = reasonFor(t.id)}
+									{@const on = tender === t.id}
+									<button
+										bind:this={tenderRadios[i]}
+										type="button"
+										role="radio"
+										aria-checked={on}
+										tabindex={on ? 0 : -1}
+										disabled={why !== null}
+										aria-describedby={why !== null ? `why-${t.id}` : undefined}
+										class="min-h-touch-lg flex flex-col items-center justify-center px-2 text-center {KEY} {KEY_CHOSEN}"
+										onclick={() => (tender = t.id)}
+										onkeydown={(event) => tenderKey(event, i)}
+									>
+										<span class="flex items-center gap-2">
+											<Icon name={t.icon} class="hidden size-6 sm:block" />
+											{TENDER_LABEL[t.id]}
+											{#if on}<Icon name="check-circle" class="size-6" />{/if}
+										</span>
+										{#if why}<span id="why-{t.id}" class="text-body font-normal">{why}</span>{/if}
+									</button>
+								{/each}
+							</div>
+						</div>
+
+						{#if tender === 'cash'}
+							<div class="grid gap-5 sm:grid-cols-2">
+								<div class="flex flex-col gap-5">
+									<div class="flex flex-col gap-2">
+										<h2 class="text-pos font-sans font-semibold">Quick cash</h2>
+										<div class="grid grid-cols-3 gap-2">
+											{#each quick as value, i (value)}
+												<button
+													type="button"
+													class="min-h-touch-lg px-2 {i === 0
+														? ''
+														: 'font-mono tabular-nums'} {KEY}"
+													onclick={() => chooseQuick(value)}
+												>
+													{i === 0 ? 'Exact' : formatAmount(value, money)}
+												</button>
+											{/each}
+										</div>
+									</div>
+									<dl class="rounded-card border-line bg-raise-2 flex flex-col gap-3 border p-4">
+										<div class="flex items-baseline justify-between gap-3">
+											<dt class="text-ink-2">Amount tendered</dt>
+											<dd class="text-title font-mono font-medium tabular-nums">
+												{formatMoney(tendered ?? minor(0n), money)}
+											</dd>
+										</div>
+										<div class="border-line flex flex-col gap-1 border-t pt-3">
+											<dt class="text-ink-2">Change due</dt>
+											<dd class="text-total text-right font-mono tabular-nums">
+												{change !== null ? formatMoney(change, money) : '—'}
+											</dd>
+										</div>
+									</dl>
+								</div>
+								<section aria-label="Amount tendered" class="flex flex-col gap-2">
+									<p class="text-body text-ink-2">{keypadHint}</p>
+									<Keypad label="Amount tendered keypad" onkey={press} />
+								</section>
+							</div>
+						{:else if tender !== null}
+							<div class="rounded-card border-line bg-raise-2 flex items-start gap-3 border p-4">
+								<Icon name={tender === 'card' ? 'card' : 'phone'} class="text-accent size-6" />
+								<p>
+									Charge {formatMoney(figures.totals.total, money)} on the card terminal, then press Pay
+									once it is approved.
+								</p>
+							</div>
+						{/if}
+
+						{#if failure}
+							<TillBanner tone="danger" live="alert">{failure}</TillBanner>
+						{/if}
+					</div>
+				{/if}
+			</div>
+
+			<!-- Below md the check is hidden; the closer is pinned under the pane. -->
+			<div class="border-line-soft flex shrink-0 gap-3 border-t p-3 md:hidden">
+				{@render closers('bar')}
+			</div>
 		</section>
+
+		<Check
+			mode="bill"
+			display="hidden md:flex"
+			pill={checkPill}
+			{caption}
+			note={cart.note ?? null}
+			lines={checkLines}
+			totals={checkTotals}
+			closer={closers}
+		/>
 	{/if}
 </main>
