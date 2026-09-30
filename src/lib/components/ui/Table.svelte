@@ -18,12 +18,12 @@
 	<caption class="sr-only">{caption}</caption>
 
 	{#if rows.length > 0}
-		<thead class="hidden md:table-header-group">
+		<thead class="bg-raise-2 hidden md:table-header-group">
 			<tr>
 				{#each columns as column (column.key)}
 					<th
-						class={`text-ink-2 px-4 py-3 text-start text-xs font-medium ${
-							column.numeric ? 'font-mono tabular-nums md:text-end' : ''
+						class={`text-ink-2 px-6 py-3 text-start text-xs font-medium ${
+							column.numeric ? 'md:text-end' : ''
 						}`}
 					>
 						{column.label}
@@ -37,7 +37,7 @@
 				<tr class="border-line block border-t py-3 md:table-row md:py-0">
 					{#each columns as column (column.key)}
 						<td
-							class={`flex items-baseline justify-between gap-3 md:table-cell md:py-3 md:pr-4 ${
+							class={`flex items-baseline justify-between gap-3 md:table-cell md:px-6 md:py-3 ${
 								column.numeric ? 'font-mono tabular-nums md:text-end' : ''
 							}`}
 						>

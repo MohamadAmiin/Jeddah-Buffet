@@ -135,7 +135,7 @@
 				hint="From 30 to 1800 seconds. After this long with no touch, the till returns to employee select."
 			/>
 			<div class="flex flex-wrap items-center gap-3">
-				<Button type="submit" variant="primary" disabled={saving}>
+				<Button type="submit" variant="secondary" disabled={saving}>
 					{saving ? 'Saving…' : 'Save auto-lock'}
 				</Button>
 			</div>
@@ -149,7 +149,9 @@
 				<!-- rel="noopener": without it the opened till holds a window.opener
 				     reference to this authenticated dashboard page. -->
 				<div>
-					<Button href={resolve('/pos')} target="_blank" rel="noopener">Open the POS</Button>
+					<Button variant="primary" href={resolve('/pos')} target="_blank" rel="noopener"
+						>Open the POS</Button
+					>
 				</div>
 				<p class="text-ink-2">
 					Opens in a new tab. On a tablet that is not registered yet, the POS first asks for the

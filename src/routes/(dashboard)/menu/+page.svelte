@@ -198,7 +198,7 @@
 	description="What the till sells: items with their prices and photos, the categories that group them, and the modifier groups that change them. A category and a photo are both optional. An item is archived, never deleted — it stays on past receipts and reports."
 >
 	{#snippet actions()}
-		<Button type="button" onclick={startAdd}>Add item</Button>
+		<Button type="button" variant="primary" onclick={startAdd}>Add item</Button>
 	{/snippet}
 </PageHeader>
 

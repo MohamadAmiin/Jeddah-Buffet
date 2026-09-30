@@ -8,11 +8,14 @@
 	// e2e/auth.spec.ts locates every button in the journey by accessible name.
 
 	let {
-		variant = 'primary',
+		// SECONDARY by default (docs/redesign Phase 6): a primary is chosen on
+		// purpose, one per view.
+		variant = 'secondary',
 		type = 'button',
 		disabled = false,
 		disabledReason = '',
 		href = undefined,
+		class: className = '',
 		children,
 		...rest
 	}: {
@@ -21,6 +24,8 @@
 		disabled?: boolean;
 		disabledReason?: string;
 		href?: string;
+		/** Merged after the variant classes, never dropped. */
+		class?: string;
 		children: import('svelte').Snippet;
 		[key: string]: unknown;
 	} = $props();
@@ -42,7 +47,7 @@
 	// census. `disabled:` wins over the variant classes because it is declared
 	// after them in the string.
 	const base =
-		'rounded-control px-3 py-2 text-sm font-medium ' +
+		'inline-flex min-h-10 items-center justify-center gap-2 rounded-control px-4 py-2 text-sm font-medium ' +
 		'disabled:cursor-not-allowed disabled:border disabled:border-control-line ' +
 		'disabled:bg-disabled-bg disabled:text-disabled-ink';
 
@@ -52,13 +57,16 @@
 	// above WCAG 1.4.11's 3:1 for a control boundary — border-line is 1.58:1 and is
 	// decorative only, never a control edge.
 	const variants = {
-		primary: 'bg-accent text-accent-ink',
-		secondary: 'border border-control-line text-ink',
-		ghost: 'text-ink hover:bg-raise-2',
-		danger: 'border border-danger text-danger'
+		// Every variant has a hover and a pressed state. primary carries a transparent
+		// border so it does not grow 2px when disabled adds one.
+		primary:
+			'border border-transparent bg-accent text-accent-ink hover:ring-2 hover:ring-accent-soft active:translate-y-px',
+		secondary: 'border border-control-line text-ink hover:bg-raise-2 active:bg-bg-2',
+		ghost: 'text-ink hover:bg-raise-2 active:bg-bg-2',
+		danger: 'border border-danger text-danger hover:bg-danger-bg active:bg-danger-bg'
 	};
 
-	const classes = $derived(base + ' ' + variants[variant]);
+	const classes = $derived(`${base} ${variants[variant]} ${className}`.trim());
 </script>
 
 {#if href}

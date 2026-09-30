@@ -175,7 +175,7 @@
 					hint={`How many ${data.ingredient.baseUnit} one unit holds, for example 25000 for a 25 kg bag in g.`}
 				/>
 				<div>
-					<Button type="submit" variant="primary" disabled={submitting}>
+					<Button type="submit" variant="secondary" disabled={submitting}>
 						{submitting ? 'Saving…' : 'Add unit'}
 					</Button>
 				</div>
@@ -221,7 +221,7 @@
 				<div>
 					<Button
 						type="submit"
-						variant="primary"
+						variant="secondary"
 						disabled={submitting || !ready || unitOptions.length === 0}
 						disabledReason={ready ? 'Add a purchase unit first.' : NO_CURRENCY}
 					>
