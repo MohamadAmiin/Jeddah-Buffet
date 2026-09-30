@@ -42,6 +42,17 @@ import { restaurants } from './restaurants';
 // as every menu write, and never touches updated_at, which pairs with the
 // settings.updated audit event.
 //
+// RECEIPT HEADER TEXT (tasks/menu-and-printing T-20): receipt_address,
+// receipt_phone, tax_registration_number and receipt_footer are OPTIONAL text
+// the owner may print on every receipt. They are not decisions, so
+// settingsComplete() does not report them; spec 33 open decision 3 (what a
+// receipt must legally show) is STILL OPEN, and these four are the default
+// layout's fields pending a local accountant — a legal requirement changes
+// src/lib/pos/receipt.ts and these settings, not the ledger. Nullable, no
+// DEFAULT, bounded by the CHECKs below; written only by updateSettings.
+// tax_registration_number is an identifier, not money: schema.test.ts
+// exempts it from the money-name rule by name.
+//
 // onDelete: 'restrict' throughout this plan: a restaurant with any history must
 // not be deletable, because audit rows reference it and those are append-only.
 export const restaurantSettings = pgTable(
@@ -74,6 +85,11 @@ export const restaurantSettings = pgTable(
 		// (T-29).
 		acceptsCard: boolean('accepts_card'),
 		acceptsMobile: boolean('accepts_mobile'),
+		// Receipt header text (T-20) — optional, nullable, no default; see above.
+		receiptAddress: text('receipt_address'),
+		receiptPhone: text('receipt_phone'),
+		taxRegistrationNumber: text('tax_registration_number'),
+		receiptFooter: text('receipt_footer'),
 		// The menu snapshot's version (spec 5) — see the note above this table.
 		menuVersion: integer('menu_version').notNull().default(1),
 		updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
@@ -93,6 +109,23 @@ export const restaurantSettings = pgTable(
 		check(
 			'restaurant_settings_currency_code_format',
 			sql`${table.currencyCode} is null or ${table.currencyCode} ~ '^[A-Z]{3}$'`
+		),
+		// Receipt text: NULL or 1..N characters — an empty string is not a value.
+		check(
+			'restaurant_settings_receipt_address_length',
+			sql`${table.receiptAddress} is null or char_length(${table.receiptAddress}) between 1 and 120`
+		),
+		check(
+			'restaurant_settings_receipt_phone_length',
+			sql`${table.receiptPhone} is null or char_length(${table.receiptPhone}) between 1 and 40`
+		),
+		check(
+			'restaurant_settings_tax_registration_number_length',
+			sql`${table.taxRegistrationNumber} is null or char_length(${table.taxRegistrationNumber}) between 1 and 40`
+		),
+		check(
+			'restaurant_settings_receipt_footer_length',
+			sql`${table.receiptFooter} is null or char_length(${table.receiptFooter}) between 1 and 120`
 		)
 	]
 );

@@ -19,7 +19,10 @@ export type SnapshotCategory = { id: string; name: string; sortOrder: number };
 
 export type SnapshotItem = {
 	id: string;
-	categoryId: string;
+	/** null = no category: the order screen shows it under its "Other" tab. */
+	categoryId: string | null;
+	/** The photo's id, or null; the bytes come from /api/menu/images/[id]. */
+	imageId: string | null;
 	name: string;
 	/** A decimal string of minor units, exactly as the server sent it. */
 	priceMinor: string;
@@ -65,7 +68,7 @@ export function compareVersions(local: number | null, server: number): 'up-to-da
 
 const MINOR = /^-?\d+$/;
 
-class SnapshotError extends Error {
+export class SnapshotError extends Error {
 	constructor(field: string, problem: string) {
 		super(`menu snapshot: ${field} ${problem}`);
 		this.name = 'SnapshotError';
@@ -143,7 +146,11 @@ export function parseSnapshot(raw: unknown): MenuSnapshot {
 			const item = record(entry, `items[${i}]`);
 			return {
 				id: text(item.id, `items[${i}].id`),
-				categoryId: text(item.categoryId, `items[${i}].categoryId`),
+				categoryId: nullableText(item.categoryId, `items[${i}].categoryId`),
+				// A snapshot from a server before menu-and-printing T-07 has no imageId
+				// key at all: read that as "no photo", never as malformed.
+				imageId:
+					item.imageId === undefined ? null : nullableText(item.imageId, `items[${i}].imageId`),
 				name: text(item.name, `items[${i}].name`),
 				priceMinor: minorText(item.priceMinor, `items[${i}].priceMinor`),
 				taxRateBp: nullableInteger(item.taxRateBp, `items[${i}].taxRateBp`),

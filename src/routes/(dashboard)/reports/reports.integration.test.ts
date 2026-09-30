@@ -31,6 +31,7 @@ type ReportData = {
 	itemAmountLabel: string;
 	totals: Record<string, string | number>;
 	byTender: unknown[];
+	byOrderType: { orderType: string; label: string; count: number; amount: string }[];
 	byItem: unknown[];
 	sessions: { difference: { text: string; negative: boolean } | null }[];
 	flagged: { count: number; unrecordedCount: number };
@@ -84,13 +85,18 @@ async function thrown(p: unknown): Promise<{ status?: number; location?: string 
 	throw new Error('expected the load to throw');
 }
 
-async function burgerSale(f: SalesFixture, posSessionId: string, occurredAt: Date) {
+async function burgerSale(
+	f: SalesFixture,
+	posSessionId: string,
+	occurredAt: Date,
+	orderType: 'dine_in' | 'takeaway' | 'delivery' = 'dine_in'
+) {
 	await recordSaleAt(db, f, {
 		posSessionId,
 		occurredAt,
 		invoiceSeq: 1,
 		method: 'cash',
-		orderType: 'dine_in',
+		orderType,
 		tableLabel: null,
 		lines: [
 			{
@@ -209,6 +215,27 @@ describe('formatting happens in the load', () => {
 
 		const json = JSON.stringify(data);
 		expect(json).not.toMatch(/pinHash|passwordHash|token/);
+	});
+
+	// menu-and-printing T-10: the label map is a Record over OrderType.
+	it('labels the delivery row Delivery', async () => {
+		const f = await seedSalesRestaurant(db);
+		const sid = randomUUID();
+		const { businessDate } = await openSessionAt(db, f, {
+			posSessionId: sid,
+			openedAt: new Date(Date.now() - 2 * 3_600_000),
+			openingCashMinor: 10000n
+		});
+		await burgerSale(f, sid, new Date(Date.now() - 3_600_000), 'delivery');
+
+		const data = await asOwner(f, '?date=' + businessDate);
+		expect(data.byOrderType.map((r) => r.label)).toEqual(['Dine-in', 'Takeaway', 'Delivery']);
+		expect(data.byOrderType[2]).toEqual({
+			orderType: 'delivery',
+			label: 'Delivery',
+			count: 1,
+			amount: '9.35'
+		});
 	});
 
 	it('labels the item column Incl. tax in inclusive mode', async () => {

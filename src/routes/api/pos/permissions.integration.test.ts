@@ -25,6 +25,7 @@ import { GET as employeesGet } from './employees/+server';
 import { POST as registerPost } from './register/+server';
 import { GET as menuVersionGet } from '../menu/version/+server';
 import { GET as menuGet } from '../menu/+server';
+import { GET as imagesGet } from '../menu/images/[id]/+server';
 import { actions as deviceActions } from '../../(dashboard)/device/+page.server';
 import { db as appDb } from '$lib/server/db/client';
 import { orders } from '$lib/server/db/schema/orders';
@@ -104,7 +105,8 @@ function makeEvent(
 	method: string,
 	body: unknown,
 	cookies: Record<string, string>,
-	locals: Partial<App.Locals> = {}
+	locals: Partial<App.Locals> = {},
+	params: Record<string, string> = {}
 ): RequestEvent {
 	const jar = new Map(Object.entries(cookies));
 	const url = new URL(`http://localhost${routeId.replace(/\/\([^)]*\)/g, '')}`);
@@ -125,7 +127,7 @@ function makeEvent(
 		fetch: globalThis.fetch,
 		getClientAddress: () => '203.0.113.5',
 		locals: { user: null, restaurantId: null, sessionToken: null, posDevice: null, ...locals },
-		params: {},
+		params,
 		platform: undefined,
 		request: new Request(url, init),
 		route: { id: routeId },
@@ -183,6 +185,13 @@ const DEVICE_GUARDED = [
 		handler: menuGet
 	},
 	{
+		routeId: '/api/menu/images/[id]',
+		method: 'GET',
+		body: () => undefined,
+		params: () => ({ id: randomUUID() }),
+		handler: imagesGet
+	},
+	{
 		routeId: '/api/pos/sync',
 		method: 'POST',
 		body: (s: Seed) => ({
@@ -198,13 +207,17 @@ const DEVICE_GUARDED = [
 	}
 ] as const;
 
+/** A route with a dynamic segment supplies its params; the rest have none. */
+const paramsOf = (route: (typeof DEVICE_GUARDED)[number]): Record<string, string> =>
+	'params' in route ? route.params() : {};
+
 describe('MANDATORY (spec 29): every device-guarded POS API route', () => {
 	it.each(DEVICE_GUARDED)('$routeId answers exactly 403 with no cookies at all', async (route) => {
 		const s = await seed();
 		const before = await sideEffects(s);
 
 		const status = await statusOf(() =>
-			route.handler(makeEvent(route.routeId, route.method, route.body(s), {}))
+			route.handler(makeEvent(route.routeId, route.method, route.body(s), {}, {}, paramsOf(route)))
 		);
 
 		expect(status).toBe(403);
@@ -217,7 +230,14 @@ describe('MANDATORY (spec 29): every device-guarded POS API route', () => {
 
 		const status = await statusOf(() =>
 			route.handler(
-				makeEvent(route.routeId, route.method, route.body(s), { [DEVICE_COOKIE]: s.revokedToken })
+				makeEvent(
+					route.routeId,
+					route.method,
+					route.body(s),
+					{ [DEVICE_COOKIE]: s.revokedToken },
+					{},
+					paramsOf(route)
+				)
 			)
 		);
 

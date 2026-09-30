@@ -53,6 +53,7 @@ export async function recordSale(
 		employeeUserId: ctx.employeeUserId,
 		orderType: sale.orderType,
 		tableLabel: sale.tableLabel,
+		note: sale.note,
 		status: 'open',
 		taxMode: sale.taxMode,
 		currencyCode: sale.currencyCode,

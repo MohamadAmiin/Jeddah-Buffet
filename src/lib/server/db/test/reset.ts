@@ -11,9 +11,10 @@ import pg from 'pg';
 // journal_entry_lines, journal_entries, accounts,
 // pos_sync_ops, invoices, payments, order_line_modifiers, order_lines, orders,
 // pos_sessions, audit_log, sessions, pos_devices, menu_item_modifier_groups,
-// modifiers, menu_items, modifier_groups, menu_categories, users,
+// modifiers, menu_items, menu_images, modifier_groups, menu_categories, users,
 // role_permissions, roles, restaurant_settings, restaurants.
-// users before roles in the comment order: users.role_id references roles.
+// users before roles in the comment order: users.role_id references roles;
+// menu_items before menu_images: menu_items.image_id references menu_images.
 //
 // T-09's append-only triggers on journal_entries, journal_entry_lines, invoices
 // and payments block UPDATE and DELETE but not TRUNCATE (TRUNCATE fires only
@@ -48,6 +49,7 @@ export const TABLES = [
 	'menu_item_modifier_groups',
 	'modifiers',
 	'menu_items',
+	'menu_images',
 	'modifier_groups',
 	'menu_categories',
 	'users',

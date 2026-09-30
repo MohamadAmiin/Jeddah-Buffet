@@ -13,6 +13,7 @@ import {
 	lineAmounts,
 	newCart,
 	removeLine,
+	setNote,
 	setOrderType,
 	type Cart,
 	type MenuItemForCart,
@@ -148,7 +149,9 @@ describe('completeSale', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		expect(result.invoiceNumber).toBe('POS1-000001');
 		expect(result.changeMinor).toBe(1970n);
@@ -169,6 +172,99 @@ describe('completeSale', () => {
 		});
 	});
 
+	// menu-and-printing T-17: delivery rides in the queued payload unchanged.
+	it("a delivery cart completes with orderType 'delivery' and tableLabel null in the queued payload", async () => {
+		let cart = newCart('device-A', 'delivery', 'ignored', NOW);
+		cart = addLine(cart, tea, 825);
+		const result = await completeSale({
+			cart,
+			payment: { method: 'cash', tenderedMinor: 5000n },
+			employeeId: 'emp-1',
+			deviceId: 'device-A',
+			deviceCode: 'POS1',
+			posSessionId: 'ses-1',
+			taxMode: 'exclusive',
+			currencyCode: 'USD',
+			menuVersion: 1,
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
+		});
+		const queue = await readQueue();
+		expect(queue).toHaveLength(1);
+		const payload = queue[0].envelope.payload as { orderType: string; tableLabel: string | null };
+		expect(payload.orderType).toBe('delivery');
+		expect(payload.tableLabel).toBeNull();
+		expect((await readOrder(cart.orderId))?.invoiceNumber).toBe(result.invoiceNumber);
+	});
+
+	// menu-and-printing T-18: the receipt's numbers live on the order, verbatim.
+	it('stores the queued payload, the line amounts, the cashier and the business date on the completed order', async () => {
+		const cart = await buildCart();
+		const result = await completeSale({
+			cart,
+			payment: { method: 'cash', tenderedMinor: 5000n },
+			employeeId: 'emp-1',
+			deviceId: 'device-A',
+			deviceCode: 'POS1',
+			posSessionId: 'ses-1',
+			taxMode: 'exclusive',
+			currencyCode: 'USD',
+			menuVersion: 1,
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
+		});
+		const order = await readOrder(cart.orderId);
+		const [entry] = await readQueue();
+		expect(order?.sale).toBeDefined();
+		// Deep-equal to the queue entry's payload, invoice number included.
+		expect(order?.sale?.payload).toEqual(entry.envelope.payload);
+		expect(order?.sale?.payload.invoiceNumber).toBe(result.invoiceNumber);
+		expect(order?.sale?.lineAmountsMinor).toEqual(lineAmounts(cart).map(String));
+		expect(order?.sale?.cashierName).toBe('Sam');
+		expect(order?.sale?.businessDate).toBe('2026-09-28');
+		expect(order?.sale?.completedAt).toBe(NOW.toISOString());
+		expect(order?.printed).toBeUndefined();
+	});
+
+	it('completeSale carries the note in the queued payload, and null without one', async () => {
+		const withNote = setNote(await buildCart(), 'no onions');
+		await completeSale({
+			cart: withNote,
+			payment: { method: 'cash', tenderedMinor: 5000n },
+			employeeId: 'emp-1',
+			deviceId: 'device-A',
+			deviceCode: 'POS1',
+			posSessionId: 'ses-1',
+			taxMode: 'exclusive',
+			currencyCode: 'USD',
+			menuVersion: 1,
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
+		});
+		const plain = await buildCart();
+		await completeSale({
+			cart: plain,
+			payment: { method: 'cash', tenderedMinor: 5000n },
+			employeeId: 'emp-1',
+			deviceId: 'device-A',
+			deviceCode: 'POS1',
+			posSessionId: 'ses-1',
+			taxMode: 'exclusive',
+			currencyCode: 'USD',
+			menuVersion: 1,
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
+		});
+		const notes = (await readQueue()).map(
+			(q) => (q.envelope.payload as { orderId: string; note: string | null }).note
+		);
+		expect(notes.sort()).toEqual([null, 'no onions'].sort());
+	});
+
 	it('abortForTest leaves nothing behind — no order, no queue, no counter movement', async () => {
 		const cart = await buildCart();
 		await expect(
@@ -183,7 +279,9 @@ describe('completeSale', () => {
 					taxMode: 'exclusive',
 					currencyCode: 'USD',
 					menuVersion: 1,
-					now: NOW
+					now: NOW,
+					cashierName: 'Sam',
+					businessDate: '2026-09-28'
 				},
 				true
 			)
@@ -208,7 +306,9 @@ describe('completeSale', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		const second = await completeSale({
 			cart: await buildCart(),
@@ -220,7 +320,9 @@ describe('completeSale', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		expect(first.invoiceNumber).toBe('POS1-000001');
 		expect(second.invoiceNumber).toBe('POS1-000002');
@@ -239,7 +341,9 @@ describe('completeSale', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		const [entry] = await readQueue();
 		expect(() => JSON.stringify(entry.envelope)).not.toThrow();
@@ -272,7 +376,9 @@ describe('completeSale', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		expect(result.changeMinor).toBeNull();
 		const [entry] = await readQueue();
@@ -297,7 +403,9 @@ describe('completeSale', () => {
 				taxMode: 'exclusive',
 				currencyCode: 'USD',
 				menuVersion: 1,
-				now: NOW
+				now: NOW,
+				cashierName: 'Sam',
+				businessDate: '2026-09-28'
 			})
 		).rejects.toThrow();
 		expect(await readQueue()).toHaveLength(0);
@@ -318,7 +426,9 @@ describe('abandonSale', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		const result = await abandonSale(sale.orderId, 'rejected', NOW);
 		const order = await readOrder(sale.orderId);
@@ -355,7 +465,9 @@ describe('unsynced count follows the queue', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		await withDb((db) =>
 			inTransaction(db, ['sync_queue'], 'readwrite', (tx) => {
@@ -414,6 +526,43 @@ describe('T-33 cart helpers', () => {
 		const summed = lineAmounts(cart).reduce((acc, v) => acc + v, 0n);
 		expect(summed).toBe(exclusive.subtotal);
 		expect(summed).toBe(inclusive.total);
+	});
+
+	// menu-and-printing T-17.
+	it('setOrderType drops the table for takeaway and delivery, keeps it for dine in, and leaves lines alone', () => {
+		const cart = doneWhenCart();
+		const seated = setOrderType(cart, 'dine_in', ' 4 ');
+		expect(seated).toMatchObject({ orderType: 'dine_in', tableLabel: '4' });
+		expect(seated.lines).toBe(cart.lines);
+
+		const takeaway = setOrderType(seated, 'takeaway', '4');
+		expect(takeaway).toMatchObject({ orderType: 'takeaway', tableLabel: null });
+		const delivery = setOrderType(seated, 'delivery', '4');
+		expect(delivery).toMatchObject({ orderType: 'delivery', tableLabel: null });
+		expect(delivery.lines).toBe(cart.lines);
+		expect(delivery.orderId).toBe(cart.orderId);
+
+		expect(() => setOrderType(cart, 'dine_in', 'x'.repeat(33))).toThrow(/32/);
+	});
+
+	it('newCart and setOrderType strip control characters from the table label', () => {
+		expect(newCart('device-A', 'dine_in', '4\u001b', NOW).tableLabel).toBe('4');
+		expect(newCart('device-A', 'dine_in', '\u0000\u001b', NOW).tableLabel).toBeNull();
+		expect(newCart('device-A', 'delivery', '4', NOW).tableLabel).toBeNull();
+		const cart = doneWhenCart();
+		expect(setOrderType(cart, 'dine_in', 'Win\u007fdow').tableLabel).toBe('Window');
+	});
+
+	// menu-and-printing T-22: the kitchen note.
+	it('setNote cleans control characters, collapses spaces and caps at 140', () => {
+		const cart = doneWhenCart();
+		expect(setNote(cart, 'no\u001bchilli').note).toBe('no chilli');
+		expect(setNote(cart, '  extra   sauce  ').note).toBe('extra sauce');
+		expect(setNote(cart, '\u0000\u007f').note).toBeNull();
+		expect(setNote(cart, '').note).toBeNull();
+		expect(setNote(cart, 'x'.repeat(140)).note).toHaveLength(140);
+		expect(() => setNote(cart, 'x'.repeat(141))).toThrow(/140/);
+		expect(setNote(cart, 'no onions').lines).toBe(cart.lines);
 	});
 
 	it('two taps are two lines; quantity is absolute; removal renumbers', () => {

@@ -87,7 +87,9 @@ async function seedSale(deviceCode: string, invoiceSeq = 1): Promise<string> {
 		taxMode: 'exclusive',
 		currencyCode: 'USD',
 		menuVersion: 1,
-		now: NOW
+		now: NOW,
+		cashierName: 'Sam',
+		businessDate: '2026-09-28'
 	});
 	expect(result.invoiceNumber).toBe(`${deviceCode}-${String(invoiceSeq).padStart(6, '0')}`);
 	return result.clientOpId;
@@ -203,6 +205,29 @@ describe('flush — the basics', () => {
 	});
 });
 
+describe('flush — the order is marked synced before done is announced (T-30)', () => {
+	it('a listener reading the order row on the done event sees syncStatus accepted', async () => {
+		const clientOpId = await seedSale('POS1');
+		const { fetchFn } = makeMockFetch([
+			{ kind: 'response', status: 200, body: { clientOpId, status: 'accepted' } }
+		]);
+		let seen: LocalOrder<Cart>['syncStatus'] | 'no-event' = 'no-event';
+		const pending: Promise<void>[] = [];
+		const stop = onFlushEvent((event) => {
+			if (event.type !== 'done' || event.clientOpId !== clientOpId) return;
+			pending.push(
+				readOrders().then((orders) => {
+					seen = orders[0].syncStatus;
+				})
+			);
+		});
+		await flush(fetchFn, { now: () => NOW_MS });
+		await Promise.all(pending);
+		stop();
+		expect(seen).toBe('accepted');
+	});
+});
+
 describe('flush — offline logins first', () => {
 	it('sends every pin.login row before any sale', async () => {
 		await recordOfflineLogin({
@@ -287,7 +312,9 @@ describe('flush — parking and rejects', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		const { fetchFn, bodies } = makeMockFetch([
 			{ kind: 'response', status: 403, body: { error: 'not_permitted' } },
@@ -315,7 +342,9 @@ describe('flush — parking and rejects', () => {
 			taxMode: 'exclusive',
 			currencyCode: 'USD',
 			menuVersion: 1,
-			now: NOW
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
 		});
 		const { fetchFn } = makeMockFetch([
 			{

@@ -10,6 +10,7 @@ import {
 	withSecondDevice,
 	type SalesFixture
 } from '../db/test/sales';
+import { ORDER_TYPES } from '../../sync-ops';
 import { defaultReportDate, salesReport } from './sales';
 
 afterAll(async () => {
@@ -182,7 +183,8 @@ describe('salesReport — totals and business date grouping', () => {
 		const report = await salesReport(db, fx.restaurantId, '2026-09-28');
 		expect(report.byOrderType).toEqual([
 			{ orderType: 'dine_in', amount: 2695n, count: 2 },
-			{ orderType: 'takeaway', amount: 660n, count: 1 }
+			{ orderType: 'takeaway', amount: 660n, count: 1 },
+			{ orderType: 'delivery', amount: 0n, count: 0 }
 		]);
 		expect(report.byEmployee).toEqual([
 			{ userId: fx.staffId, displayName: 'Sam', amount: 3355n, count: 3 }
@@ -201,6 +203,83 @@ describe('salesReport — totals and business date grouping', () => {
 			{ name: 'Food', quantity: 3, amount: 2450n },
 			{ name: 'Drinks', quantity: 3, amount: 600n }
 		]);
+	});
+
+	// menu-and-printing T-10: the third type is a row of its own, in ORDER_TYPES
+	// order, and the three rows sum to the takings — nothing drops out (spec 26).
+	it('byOrderType lists every type and sums to the takings', async () => {
+		const sid = randomUUID();
+		await openSessionAt(db, fx, {
+			posSessionId: sid,
+			openedAt: new Date('2026-09-28T05:00:00Z'),
+			openingCashMinor: 10000n
+		});
+		const burger = (quantity: number, modifiers = false) => [
+			{
+				menuItemId: fx.items.burger,
+				itemName: 'Burger',
+				quantity,
+				unitPriceMinor: 800n,
+				taxRateBp: fx.taxRateBp,
+				...(modifiers
+					? {
+							modifiers: [
+								{
+									modifierId: fx.modifiers.extraCheese,
+									modifierName: 'Extra cheese',
+									priceDeltaMinor: 50n
+								}
+							]
+						}
+					: {})
+			}
+		];
+		await recordSaleAt(db, fx, {
+			posSessionId: sid,
+			occurredAt: new Date('2026-09-28T06:00:00Z'),
+			invoiceSeq: 1,
+			method: 'cash',
+			orderType: 'dine_in',
+			tableLabel: 'T4',
+			lines: burger(1)
+		});
+		await recordSaleAt(db, fx, {
+			posSessionId: sid,
+			occurredAt: new Date('2026-09-28T07:00:00Z'),
+			invoiceSeq: 2,
+			method: 'cash',
+			orderType: 'takeaway',
+			tableLabel: null,
+			lines: [
+				{
+					menuItemId: fx.items.tea,
+					itemName: 'Tea',
+					quantity: 1,
+					unitPriceMinor: 200n,
+					taxRateBp: fx.taxRateBp
+				}
+			]
+		});
+		await recordSaleAt(db, fx, {
+			posSessionId: sid,
+			occurredAt: new Date('2026-09-28T08:00:00Z'),
+			invoiceSeq: 3,
+			method: 'cash',
+			orderType: 'delivery',
+			tableLabel: null,
+			lines: burger(1, true)
+		});
+
+		const report = await salesReport(db, fx.restaurantId, '2026-09-28');
+		expect(report.byOrderType.map((r) => r.orderType)).toEqual([...ORDER_TYPES]);
+		expect(report.byOrderType).toEqual([
+			{ orderType: 'dine_in', amount: 880n, count: 1 },
+			{ orderType: 'takeaway', amount: 220n, count: 1 },
+			{ orderType: 'delivery', amount: 935n, count: 1 }
+		]);
+		const sum = report.byOrderType.reduce((acc, r) => acc + r.amount, 0n);
+		expect(sum).toBe(report.totals.takings);
+		expect(report.totals.orderCount).toBe(3);
 	});
 
 	it('sessions on the 28th list S1 (closed) and S2 (open)', async () => {
@@ -301,7 +380,8 @@ describe('salesReport — tenant isolation and edge cases', () => {
 		]);
 		expect(report.byOrderType).toEqual([
 			{ orderType: 'dine_in', amount: 0n, count: 0 },
-			{ orderType: 'takeaway', amount: 0n, count: 0 }
+			{ orderType: 'takeaway', amount: 0n, count: 0 },
+			{ orderType: 'delivery', amount: 0n, count: 0 }
 		]);
 		expect(report.byEmployee).toEqual([]);
 		expect(report.byItem).toEqual([]);

@@ -304,6 +304,75 @@ describe('recordSale (T-19) — MANDATORY (spec 29) posting rules per event', ()
 		expect(details.invoiceNumber).toBe(invoiceRow.invoiceNumber);
 	});
 
+	// MANDATORY (spec 29 — one posting-rule test per business event). Spec 24 keys
+	// the sale rules by TENDER: a delivery cash sale is a cash_sale, Dr 1000 total /
+	// Cr 4000 subtotal / Cr 2100 tax, no new event and no new account
+	// (menu-and-printing T-09; CLAUDE.md decision (a)).
+	it('a delivery cash sale posts exactly as any cash sale', async () => {
+		const env = twoLineCashEnvelope(fx);
+		const payload = env.payload as {
+			orderId: string;
+			orderType: string;
+			tableLabel: string | null;
+		};
+		payload.orderType = 'delivery';
+		payload.tableLabel = null;
+		const result = await recordThrough(fx, env, fx.cashierId);
+		expect(result.entryIds).toHaveLength(1);
+
+		const [orderRow] = await testDb().select().from(orders).where(eq(orders.id, payload.orderId));
+		expect(orderRow.orderType).toBe('delivery');
+		expect(orderRow.tableLabel).toBeNull();
+		expect(orderRow.status).toBe('paid');
+
+		const [entry] = await testDb()
+			.select()
+			.from(journalEntries)
+			.where(eq(journalEntries.sourceId, orderRow.id));
+		expect(entry.event).toBe('cash_sale');
+		const jLines = await entryLines(entry.id);
+		expect(jLines).toHaveLength(3);
+		const byCode = Object.fromEntries(jLines.map((l) => [l.code, l]));
+		expect(byCode['1000'].debit).toBe(orderRow.totalMinor);
+		expect(byCode['4000'].credit).toBe(orderRow.subtotalMinor);
+		expect(byCode['2100'].credit).toBe(orderRow.taxMinor);
+		const debits = jLines.reduce((acc, l) => acc + l.debit, 0n);
+		const credits = jLines.reduce((acc, l) => acc + l.credit, 0n);
+		expect(debits).toBe(credits);
+
+		const audit = await testDb()
+			.select({ details: auditLog.details })
+			.from(auditLog)
+			.where(and(eq(auditLog.restaurantId, fx.restaurantId), eq(auditLog.event, 'sale.recorded')));
+		expect(audit).toHaveLength(1);
+		expect((audit[0].details as { orderType: string }).orderType).toBe('delivery');
+	});
+
+	// menu-and-printing T-22: the kitchen note lands on the order; a payload
+	// without the key (every pre-T-22 till) records with note NULL.
+	it('records the kitchen note on the order, and NULL when the payload has no note key', async () => {
+		const noted = twoLineCashEnvelope(fx);
+		(noted.payload as { note?: string }).note = 'no chilli';
+		await recordThrough(fx, noted, fx.cashierId);
+		const [withNote] = await testDb()
+			.select({ note: orders.note })
+			.from(orders)
+			.where(eq(orders.id, (noted.payload as { orderId: string }).orderId));
+		expect(withNote.note).toBe('no chilli');
+
+		const plain = twoLineCashEnvelope(fx);
+		(plain.payload as { invoiceSeq: number; invoiceNumber: string }).invoiceSeq = 2;
+		(plain.payload as { invoiceSeq: number; invoiceNumber: string }).invoiceNumber =
+			`${fx.deviceCode}-000002`;
+		expect('note' in (plain.payload as object)).toBe(false);
+		await recordThrough(fx, plain, fx.cashierId);
+		const [without] = await testDb()
+			.select({ note: orders.note })
+			.from(orders)
+			.where(eq(orders.id, (plain.payload as { orderId: string }).orderId));
+		expect(without.note).toBeNull();
+	});
+
 	it('the same sale by card routes the debit to 1020; by mobile to 1030', async () => {
 		for (const [method, code] of [
 			['card', '1020'],

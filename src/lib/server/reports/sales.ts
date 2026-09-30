@@ -20,6 +20,7 @@ import { posDevices } from '../db/schema/pos-devices';
 import { users } from '../db/schema/users';
 import { menuItems, menuCategories } from '../db/schema/menu';
 import { minor, subtract, type Minor } from '../../money';
+import { ORDER_TYPES, type OrderType } from '../../sync-ops';
 
 export type SalesReport = {
 	businessDate: string;
@@ -32,7 +33,7 @@ export type SalesReport = {
 		orderCount: number;
 	};
 	byTender: { method: 'cash' | 'card' | 'mobile'; amount: Minor; count: number }[];
-	byOrderType: { orderType: 'dine_in' | 'takeaway'; amount: Minor; count: number }[];
+	byOrderType: { orderType: OrderType; amount: Minor; count: number }[];
 	byEmployee: { userId: string | null; displayName: string; amount: Minor; count: number }[];
 	byItem: { menuItemId: string; itemName: string; quantity: number; amount: Minor }[];
 	byCategory: { categoryId: string | null; name: string; quantity: number; amount: Minor }[];
@@ -158,7 +159,9 @@ export async function salesReport(
 		.where(salesFilter)
 		.groupBy(orders.orderType);
 	const orderTypeMap = new Map(orderTypeRows.map((r) => [r.orderType, r]));
-	const byOrderType: SalesReport['byOrderType'] = (['dine_in', 'takeaway'] as const).map((t) => {
+	// Every type in the wire contract's order, zero rows included — the literal
+	// list this used to hold silently dropped a type the CHECK accepted (spec 26).
+	const byOrderType: SalesReport['byOrderType'] = ORDER_TYPES.map((t) => {
 		const hit = orderTypeMap.get(t);
 		return {
 			orderType: t,

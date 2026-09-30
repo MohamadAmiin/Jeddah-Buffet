@@ -30,7 +30,12 @@ import type { PosDeviceContext } from '../../auth/pos-context';
 import { minor, ROUNDING_RULE } from '../../../money';
 import { computeOrderTotals, serializeTotals } from '../../../money/order-totals';
 import { changeDue } from '../../../money/change';
-import { formatInvoiceNumber, type OpEnvelope, type OpKind } from '../../../sync-ops';
+import {
+	formatInvoiceNumber,
+	type OpEnvelope,
+	type OpKind,
+	type OrderType
+} from '../../../sync-ops';
 import type { TaxMode } from '../../../money/tax';
 
 export type SalesFixture = {
@@ -273,8 +278,11 @@ export type RecordSaleOptions = {
 	occurredAt: Date;
 	invoiceSeq: number;
 	method: 'cash' | 'card' | 'mobile';
-	orderType: 'dine_in' | 'takeaway';
+	orderType: OrderType;
 	tableLabel: string | null;
+	/** Written into the payload ONLY when present, so the fixture can still
+	 * produce the pre-T-22 format (no `note` key at all). */
+	note?: string | null;
 	employeeId?: string;
 	lines: RecordSaleLine[];
 };
@@ -337,6 +345,7 @@ export function saleEnvelope(
 			posSessionId: o.posSessionId,
 			orderType: o.orderType,
 			tableLabel: o.tableLabel,
+			...('note' in o ? { note: o.note } : {}),
 			taxMode: f.taxMode,
 			currencyCode: f.currencyCode,
 			menuVersion: f.menuVersion,

@@ -12,10 +12,11 @@
 // correct, and the two would drift the first time the cost factor changes.
 
 import { verifyPin } from '../pin';
-import type { OpEnvelope, OpKind, SyncResult } from '../sync-ops';
+import type { OpEnvelope, OpKind, SaleCompletePayload, SyncResult } from '../sync-ops';
 import {
 	compareVersions,
 	parseSnapshot,
+	SnapshotError,
 	type MenuSnapshot,
 	type SnapshotCategory,
 	type SnapshotItem,
@@ -72,8 +73,34 @@ export type OfflineLogin = {
 	parked?: true;
 };
 
+/**
+ * The sale's OWN numbers, kept on the completed order (menu-and-printing T-18):
+ * the exact SaleCompletePayload the queue carries (invoice number included), the
+ * per-line amounts the order screen showed, who sold it and when. Every receipt,
+ * kitchen ticket and reprint is laid out from THIS and nothing else — never from
+ * the cart with today's tax mode, never from a recomputation (invariant 7; the
+ * risk panel's BLOCKER).
+ */
+export type SaleSnapshot = {
+	payload: SaleCompletePayload;
+	lineAmountsMinor: string[];
+	cashierName: string;
+	completedAt: string;
+	businessDate: string | null;
+};
+
+/** What has already been printed for an order; the drawer pulse is marked once. */
+export type PrintedMarks = {
+	receiptAt?: string;
+	kitchenAt?: string;
+	drawerAt?: string;
+	reprints?: number;
+};
+
 /** One order on this till. `cart` is T-24's Cart; typed as a parameter so this
- * file does not import a module that does not exist yet. */
+ * file does not import a module that does not exist yet. `sale` and `printed`
+ * are optional: orders completed before T-18 carry neither (no DB_VERSION
+ * change — they are fields of a stored object, not a store or an index). */
 export type LocalOrder<C = unknown> = {
 	id: string;
 	deviceId: string;
@@ -86,6 +113,8 @@ export type LocalOrder<C = unknown> = {
 	completedAt?: string;
 	syncedAt?: string;
 	syncStatus?: 'accepted' | 'recorded_flagged' | 'unrecorded' | 'rejected';
+	sale?: SaleSnapshot;
+	printed?: PrintedMarks;
 };
 
 /** One queued operation. Every *Minor field in `envelope` is a decimal STRING
@@ -354,6 +383,22 @@ export async function readCachedIdleSeconds(): Promise<number | null> {
 	const value = await readCachedSetting('posIdleLockSeconds');
 
 	return typeof value === 'number' ? value : null;
+}
+
+/**
+ * The settings key under which syncMenu remembers a snapshot it could NOT
+ * parse (menu-and-printing T-15). Every caller of syncMenu swallows its errors
+ * — an offline till must keep the menu it has — so without this a till running
+ * old JavaScript against a newer server would freeze its menu in silence. The
+ * layout shows it as permanent chrome while online; a good sync clears it.
+ */
+export const MENU_SYNC_ERROR_KEY = 'menuSyncError';
+
+/** The remembered parse failure's message, or null for anything else. */
+export async function readMenuSyncError(): Promise<string | null> {
+	const value = await readCachedSetting(MENU_SYNC_ERROR_KEY);
+
+	return typeof value === 'string' ? value : null;
 }
 
 const BOUND_DEVICE_KEY = 'deviceId';
@@ -742,6 +787,7 @@ export async function syncMenu(fetchFn: typeof fetch = fetch): Promise<'up-to-da
 			: null;
 
 	if (compareVersions(local, server.version) === 'up-to-date') {
+		await cacheSettings([{ key: MENU_SYNC_ERROR_KEY, value: null }]);
 		return 'up-to-date';
 	}
 
@@ -758,10 +804,20 @@ export async function syncMenu(fetchFn: typeof fetch = fetch): Promise<'up-to-da
 		throw new Error(`GET /api/menu answered ${snapshotResponse.status}`);
 	}
 
-	// Parsed BEFORE the transaction opens: a malformed payload writes nothing.
-	const snapshot = parseSnapshot(await snapshotResponse.json());
+	// Parsed BEFORE the transaction opens: a malformed payload writes nothing to the
+	// menu — but the FAILURE is remembered, so the layout can say the menu is stale.
+	let snapshot: MenuSnapshot;
+	try {
+		snapshot = parseSnapshot(await snapshotResponse.json());
+	} catch (thrown) {
+		if (thrown instanceof SnapshotError) {
+			await cacheSettings([{ key: MENU_SYNC_ERROR_KEY, value: thrown.message }]);
+		}
+		throw thrown;
+	}
 
 	await replaceMenu(snapshot);
+	await cacheSettings([{ key: MENU_SYNC_ERROR_KEY, value: null }]);
 
 	return 'replaced';
 }

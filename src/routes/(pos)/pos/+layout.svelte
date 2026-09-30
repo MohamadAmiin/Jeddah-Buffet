@@ -38,6 +38,7 @@
 		readBoundDeviceId,
 		readCachedIdleSeconds,
 		readCachedSetting,
+		readMenuSyncError,
 		type LocalSession
 	} from '$lib/pos/store';
 	import PosIcon from '$lib/components/pos/PosIcon.svelte';
@@ -49,6 +50,8 @@
 		touch
 	} from '$lib/pos/employee.svelte';
 	import { flush, lastSkewMs, onFlushResult, onSkew, parkedCount } from '$lib/pos/queue';
+	import { agentStatus, printerChip, type AgentState } from '$lib/pos/print-client';
+	import { startAutoPrint } from '$lib/pos/printing';
 	import { readLocalSession } from '$lib/pos/session';
 
 	let { children } = $props();
@@ -223,6 +226,44 @@
 	});
 	onMount(() => onUnsyncedChange(() => void refreshSession()));
 
+	// THE PRINTER CHIP (menu-and-printing T-29): permanent chrome like the
+	// connection indicator, because a receipt that silently never printed is
+	// found by the customer. The agent is local, so this does not depend on the
+	// internet. Polled at mount, every 30 s and on every navigation (the owner
+	// pairs on /pos/printer and leaves); only the newest read may land. Nothing
+	// is shown before the first read completes.
+	let printer = $state<AgentState | null>(null);
+	let latestPrinterRead = 0;
+	async function refreshPrinter() {
+		const mine = ++latestPrinterRead;
+		try {
+			const state = await agentStatus();
+			if (mine === latestPrinterRead) printer = state;
+		} catch {
+			if (mine === latestPrinterRead) printer = { state: 'unreachable' };
+		}
+	}
+	const printerPill = $derived(printer === null ? null : printerChip(printer));
+	onMount(() => {
+		void refreshPrinter();
+		const every = setInterval(() => void refreshPrinter(), 30_000);
+		const changed = () => void refreshPrinter();
+		addEventListener('matcami:printer-changed', changed);
+		return () => {
+			clearInterval(every);
+			removeEventListener('matcami:printer-changed', changed);
+			latestPrinterRead++;
+		};
+	});
+	$effect(() => {
+		void page.url.pathname;
+		void refreshPrinter();
+	});
+	// THE AUTO-PRINTER (T-30): card and mobile sales print when the flush reports
+	// the server's acceptance; the catch-up on start reprints missing originals.
+	// Its return value is the unsubscribe.
+	onMount(() => startAutoPrint());
+
 	// CLOCK SKEW, measured by the flush from each response's Date header.
 	let skewMs = $state<number | null>(null);
 	const skewMinutes = $derived(
@@ -256,18 +297,24 @@
 	let restaurantName = $state<string | null>(null);
 	let deviceCode = $state<string | null>(null);
 	let timeZone = $state<string | null>(null);
+	// A menu snapshot this till could not parse (menu-and-printing T-15): shown as
+	// permanent chrome while online, because every syncMenu caller swallows the
+	// error and the menu would otherwise go stale in silence.
+	let menuSyncError = $state<string | null>(null);
 	let now = $state(new Date());
 	$effect(() => {
 		void page.url.pathname;
 		void (async () => {
-			const [name, code, zone] = await Promise.all(
-				['restaurantName', 'deviceCode', 'timeZone'].map((key) =>
+			const [name, code, zone, syncError] = await Promise.all([
+				...['restaurantName', 'deviceCode', 'timeZone'].map((key) =>
 					readCachedSetting(key).catch(() => null)
-				)
-			);
+				),
+				readMenuSyncError().catch(() => null)
+			]);
 			restaurantName = typeof name === 'string' ? name : null;
 			deviceCode = typeof code === 'string' ? code : null;
 			timeZone = typeof zone === 'string' ? zone : null;
+			menuSyncError = typeof syncError === 'string' ? syncError : null;
 		})();
 	});
 	onMount(() => {
@@ -289,6 +336,7 @@
 			now
 		)
 	);
+	const onSales = $derived(page.url.pathname.startsWith('/pos/sales'));
 	const roleLabel = $derived(
 		signedIn.current === null ? '' : signedIn.current.isOwner ? 'Owner' : signedIn.current.roleName
 	);
@@ -348,15 +396,31 @@
 				</span>
 			</div>
 
-			<nav aria-label="Till">
+			<nav aria-label="Till" class="flex flex-wrap items-center gap-2">
 				<a
 					href={resolve(signedIn.current !== null ? '/pos/order' : '/pos')}
-					aria-current="page"
-					class="bg-rail-active text-rail-ink min-h-touch-min inline-flex items-center gap-2 rounded-full px-5 font-semibold"
+					aria-current={onSales ? undefined : 'page'}
+					class="text-rail-ink min-h-touch-min inline-flex items-center gap-2 rounded-full px-5 font-semibold {onSales
+						? 'border-rail-line border'
+						: 'bg-rail-active'}"
 				>
 					<PosIcon name="bag" />
 					POS
 				</a>
+				{#if signedIn.current !== null}
+					<!-- Recent sales and reprints (T-31). Same tab styling; the current one
+					     is filled AND carries aria-current, the other is outlined. -->
+					<a
+						href={resolve('/pos/sales')}
+						aria-current={onSales ? 'page' : undefined}
+						class="text-rail-ink min-h-touch-min inline-flex items-center gap-2 rounded-full px-5 font-semibold {onSales
+							? 'bg-rail-active'
+							: 'border-rail-line border'}"
+					>
+						<PosIcon name="clipboard" />
+						Sales
+					</a>
+				{/if}
 			</nav>
 
 			<div class="ml-auto flex items-center gap-4">
@@ -388,6 +452,17 @@
 								class="min-h-touch-min rounded-control hover:bg-raise-2 flex items-center px-3"
 								>Switch employee</a
 							>
+							{#if signedIn.current.isOwner}
+								<!-- Setup is owner-only, and it is enforced on the device — the only
+								     place printing exists (T-29; /pos/printer says so to anyone else). -->
+								<a
+									href={resolve('/pos/printer')}
+									class="min-h-touch-min rounded-control hover:bg-raise-2 flex items-center gap-2 px-3"
+								>
+									<PosIcon name="printer" class="text-ink-2 size-5" />
+									Printer
+								</a>
+							{/if}
 						</div>
 					</details>
 				{:else}
@@ -447,6 +522,26 @@
 						<span class="bg-st-offline-bg text-st-offline rounded-full px-3 py-1"
 							>◆ Clock is off by {skewMinutes} min</span
 						>
+					{/if}
+					{#if menuSyncError !== null && online}
+						<span class="bg-st-offline-bg text-st-offline rounded-full px-3 py-1"
+							>◆ Menu update failed — reload the till</span
+						>
+					{/if}
+					{#if printerPill !== null}
+						<span
+							data-testid="printer-chip"
+							class="rounded-full px-3 py-1 font-semibold {printerPill.tone === 'ok'
+								? 'bg-ok-bg text-ok'
+								: printerPill.tone === 'offline'
+									? 'bg-st-offline-bg text-st-offline'
+									: printerPill.tone === 'danger'
+										? 'bg-danger-bg text-danger'
+										: 'bg-raise-2 text-ink-2'}"
+						>
+							<span aria-hidden="true" class="font-mono">{printerPill.glyph}</span>
+							{printerPill.text}
+						</span>
 					{/if}
 				</div>
 			</div>

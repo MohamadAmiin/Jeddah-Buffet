@@ -18,8 +18,10 @@
 		cacheSettings,
 		forgetDevice,
 		readCachedEmployees,
+		readMenu,
 		syncMenu
 	} from '$lib/pos/store';
+	import { warmMenuPhotos } from '$lib/pos/photo-warmup';
 	import { adoptServerHint } from '$lib/pos/invoice-sequence';
 	import { adoptServerSession } from '$lib/pos/session';
 	import { signOut } from '$lib/pos/employee.svelte';
@@ -122,6 +124,10 @@
 				timeZone: string | null;
 				acceptsCard: boolean | null;
 				acceptsMobile: boolean | null;
+				receiptAddress: string | null;
+				receiptPhone: string | null;
+				taxRegistrationNumber: string | null;
+				receiptFooter: string | null;
 			};
 		};
 
@@ -145,7 +151,12 @@
 				{ key: 'acceptsMobile', value: body.settings.acceptsMobile },
 				{ key: 'timeZone', value: body.settings.timeZone },
 				{ key: 'restaurantName', value: body.settings.restaurantName },
-				{ key: 'deviceCode', value: body.device.code }
+				{ key: 'deviceCode', value: body.device.code },
+				// T-21: the receipt header, cached so an offline receipt is correct.
+				{ key: 'receiptAddress', value: body.settings.receiptAddress },
+				{ key: 'receiptPhone', value: body.settings.receiptPhone },
+				{ key: 'taxRegistrationNumber', value: body.settings.taxRegistrationNumber },
+				{ key: 'receiptFooter', value: body.settings.receiptFooter }
 			]);
 			// T-30: fold the server's invoice hint into the till's counter and
 			// adopt any server-open session so the till doesn't re-open it.
@@ -179,11 +190,22 @@
 		// way the cashier arrived (idle return, Done after close, browser back).
 		signOut();
 
+		// After EVERY sync answer, warm the browser's HTTP cache with the menu's
+		// photos (best effort — menu-and-printing R2); a failure stays silent.
+		const warmPhotos = async () => {
+			const menu = await readMenu();
+			if (menu) void warmMenuPhotos(menu.items);
+		};
+
 		void loadDirectory()
 			.then(() => syncMenu())
+			.then(warmPhotos)
 			.catch(() => {});
 
-		const refreshMenu = () => void syncMenu().catch(() => {});
+		const refreshMenu = () =>
+			void syncMenu()
+				.then(warmPhotos)
+				.catch(() => {});
 		addEventListener('online', refreshMenu);
 		return () => removeEventListener('online', refreshMenu);
 	});

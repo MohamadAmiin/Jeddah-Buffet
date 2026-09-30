@@ -46,6 +46,10 @@ server {
 
   limit_conn addr 10;
 
+  # Menu photos are resized in the browser to at most 400 KB before upload
+  # (src/lib/menu-images.ts); 1m is Nginx's default, stated so nobody lowers it.
+  client_max_body_size 1m;
+
   # THE PRIMARY THROTTLE — on the credential POSTs ONLY. The application's
   # in-memory bucket (auth/throttle.ts) is a backstop: process-local and reset on
   # restart. Do not put limit_req on the whole server: a cold page load is ~13
@@ -158,6 +162,44 @@ everything the application cannot. Treat it as a production database console.
 
 ---
 
+## 7. The print agent on the till PC
+
+Receipts, kitchen tickets and the cash drawer are handled by the **print agent**
+(`print-agent/`, spec 11). It is **not** part of the server deployment: it is not in
+the Docker image and Nginx never proxies to it. It runs on **each till PC**, beside
+the Chrome that shows the till, and listens on `127.0.0.1` only. Install, auto-start
+(systemd or Task Scheduler), pairing and troubleshooting are in
+[`print-agent/README.md`](../print-agent/README.md).
+
+Three things on the server side decide whether printing works:
+
+- **The app's `ORIGIN` must equal the agent's configured origin exactly.** The agent
+  answers only requests whose `Origin` header is the address given to `init --origin`
+  — scheme, host and port. If the app moves to another address, run `init --force` on
+  every till PC with the new one and pair each till again.
+- **HTTPS is required** (section 1). Chrome lets an `https:` page call
+  `http://127.0.0.1` — loopback is a trustworthy origin — and, from Chrome 142, asks
+  the owner once for "local network access" on the first call. That prompt appears
+  during **Printer → Save and test print**, not during a sale.
+- **The printers belong on a staff-only network.** A network ESC/POS printer accepts
+  anything sent to TCP port 9100: whoever can reach that port can print on it and open
+  the drawer without the agent. Guest Wi-Fi must not route to the printers, and they
+  must not be reachable from the internet.
+
+The printing rules the code enforces, for whoever operates the till:
+
+- **Printing never holds up a sale** (invariant 4). A cash sale is complete — `● Paid`
+  — whether or not the agent, the printer or the internet is up; an unprinted receipt is
+  reprinted from **Sales** on the till.
+- **A card or mobile sale prints nothing until the server has confirmed it**
+  (invariant 5, fail closed). Its receipt prints by itself when the confirmation
+  arrives.
+- **The drawer opens once, for a cash sale, within 30 seconds of it** (invariant 9). The
+  pulse is never queued, never retried and never sent by a reprint, so a printer that
+  comes back after an outage prints the waiting receipts and leaves the drawer shut.
+
+---
+
 ## Environment variables
 
 | Variable | Required | Notes |
@@ -169,6 +211,7 @@ everything the application cannot. Treat it as a production database console.
 | `ADDRESS_HEADER` | production | `x-forwarded-for`. The app refuses to start without it, except on a localhost `ORIGIN`. |
 | `XFF_DEPTH` | behind a proxy | `1` for a single proxy. |
 | `SIGNUP` | optional | `open` (the default when unset) or `closed`. Anything else stops the app at boot. |
+| `BODY_SIZE_LIMIT` | optional | adapter-node's request body cap, default `512K`. Menu photos are capped at 400 KB (`src/lib/menu-images.ts`); do not set it lower. |
 | `LOGIN_THROTTLE_CAPACITY` | e2e only | Leave unset. Raises the per-address login throttle for the local Playwright journey; the app refuses to start with it on a non-localhost `ORIGIN`. |
 
 **One open question, recorded rather than decided.** `env.ts` currently *requires*

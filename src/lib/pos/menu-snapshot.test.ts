@@ -4,7 +4,7 @@
 import 'fake-indexeddb/auto';
 import { readFileSync } from 'node:fs';
 import { describe, it, expect, beforeEach } from 'vitest';
-import { compareVersions, parseSnapshot } from './menu-snapshot';
+import { compareVersions, parseSnapshot, SnapshotError } from './menu-snapshot';
 import {
 	bindDevice,
 	openPosDb,
@@ -106,6 +106,35 @@ describe('parseSnapshot — validates, never converts', () => {
 
 	it.each([undefined, 7.5, '7'])('rejects a version of %j', (version) => {
 		expect(() => parseSnapshot(payload({ version }))).toThrow(/version/);
+	});
+});
+
+describe('parseSnapshot — optional category and photo id (menu-and-printing T-15)', () => {
+	it('reads a null category', () => {
+		const snapshot = parseSnapshot(payload({ items: [{ ...item, categoryId: null }] }));
+		expect(snapshot.items[0].categoryId).toBeNull();
+	});
+
+	it('reads a missing imageId as null and a string as itself', () => {
+		// `item` has no imageId key at all — the shape a server before T-07 sends.
+		expect(parseSnapshot(payload()).items[0].imageId).toBeNull();
+		expect(
+			parseSnapshot(payload({ items: [{ ...item, imageId: 'img-1' }] })).items[0].imageId
+		).toBe('img-1');
+		expect(
+			parseSnapshot(payload({ items: [{ ...item, imageId: null }] })).items[0].imageId
+		).toBeNull();
+	});
+
+	it('refuses a numeric imageId with a SnapshotError naming items[0].imageId', () => {
+		let thrown: unknown;
+		try {
+			parseSnapshot(payload({ items: [{ ...item, imageId: 5 }] }));
+		} catch (error) {
+			thrown = error;
+		}
+		expect(thrown).toBeInstanceOf(SnapshotError);
+		expect((thrown as Error).message).toMatch(/items\[0\]\.imageId/);
 	});
 });
 

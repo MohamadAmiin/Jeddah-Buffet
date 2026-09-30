@@ -116,6 +116,11 @@ const TENANT_COLUMN_EXEMPT: Record<string, string> = {
 // `table.column`; each entry carries the reason that column may have a money-like
 // name without the `_minor` or `_bp` suffix.
 const MONEY_NAME_EXEMPT: Record<string, string> = {
+	// A registration identifier printed on receipts, not money — the word "tax"
+	// trips MONEY_NAME (tasks/menu-and-printing T-20). It is text, so the numeric
+	// guard would not fire anyway; the entry records the decision.
+	'restaurant_settings.tax_registration_number':
+		"a registration identifier, not money — the word 'tax' trips MONEY_NAME",
 	'ingredients.avg_unit_cost_micro':
 		'weighted-average unit cost in MICRO minor units per base unit (minor × 1,000,000): a per-gram cost is a fraction of a cent, so it cannot be a _minor integer; a plan decision (tasks/inventory-cogs assumption 6), never a convenience'
 };
@@ -205,6 +210,7 @@ describe('schema guards every future aggregate inherits', () => {
 			'journal_entries',
 			'journal_entry_lines',
 			'menu_categories',
+			'menu_images',
 			'menu_item_modifier_groups',
 			'menu_items',
 			'modifier_groups',

@@ -119,7 +119,7 @@ Touch-accuracy research puts the floor near **9.2mm** and shows error rate flatt
 
 ## 6. Money rendering
 
-One formatter, in `src/lib/server/money`, integer cents in and a string out (invariant 1). The UI **never** does money arithmetic and **never** rounds — invariant 7 gives exactly one rounding rule in one function, shared by POS, server and reports. A second rounding in a Svelte component is the bug that makes the receipt disagree with the books.
+One formatter, in `src/lib/money/format.ts` (the isomorphic money module — the till imports it in the browser), integer cents in and a string out (invariant 1). The UI **never** does money arithmetic and **never** rounds — invariant 7 gives exactly one rounding rule in one function, shared by POS, server and reports. A second rounding in a Svelte component is the bug that makes the receipt disagree with the books.
 
 - Right-align money in any column.
 - Negative amounts (refunds, pay-outs, discounts) get a leading `−` **and** `--danger` — never colour alone.
@@ -214,7 +214,7 @@ PIN fields: PinField only — digits, 4 to 6, masked with a show/hide toggle; th
 
 **Typography.** `font-display` for headings, `font-sans` for body, `font-mono` for money, quantities, account codes, invoice numbers and IDs. Headings get `text-wrap: balance`. As §4 says: **a price set in the body face is a bug.**
 
-**What must NOT appear on a dashboard screen.** The POS touch tokens; the POS chrome tokens; an arbitrary Tailwind value (`bg-[#123456]`, `p-[57px]`); a raw hex; and **any money figure at all** for as long as `src/lib/server/money/` exports no formatter — check that directory before writing one, and if it holds only a `README.md`, a money figure here could only be hardcoded, which §6 and invariants 1 and 7 forbid.
+**What must NOT appear on a dashboard screen.** The POS touch tokens; the POS chrome tokens; an arbitrary Tailwind value (`bg-[#123456]`, `p-[57px]`); a raw hex; and **any money figure that did not come through the formatter** in `src/lib/money/format.ts` (`formatMoney`, `formatAmount`) — a hardcoded or hand-formatted figure is what §6 and invariants 1 and 7 forbid.
 
 **Responsive.** Single column below Tailwind's `md`; the navigation collapses above the content. **Nothing scrolls horizontally at any width.**
 
@@ -223,6 +223,8 @@ PIN fields: PinField only — digits, 4 to 6, masked with a show/hide toggle; th
 ## 8. Receipts are a separate problem
 
 Thermal ESC/POS output is not a screen (spec 11). Fixed **32 or 48 characters** per line, no colour, no images, monospace only. Reprints are marked `COPY`; a voided SENT item prints a `VOID` ticket to the kitchen. None of the tokens above apply — plan receipt layout in characters, and preview it in `--font-mono` at the target width.
+
+The layout lives in `src/lib/pos/receipt.ts` — `renderReceipt`, `renderKitchenTicket` and `renderTestPage` — and the design sample `design/06-receipt.html` is the reference. It is laid out from the sale's **stored** numbers and computes nothing (invariants 1, 7), so a reprint after a price or tax change prints what was sold. Every string passes through `toPrintable` before any width is measured: the printers run code page PC437, which has neither the money formatter's `−` (U+2212) nor its no-break space (U+00A0), so the first becomes `-` and the second a space; accents are dropped to their base letter, control characters become spaces, and anything else prints as `?`. No line is ever wider than the printer — the print agent refuses one that is.
 
 ---
 

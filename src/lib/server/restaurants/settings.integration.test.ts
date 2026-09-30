@@ -485,3 +485,85 @@ describe('onRestaurantCreated', () => {
 		expect(settings.timeZone).toBe(canonicalTimeZone('Asia/Calcutta'));
 	});
 });
+
+describe('the receipt header (menu-and-printing T-21)', () => {
+	const header = {
+		receiptAddress: 'Makka Al-Mukarama Rd, Km4',
+		receiptPhone: '61 555 0142',
+		taxRegistrationNumber: 'TIN-0001',
+		receiptFooter: 'Mahadsanid! Thank you!'
+	};
+	const settingsUpdates = () =>
+		db.select().from(auditLog).where(eq(auditLog.event, 'settings.updated'));
+	const menuVersion = async (id: string) => {
+		const [row] = await db
+			.select({ v: restaurantSettings.menuVersion })
+			.from(restaurantSettings)
+			.where(eq(restaurantSettings.restaurantId, id));
+		return row.v;
+	};
+
+	it('writes all four with ONE audit row naming them, re-saving writes nothing', async () => {
+		const id = await makeRestaurant();
+		const result = await db.transaction((tx) => updateSettings(tx, id, header, ctx));
+		expect(result.ok).toBe(true);
+		if (!result.ok || !result.changed) throw new Error('expected a change');
+		expect(Object.keys(result.changes).sort()).toEqual(Object.keys(header).sort());
+
+		const rows = await settingsUpdates();
+		expect(rows).toHaveLength(1);
+		const details = rows[0].details as { changes: Record<string, unknown> };
+		expect(Object.keys(details.changes).sort()).toEqual(Object.keys(header).sort());
+		const after = await getRestaurantWithSettings(db, id);
+		expect(after).toMatchObject(header);
+
+		expect(await db.transaction((tx) => updateSettings(tx, id, header, ctx))).toEqual({
+			ok: true,
+			changed: false
+		});
+		expect(await settingsUpdates()).toHaveLength(1);
+	});
+
+	it("'' clears a field to NULL, trimming on the way", async () => {
+		const id = await makeRestaurant();
+		await db.transaction((tx) => updateSettings(tx, id, header, ctx));
+		const cleared = await db.transaction((tx) =>
+			updateSettings(tx, id, { receiptPhone: '', receiptFooter: '  Thanks  ' }, ctx)
+		);
+		expect(cleared.ok).toBe(true);
+		const after = await getRestaurantWithSettings(db, id);
+		expect(after!.receiptPhone).toBeNull();
+		expect(after!.receiptFooter).toBe('Thanks');
+		expect(after!.receiptAddress).toBe(header.receiptAddress);
+	});
+
+	it('refuses a control character or an over-long value, and writes nothing', async () => {
+		const id = await makeRestaurant();
+		expect(
+			await db.transaction((tx) => updateSettings(tx, id, { receiptAddress: 'Road\u001b' }, ctx))
+		).toEqual({ ok: false, reason: 'invalid_receipt_field' });
+		expect(
+			await db.transaction((tx) => updateSettings(tx, id, { receiptPhone: 'x'.repeat(41) }, ctx))
+		).toEqual({ ok: false, reason: 'invalid_receipt_field' });
+		expect(await settingsUpdates()).toHaveLength(0);
+		const after = await getRestaurantWithSettings(db, id);
+		expect(after!.receiptAddress).toBeNull();
+		expect(after!.receiptPhone).toBeNull();
+	});
+
+	it('does not bump menu_version: the header is not in the menu snapshot', async () => {
+		const id = await makeRestaurant();
+		const before = await menuVersion(id);
+		await db.transaction((tx) => updateSettings(tx, id, { receiptFooter: 'Thank you' }, ctx));
+		expect(await menuVersion(id)).toBe(before);
+	});
+
+	it("is scoped by restaurant: B does not see A's header", async () => {
+		const a = await makeRestaurant('Cafe A');
+		const b = await makeRestaurant('Cafe B');
+		await db.transaction((tx) => updateSettings(tx, a, header, ctx));
+		const other = await getRestaurantWithSettings(db, b);
+		expect(other!.receiptAddress).toBeNull();
+		expect(other!.receiptFooter).toBeNull();
+	});
+});

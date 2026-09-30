@@ -22,6 +22,7 @@
 	} from '$lib/pos/orders';
 	import { readLocalSession } from '$lib/pos/session';
 	import { flush, onFlushEvent, type FlushEvent } from '$lib/pos/queue';
+	import { printOriginals, type OriginalsResult } from '$lib/pos/printing';
 	import {
 		readBoundDeviceId,
 		readCachedSetting,
@@ -64,6 +65,9 @@
 	let outcome = $state<'paid' | 'pending' | 'review' | 'refused'>('paid');
 	let refusalReason = $state('');
 	let waitingForNetwork = $state(false);
+	// What printing said, AFTER the sale is already recorded and shown (invariant 4).
+	let printLine = $state('');
+	let drawerLine = $state('');
 
 	const figures = $derived(
 		cart ? { totals: cartTotals(cart, taxMode), amounts: lineAmounts(cart) } : null
@@ -215,7 +219,10 @@
 				currencyCode: menu.currency as string,
 				menuVersion: menu.version,
 				payment: { method, tenderedMinor: method === 'cash' ? tendered : null },
-				now: new Date()
+				now: new Date(),
+				// Kept on the local order for the receipt (T-18).
+				cashierName: signedIn.current.displayName,
+				businessDate: session.businessDate ?? null
 			});
 			outcome = method === 'cash' ? 'paid' : 'pending';
 			sale = {
@@ -225,11 +232,30 @@
 				tendered: method === 'cash' ? tendered : null
 			};
 			void flush().catch(() => {});
+			if (method === 'cash') {
+				// Fire-and-report: the sale is complete on the device; the printer
+				// never holds up ● Paid (invariant 4). Card and mobile print from the
+				// layout's auto-printer once the server confirms (invariant 5).
+				printLine = '';
+				drawerLine = '';
+				void printOriginals(result.orderId, { drawer: true }).then(describePrint, () => {
+					printLine = '◆ Not printed — reprint it from Sales';
+				});
+			}
 		} catch (err) {
 			failure = `✕ ${err instanceof Error ? err.message : 'The sale could not be recorded'}`;
 		} finally {
 			busy = false;
 		}
+	}
+
+	function describePrint(result: OriginalsResult) {
+		const printed = result.receipt === 'queued' || result.receipt === 'duplicate';
+		printLine = printed ? '● Receipt sent to the printer' : '◆ Not printed — reprint it from Sales';
+		drawerLine =
+			result.drawer === 'too_late' || result.drawer === 'printer_unreachable'
+				? '◆ The drawer did not open'
+				: '';
 	}
 
 	async function cancelPending() {
@@ -256,9 +282,28 @@
 		<section class="mx-auto flex w-full max-w-xl flex-col gap-4" aria-live="polite">
 			{#if outcome === 'paid'}
 				<p class="bg-st-paid-bg text-st-paid rounded-control px-3 py-2 font-semibold">● Paid</p>
+				{#if printLine}
+					<p
+						data-testid="print-line"
+						class="rounded-control px-3 py-2 {printLine.startsWith('●')
+							? 'bg-ok-bg text-ok'
+							: 'bg-st-offline-bg text-st-offline'}"
+					>
+						{printLine}
+					</p>
+				{/if}
+				{#if drawerLine}
+					<p class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">{drawerLine}</p>
+				{/if}
 			{:else if outcome === 'pending'}
 				<p class="bg-st-billed-bg text-st-billed rounded-control px-3 py-2">
 					◐ Waiting for the server to confirm…
+				</p>
+				<p
+					class="bg-st-billed-bg text-st-billed rounded-control px-3 py-2"
+					data-testid="print-line"
+				>
+					◐ The receipt prints once the payment is confirmed
 				</p>
 				{#if waitingForNetwork}
 					<p class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">

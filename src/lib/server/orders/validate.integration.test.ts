@@ -259,6 +259,66 @@ describe('validateSale (T-18)', () => {
 		expect(result.ok).toBe(false);
 	});
 
+	// menu-and-printing T-09: delivery is a tag paid at the till, exactly like
+	// takeaway — the validator adds no rule tying the table label to the type.
+	it('accepts a delivery sale', async () => {
+		const result = await db.transaction((tx) =>
+			validateSale(
+				tx,
+				ctxFor(fx, fx.cashierId),
+				envelope(fx, { orderType: 'delivery', tableLabel: null })
+			)
+		);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.sale.orderType).toBe('delivery');
+			expect(result.sale.tableLabel).toBeNull();
+			expect(result.softFlags).toEqual([]);
+		}
+	});
+
+	// MANDATORY (invariant 5 — an offline sale is a fact): the format every till
+	// queued before menu-and-printing T-22 — no `note` key at all — still records.
+	it('a payload with no note key validates with note null', async () => {
+		const env = envelope(fx);
+		expect('note' in (env.payload as object)).toBe(false);
+		const result = await db.transaction((tx) => validateSale(tx, ctxFor(fx, fx.cashierId), env));
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.sale.note).toBeNull();
+	});
+
+	it("a note is cleaned: 'no\\u001bchilli' → 'no chilli'; a blank one becomes null", async () => {
+		const cleaned = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(fx, fx.cashierId), envelope(fx, { note: 'no\u001bchilli' }))
+		);
+		expect(cleaned.ok).toBe(true);
+		if (cleaned.ok) expect(cleaned.sale.note).toBe('no chilli');
+		const blank = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(fx, fx.cashierId), envelope(fx, { note: '   ' }))
+		);
+		expect(blank.ok).toBe(true);
+		if (blank.ok) expect(blank.sale.note).toBeNull();
+	});
+
+	it('a 141-character note is invalid_payload', async () => {
+		const result = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(fx, fx.cashierId), envelope(fx, { note: 'x'.repeat(141) }))
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) expect(result.hard).toBe('invalid_payload');
+	});
+
+	it('an unknown order type is invalid_payload', async () => {
+		const result = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(fx, fx.cashierId), envelope(fx, { orderType: 'home_delivery' }))
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.hard).toBe('invalid_payload');
+			expect(result.detail).toContain('orderType');
+		}
+	});
+
 	it('flags a price at the SAME menu version as price_tamper', async () => {
 		const env = envelope(fx, {
 			lines: [

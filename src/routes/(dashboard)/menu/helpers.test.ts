@@ -1,6 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
-import { formatTaxRate, parseOptionalRate, parsePriceInput } from './helpers';
+import {
+	createCategorySchema,
+	createItemSchema,
+	formatTaxRate,
+	parseOptionalRate,
+	parsePriceInput
+} from './helpers';
 
 // MANDATORY (spec 29 — money arithmetic and rounding): the ONE place a typed
 // price becomes minor units.
@@ -71,6 +77,40 @@ describe('parseOptionalRate', () => {
 
 	it.each(['8.25', '10001', '-1', 'abc'])('refuses %j', (raw) => {
 		expect(parseOptionalRate(raw).ok).toBe(false);
+	});
+});
+
+// menu-and-printing T-11: the category is optional, and a name is capped where
+// the sale validator caps it (120) and may carry no control character.
+describe('the name and category schemas', () => {
+	const uuid = '0f9a4c2e-1b3d-4e5f-8a6b-7c8d9e0f1a2b';
+
+	it('reads a blank category as null, a uuid as itself, and refuses anything else', () => {
+		expect(
+			createItemSchema.parse({ categoryId: '', name: 'Tea', price: '1' }).categoryId
+		).toBeNull();
+		expect(createItemSchema.parse({ categoryId: uuid, name: 'Tea', price: '1' }).categoryId).toBe(
+			uuid
+		);
+		const bad = createItemSchema.safeParse({ categoryId: 'nope', name: 'Tea', price: '1' });
+		expect(bad.success).toBe(false);
+	});
+
+	it("caps a name at 120 characters with the sale validator's message", () => {
+		expect(createCategorySchema.safeParse({ name: 'x'.repeat(120) }).success).toBe(true);
+		const long = createCategorySchema.safeParse({ name: 'x'.repeat(121) });
+		expect(long.success).toBe(false);
+		if (!long.success) {
+			expect(long.error.issues[0]?.message).toBe('Keep the name under 120 characters.');
+		}
+	});
+
+	it('refuses a control character in a name', () => {
+		const escaped = createItemSchema.safeParse({ categoryId: '', name: 'Tea\u001b', price: '1' });
+		expect(escaped.success).toBe(false);
+		if (!escaped.success) {
+			expect(escaped.error.issues[0]?.message).toBe('Remove the control characters from the name.');
+		}
 	});
 });
 

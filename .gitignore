@@ -40,3 +40,8 @@ pnpm-debug.log*
 # Database dumps (pnpm db:backup) — will contain PIN hashes, session
 # tokens and the audit log. Never committed.
 backups/
+
+# The print agent's pairing token and its job queue (menu-and-printing T-24) —
+# a secret and runtime state on the till PC, never in git.
+print-agent/config.json
+print-agent/data/

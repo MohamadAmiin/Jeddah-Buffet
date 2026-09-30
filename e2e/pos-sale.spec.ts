@@ -221,7 +221,7 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	await expect(status).toContainText('Offline');
 	await addItem(tillPage, 'Burger');
 	await addItem(tillPage, 'Drink');
-	await chooseOrderType(tillPage, 'Sit now', { tableLabel: '4' });
+	await chooseOrderType(tillPage, 'Dine in', { tableLabel: '4' });
 	await payCash(tillPage, 1100n);
 	await expect(tillPage.getByText('Invoice POS1-000002')).toBeVisible();
 	await expect(tillPage.getByText(/\b0\.00 USD/).last()).toBeVisible();

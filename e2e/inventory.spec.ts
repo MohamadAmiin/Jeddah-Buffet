@@ -184,12 +184,11 @@ test('a delivery, a recipe, a till sale: stock, COGS, reports and margin agree',
 		.last();
 	await expect(cogsCard).toContainText('2.65');
 
-	// 8. The menu: the Burger's cost and margin at the averages now.
+	// 8. The menu: the Burger's cost and margin at the averages now. Each item is a
+	// photo tile (menu-and-printing T-13) whose text begins with the photo or its
+	// "No photo" stand-in, so the tile is found by the name it contains.
 	await page.getByRole('link', { name: 'Menu', exact: true }).click();
-	const burger = page
-		.locator('li')
-		.filter({ hasText: /^\s*Burger/ })
-		.first();
+	const burger = page.getByRole('listitem').filter({ hasText: 'Burger' }).first();
 	await expect(burger).toContainText(/Cost\s*1\.33/);
 	await expect(burger).toContainText(/Margin\s*6\.67/);
 

@@ -5,7 +5,7 @@ import { testDb, closeTestDb } from '../db/test/db';
 import { restaurants } from '../db/schema/restaurants';
 import { users } from '../db/schema/users';
 import { auditLog } from '../db/schema/audit';
-import { menuItems } from '../db/schema/menu';
+import { menuCategories, menuImages, menuItems } from '../db/schema/menu';
 import { onRestaurantCreated } from '../restaurants';
 import {
 	archiveCategory,
@@ -18,11 +18,14 @@ import {
 	hasMenuItems,
 	linkModifierGroup,
 	listMenu,
+	removeItemImage,
 	setItemAvailability,
+	setItemImage,
 	unlinkModifierGroup,
 	updateItem,
 	updateModifier
 } from './index';
+import { readImage } from './images';
 
 const db = testDb();
 
@@ -238,11 +241,113 @@ describe('archive, never delete (invariant 2)', () => {
 		expect(source).not.toContain('.delete(modifierGroups)');
 	});
 
-	it('refuses to archive a category that still holds a live item', async () => {
+	it('archiving a category moves its live items to no category, in one bump', async () => {
 		const r = await withItem();
-		expect(await db.transaction((tx) => archiveCategory(tx, r.restaurantId, r.categoryId))).toEqual(
-			{ ok: false, reason: 'not_empty' }
+		const second = await db.transaction((tx) =>
+			createItem(tx, r.restaurantId, { categoryId: r.categoryId, name: 'Coffee', priceMinor: 900n })
 		);
+		const archived = await db.transaction((tx) =>
+			createItem(tx, r.restaurantId, { categoryId: r.categoryId, name: 'Old', priceMinor: 100n })
+		);
+		if (!second.ok || !archived.ok) throw new Error('fixture items were not created');
+		await db.transaction((tx) => archiveItem(tx, r.restaurantId, archived.id));
+		const before = await version(r.restaurantId);
+
+		const result = await db.transaction((tx) => archiveCategory(tx, r.restaurantId, r.categoryId));
+
+		expect(result).toEqual({ ok: true, changed: true, movedItems: 2 });
+		const rows = await db
+			.select()
+			.from(menuItems)
+			.where(eq(menuItems.restaurantId, r.restaurantId));
+		const byId = new Map(rows.map((row) => [row.id, row]));
+		expect(byId.get(r.itemId)?.categoryId).toBeNull();
+		expect(byId.get(second.id)?.categoryId).toBeNull();
+		// The archived item is history: its category_id is untouched.
+		expect(byId.get(archived.id)?.categoryId).toBe(r.categoryId);
+		const [category] = await db
+			.select()
+			.from(menuCategories)
+			.where(eq(menuCategories.id, r.categoryId));
+		expect(category.archivedAt).toBeInstanceOf(Date);
+		expect(await version(r.restaurantId)).toBe(before + 1);
+	});
+});
+
+describe('optional categories (menu-and-printing T-06)', () => {
+	it('creates an item with no category', async () => {
+		const r = await makeRestaurant();
+		const before = await version(r.restaurantId);
+
+		const created = await db.transaction((tx) =>
+			createItem(tx, r.restaurantId, { name: 'Water', priceMinor: 150n })
+		);
+
+		expect(created.ok).toBe(true);
+		if (!created.ok) return;
+		const menu = await listMenu(db, r.restaurantId);
+		const item = menu.items.find((i) => i.id === created.id);
+		expect(item?.categoryId).toBeNull();
+		expect(await version(r.restaurantId)).toBe(before + 1);
+	});
+
+	it('moves an item between categories and to no category, bumping once per real change', async () => {
+		const r = await withItem();
+		const other = await db.transaction((tx) =>
+			createCategory(tx, r.restaurantId, { name: 'Food' })
+		);
+		const start = await version(r.restaurantId);
+
+		expect(
+			await db.transaction((tx) =>
+				updateItem(tx, r.restaurantId, r.itemId, { categoryId: other.id }, r.ctx)
+			)
+		).toEqual({ ok: true, changed: true });
+		expect(await version(r.restaurantId)).toBe(start + 1);
+
+		expect(
+			await db.transaction((tx) =>
+				updateItem(tx, r.restaurantId, r.itemId, { categoryId: null }, r.ctx)
+			)
+		).toEqual({ ok: true, changed: true });
+		expect(await version(r.restaurantId)).toBe(start + 2);
+		const [row] = await db.select().from(menuItems).where(eq(menuItems.id, r.itemId));
+		expect(row.categoryId).toBeNull();
+
+		// Already no category: a no-op, no bump.
+		expect(
+			await db.transaction((tx) =>
+				updateItem(tx, r.restaurantId, r.itemId, { categoryId: null }, r.ctx)
+			)
+		).toEqual({ ok: true, changed: false });
+		expect(await version(r.restaurantId)).toBe(start + 2);
+	});
+
+	it("refuses another restaurant's category, inserting nothing and bumping nothing", async () => {
+		const a = await withItem();
+		const b = await makeRestaurant('Cafe Two');
+		const before = await version(a.restaurantId);
+
+		expect(
+			await db.transaction((tx) =>
+				createItem(tx, a.restaurantId, { categoryId: b.restaurantId, name: 'X', priceMinor: 1n })
+			)
+		).toEqual({ ok: false, reason: 'not_found' });
+		const other = await db.transaction((tx) =>
+			createCategory(tx, b.restaurantId, { name: 'Theirs' })
+		);
+		expect(
+			await db.transaction((tx) =>
+				createItem(tx, a.restaurantId, { categoryId: other.id, name: 'X', priceMinor: 1n })
+			)
+		).toEqual({ ok: false, reason: 'not_found' });
+
+		const rows = await db
+			.select()
+			.from(menuItems)
+			.where(eq(menuItems.restaurantId, a.restaurantId));
+		expect(rows).toHaveLength(1);
+		expect(await version(a.restaurantId)).toBe(before);
 	});
 });
 
@@ -301,5 +406,119 @@ describe('hasMenuItems (T-43)', () => {
 
 		expect(await hasMenuItems(db, a.restaurantId)).toBe(true);
 		expect(await hasMenuItems(db, b.restaurantId)).toBe(false);
+	});
+});
+
+describe('photos (menu-and-printing T-07)', () => {
+	const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+	const JPEG = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+
+	const photoRows = (restaurantId: string) =>
+		db.select().from(menuImages).where(eq(menuImages.restaurantId, restaurantId));
+	const itemRow = async (itemId: string) => {
+		const [row] = await db.select().from(menuItems).where(eq(menuItems.id, itemId));
+		return row;
+	};
+
+	it('sets, replaces and removes a photo — one row at a time, one bump per change', async () => {
+		const r = await withItem();
+		const v0 = await version(r.restaurantId);
+
+		const first = await db.transaction((tx) =>
+			setItemImage(tx, r.restaurantId, r.itemId, { bytes: PNG, contentType: 'image/png' })
+		);
+		expect(first.ok).toBe(true);
+		if (!first.ok) return;
+		expect(await photoRows(r.restaurantId)).toHaveLength(1);
+		expect((await itemRow(r.itemId)).imageId).toBe(first.imageId);
+		expect(await version(r.restaurantId)).toBe(v0 + 1);
+
+		const second = await db.transaction((tx) =>
+			setItemImage(tx, r.restaurantId, r.itemId, { bytes: JPEG, contentType: 'image/jpeg' })
+		);
+		expect(second.ok).toBe(true);
+		if (!second.ok) return;
+		const afterReplace = await photoRows(r.restaurantId);
+		expect(afterReplace.map((row) => row.id)).toEqual([second.imageId]);
+		expect(afterReplace[0].contentType).toBe('image/jpeg');
+		expect(afterReplace[0].byteSize).toBe(JPEG.byteLength);
+		expect(await version(r.restaurantId)).toBe(v0 + 2);
+
+		expect(await db.transaction((tx) => removeItemImage(tx, r.restaurantId, r.itemId))).toEqual({
+			ok: true,
+			changed: true
+		});
+		expect(await photoRows(r.restaurantId)).toHaveLength(0);
+		expect((await itemRow(r.itemId)).imageId).toBeNull();
+		expect(await version(r.restaurantId)).toBe(v0 + 3);
+
+		expect(await db.transaction((tx) => removeItemImage(tx, r.restaurantId, r.itemId))).toEqual({
+			ok: true,
+			changed: false
+		});
+		expect(await version(r.restaurantId)).toBe(v0 + 3);
+	});
+
+	it("refuses restaurant B's photo on A's item, writing nothing", async () => {
+		const a = await withItem();
+		const b = await makeRestaurant('Cafe Two');
+		const before = await version(b.restaurantId);
+
+		expect(
+			await db.transaction((tx) =>
+				setItemImage(tx, b.restaurantId, a.itemId, { bytes: PNG, contentType: 'image/png' })
+			)
+		).toEqual({ ok: false, reason: 'not_found' });
+		expect(await photoRows(a.restaurantId)).toHaveLength(0);
+		expect(await photoRows(b.restaurantId)).toHaveLength(0);
+		expect(await version(b.restaurantId)).toBe(before);
+	});
+
+	it('throws on bytes whose sniffed type disagrees, rolling back everything', async () => {
+		const r = await withItem();
+		const before = await version(r.restaurantId);
+
+		await expect(
+			db.transaction((tx) =>
+				setItemImage(tx, r.restaurantId, r.itemId, { bytes: PNG, contentType: 'image/jpeg' })
+			)
+		).rejects.toThrow(TypeError);
+		await expect(
+			db.transaction((tx) =>
+				setItemImage(tx, r.restaurantId, r.itemId, {
+					bytes: new Uint8Array(0),
+					contentType: 'image/png'
+				})
+			)
+		).rejects.toThrow(TypeError);
+
+		expect(await photoRows(r.restaurantId)).toHaveLength(0);
+		expect((await itemRow(r.itemId)).imageId).toBeNull();
+		expect(await version(r.restaurantId)).toBe(before);
+	});
+
+	it('reads a photo only through its own restaurant, and never queries a malformed id', async () => {
+		const a = await withItem();
+		const b = await makeRestaurant('Cafe Two');
+		const set = await db.transaction((tx) =>
+			setItemImage(tx, a.restaurantId, a.itemId, { bytes: PNG, contentType: 'image/png' })
+		);
+		if (!set.ok) throw new Error('photo not set');
+
+		const own = await readImage(db, a.restaurantId, set.imageId);
+		expect(own?.contentType).toBe('image/png');
+		expect(own && Array.from(own.bytes)).toEqual(Array.from(PNG));
+		expect(await readImage(db, b.restaurantId, set.imageId)).toBeNull();
+		expect(await readImage(db, a.restaurantId, 'not-a-uuid')).toBeNull();
+	});
+
+	it('lists the imageId on each item — null until a photo is set', async () => {
+		const r = await withItem();
+		expect((await listMenu(db, r.restaurantId)).items[0].imageId).toBeNull();
+		const set = await db.transaction((tx) =>
+			setItemImage(tx, r.restaurantId, r.itemId, { bytes: PNG, contentType: 'image/png' })
+		);
+		if (!set.ok) throw new Error('photo not set');
+		expect((await listMenu(db, r.restaurantId)).items[0].imageId).toBe(set.imageId);
 	});
 });

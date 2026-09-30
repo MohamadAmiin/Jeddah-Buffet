@@ -24,9 +24,10 @@ import { menuItems, modifiers } from './menu';
 // 'new' to a line — 'billed', 'voided', 'refunded', 'sent' exist in the CHECKs
 // so the kitchen and approvals plans need no migration.
 //
-// order_type is ('dine_in', 'takeaway') only — assumption 1 of the plan
-// (takeaway, not home delivery); a later plan may add a value with one
-// reversible constraint swap.
+// order_type is ('dine_in', 'takeaway', 'delivery') — delivery is a tag paid
+// at the till (tasks/menu-and-printing T-04); the literal list MUST equal
+// ORDER_TYPES in src/lib/sync-ops, which constraints.integration.test.ts
+// asserts.
 //
 // INVARIANT 7 — every line snapshots unit_price_minor and its RESOLVED
 // tax_rate_bp (the item's own rate or the restaurant's, resolved on the
@@ -81,6 +82,10 @@ export const orders = pgTable(
 			.references(() => users.id, { onDelete: 'restrict' }),
 		orderType: text('order_type').notNull(),
 		tableLabel: text('table_label'),
+		// An optional kitchen note (spec 11: kitchen tickets carry notes), at most
+		// 140 characters. NULL when the till sent none — and every till queued
+		// before menu-and-printing T-20 sends none (tasks/menu-and-printing T-20).
+		note: text('note'),
 		status: text('status').notNull(),
 		taxMode: text('tax_mode').notNull(),
 		currencyCode: text('currency_code').notNull(),
@@ -110,11 +115,12 @@ export const orders = pgTable(
 		index('orders_restaurant_session_idx').on(t.restaurantId, t.posSessionId),
 		index('orders_session_idx').on(t.posSessionId),
 		index('orders_employee_idx').on(t.employeeUserId),
-		check('orders_order_type_valid', sql`${t.orderType} in ('dine_in', 'takeaway')`),
+		check('orders_order_type_valid', sql`${t.orderType} in ('dine_in', 'takeaway', 'delivery')`),
 		check(
 			'orders_table_label_length',
 			sql`${t.tableLabel} is null or char_length(${t.tableLabel}) between 1 and 32`
 		),
+		check('orders_note_length', sql`${t.note} is null or char_length(${t.note}) between 1 and 140`),
 		check(
 			'orders_status_valid',
 			sql`${t.status} in ('open', 'billed', 'paid', 'voided', 'refunded')`

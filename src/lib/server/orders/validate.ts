@@ -26,6 +26,7 @@ import {
 	PAYMENT_METHODS,
 	formatInvoiceNumber,
 	type OpEnvelope,
+	type OrderType,
 	type SaleLine
 } from '../../sync-ops';
 import { TAX_MODES, type TaxMode } from '../../money/tax';
@@ -75,8 +76,10 @@ export type ParsedSale = {
 	orderId: string;
 	posSessionId: string;
 	businessDate: string;
-	orderType: 'dine_in' | 'takeaway';
+	orderType: OrderType;
 	tableLabel: string | null;
+	/** The kitchen note, cleaned; null when the till sent none (or no key at all). */
+	note: string | null;
 	taxMode: TaxMode;
 	currencyCode: string;
 	menuVersion: number;
@@ -159,12 +162,32 @@ const paymentSchema = z
 		}
 	});
 
+/**
+ * The kitchen note as the server stores it — the SAME cleaning the till applies
+ * (src/lib/pos/orders.ts setNote): control characters become spaces (they would
+ * command an ESC/POS printer), runs of spaces collapse, trimmed; '' becomes null.
+ */
+function cleanKitchenNote(note: string): string | null {
+	const cleaned = note
+		.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+		.replace(/ {2,}/g, ' ')
+		.trim();
+	return cleaned === '' ? null : cleaned;
+}
+
 export const saleCompletePayloadSchema = z
 	.object({
 		orderId: z.string().uuid(),
 		posSessionId: z.string().uuid(),
-		orderType: z.enum(ORDER_TYPES as unknown as [string, ...string[]]),
+		// The readonly tuple straight from the wire contract: a value added there is
+		// accepted here with no cast, and every consumer of ParsedSale is typed
+		// OrderType, so a missing case fails to compile instead of hiding.
+		orderType: z.enum(ORDER_TYPES),
 		tableLabel: z.string().min(1).max(32).nullable(),
+		// OPTIONAL (menu-and-printing T-22): every till queued before this field
+		// existed omits the key, and that payload must still record (invariant 5).
+		// No soft or hard flag is tied to the note's content beyond the length cap.
+		note: z.string().max(140).nullable().optional(),
 		taxMode: z.enum(TAX_MODES as unknown as [string, ...string[]]),
 		currencyCode: z.string().regex(/^[A-Z]{3}$/),
 		menuVersion: z.number().int().min(1),
@@ -429,8 +452,10 @@ export async function validateSale(
 		orderId: payload.orderId,
 		posSessionId: payload.posSessionId,
 		businessDate: session.businessDate,
-		orderType: payload.orderType as 'dine_in' | 'takeaway',
+		orderType: payload.orderType,
 		tableLabel: payload.tableLabel,
+		note:
+			payload.note === undefined || payload.note === null ? null : cleanKitchenNote(payload.note),
 		taxMode: payload.taxMode as TaxMode,
 		currencyCode: payload.currencyCode,
 		menuVersion: payload.menuVersion,

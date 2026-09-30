@@ -89,7 +89,7 @@ describe('the lists', () => {
 			'pin.login'
 		]);
 		expect([...OP_STATUSES]).toEqual(['accepted', 'recorded_flagged', 'unrecorded']);
-		expect([...ORDER_TYPES]).toEqual(['dine_in', 'takeaway']);
+		expect([...ORDER_TYPES]).toEqual(['dine_in', 'takeaway', 'delivery']);
 		expect([...PAYMENT_METHODS]).toEqual(['cash', 'card', 'mobile']);
 		expect([...ORDER_STATUSES]).toEqual(['open', 'billed', 'paid', 'voided', 'refunded']);
 		expect([...LINE_STATUSES]).toEqual(['new', 'sent', 'voided']);

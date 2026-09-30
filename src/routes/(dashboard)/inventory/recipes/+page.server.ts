@@ -70,7 +70,10 @@ export const load: ServerLoad = async (event) => {
 		name: category.name,
 		items: menu.items.filter((item) => item.categoryId === category.id).map(itemRow)
 	}));
-	const loose = menu.items.filter((item) => !categoryIds.has(item.categoryId));
+	// An item with no category (nullable since menu-and-printing T-03) is loose too.
+	const loose = menu.items.filter(
+		(item) => item.categoryId === null || !categoryIds.has(item.categoryId)
+	);
 	if (loose.length > 0) {
 		categories.push({ id: 'other', name: 'Other', items: loose.map(itemRow) });
 	}

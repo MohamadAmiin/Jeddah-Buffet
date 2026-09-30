@@ -1,4 +1,5 @@
 import type { UserRole } from '../db/schema/users';
+import type { OrderType } from '../../sync-ops';
 
 // The events this plan emits, as a DISCRIMINATED UNION with the exact shape of
 // each one's `details`. Nothing else may be written.
@@ -105,7 +106,7 @@ export type AuditEvent =
 			details: {
 				deviceCode: string;
 				invoiceNumber: string;
-				orderType: 'dine_in' | 'takeaway';
+				orderType: OrderType;
 				method: 'cash' | 'card' | 'mobile';
 				totalMinor: string;
 			};

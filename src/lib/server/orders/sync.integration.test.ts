@@ -254,6 +254,49 @@ describe('MANDATORY (spec 29) — retries never create duplicates', () => {
 			.where(eq(orders.restaurantId, fx.restaurantId));
 		expect(orderCount[0].c).toBe('1');
 	});
+
+	// MANDATORY (spec 29 — offline sync: retries never create duplicates), for the
+	// order type menu-and-printing T-09 adds.
+	it('a delivery sale sent twice: accepted then replayed; one order, one invoice, one entry set', async () => {
+		const env = saleEnv(fx);
+		const payload = env.payload as { orderId: string; orderType: string };
+		payload.orderType = 'delivery';
+
+		const first = await handleOp(db, posDeviceCtx(fx), { ip: null, userAgent: null }, env);
+		expect(first.http).toBe(200);
+		if (first.http === 200) expect(first.body.status).toBe('accepted');
+		const second = await handleOp(db, posDeviceCtx(fx), { ip: null, userAgent: null }, env);
+		expect(second.http).toBe(200);
+		if (second.http === 200) expect(second.body.status).toBe('replayed');
+
+		const count = (q: Promise<{ c: string }[]>) => q.then((rows) => rows[0].c);
+		expect(
+			await count(
+				testDb()
+					.select({ c: sql<string>`count(*)::text` })
+					.from(orders)
+					.where(eq(orders.id, payload.orderId))
+			)
+		).toBe('1');
+		expect(
+			await count(
+				testDb()
+					.select({ c: sql<string>`count(*)::text` })
+					.from(invoices)
+					.where(eq(invoices.orderId, payload.orderId))
+			)
+		).toBe('1');
+		expect(
+			await count(
+				testDb()
+					.select({ c: sql<string>`count(*)::text` })
+					.from(journalEntries)
+					.where(eq(journalEntries.sourceId, payload.orderId))
+			)
+		).toBe('1');
+		const [orderRow] = await testDb().select().from(orders).where(eq(orders.id, payload.orderId));
+		expect(orderRow.orderType).toBe('delivery');
+	});
 });
 
 describe('device lineage', () => {

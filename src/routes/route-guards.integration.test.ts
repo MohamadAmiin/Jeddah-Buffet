@@ -30,6 +30,7 @@ const DASHBOARD_ROUTE_IDS = [
 	'/(dashboard)/employees/[id]',
 	'/(dashboard)/employees/roles',
 	'/(dashboard)/menu',
+	'/(dashboard)/menu/images/[id]',
 	'/(dashboard)/reports',
 	'/(dashboard)/reports/flagged'
 ];

@@ -9,6 +9,7 @@
 	import { minor } from '$lib/money';
 	import { formatAmount, formatMoney, moneyFormatFor, type MoneyFormat } from '$lib/money/format';
 	import { TAX_MODES, type TaxMode } from '$lib/money/tax';
+	import { tillImageUrl } from '$lib/menu-images';
 	import { RESTORED_CONTEXT, signedIn } from '$lib/pos/employee.svelte';
 	import { readLocalSession } from '$lib/pos/session';
 	import { readBoundDeviceId, readMenu, syncMenu, type LocalMenu } from '$lib/pos/store';
@@ -22,6 +23,7 @@
 		readCart,
 		removeLine,
 		saveCart,
+		setNote,
 		setOrderType,
 		type Cart
 	} from '$lib/pos/orders';
@@ -32,12 +34,33 @@
 		type MenuGroup,
 		type MenuItem
 	} from '$lib/pos/menu-view';
-	import PosIcon from '$lib/components/pos/PosIcon.svelte';
+	import PosIcon, { type PosIconName } from '$lib/components/pos/PosIcon.svelte';
+	import type { OrderType } from '$lib/sync-ops';
 
 	const restored = getContext<Promise<void>>(RESTORED_CONTEXT) ?? Promise.resolve();
 
-	type Segment = 'sit' | 'waiting' | 'takeaway';
+	// The three order-type cards ARE the wire contract's values (menu-and-printing
+	// T-17): Dine in is the default when the cashier chooses nothing, with an
+	// optional table (no table = waiting for one); Takeaway and Delivery carry no
+	// table. Delivery is a tag paid at the till — CLAUDE.md decision (a).
+	type Segment = OrderType;
 	type Modifier = MenuGroup['modifiers'][number];
+
+	// Photo cards (menu-and-printing T-16). A photo that fails to load — offline
+	// with a cold HTTP cache — falls back to the initials tile and NEVER disables
+	// the card: selling does not depend on a picture. The Set is replaced, not
+	// mutated, so $state notices.
+	let brokenPhotos = $state<ReadonlySet<string>>(new Set());
+	function markBroken(imageId: string) {
+		brokenPhotos = new Set([...brokenPhotos, imageId]);
+	}
+	const initials = (name: string) =>
+		name
+			.split(/\s+/)
+			.filter(Boolean)
+			.slice(0, 2)
+			.map((word) => word.charAt(0).toUpperCase())
+			.join('');
 
 	let deviceId = $state<string | null>(null);
 	// Raw, not deep: the cart and menu are replaced whole, and IndexedDB's
@@ -47,8 +70,10 @@
 	let format = $state<MoneyFormat | null>(null);
 	let taxMode = $state<TaxMode>('exclusive');
 	let cart = $state.raw<Cart | null>(null);
-	let segment = $state<Segment>('waiting');
+	let segment = $state<Segment>('dine_in');
 	let tableInput = $state('');
+	// The kitchen note (T-22): saved through setNote on change, shown on the check.
+	let noteInput = $state('');
 	let selectedTab = $state<string | null>(null);
 	let error = $state('');
 	let gridDisabled = $state(false);
@@ -68,11 +93,11 @@
 			? 'Order'
 			: cart.orderType === 'takeaway'
 				? 'Takeaway'
-				: segment === 'sit'
-					? cart.tableLabel
-						? `Sit now · Table ${cart.tableLabel}`
-						: 'Sit now'
-					: 'Waiting for a table'
+				: cart.orderType === 'delivery'
+					? 'Delivery'
+					: cart.tableLabel
+						? `Dine in · Table ${cart.tableLabel}`
+						: 'Dine in'
 	);
 	const unmetGroup = $derived(
 		panelGroups.find((g) => {
@@ -148,27 +173,37 @@
 				return;
 			}
 			if (cart) {
-				segment =
-					cart.orderType === 'takeaway' ? 'takeaway' : cart.tableLabel !== null ? 'sit' : 'waiting';
+				segment = cart.orderType;
 				tableInput = cart.tableLabel ?? '';
+				noteInput = cart.note ?? '';
 			}
 		})();
 	});
+
+	async function noteChanged() {
+		if (!cart) return;
+		try {
+			await commit(setNote(cart, noteInput));
+			noteInput = cart.note ?? '';
+			error = '';
+		} catch (err) {
+			error = `✕ ${err instanceof Error ? err.message : 'The note could not be saved'}`;
+		}
+	}
 
 	async function chooseSegment(next: Segment) {
 		if (!cart) return;
 		segment = next;
 		try {
-			if (next === 'takeaway') await commit(setOrderType(cart, 'takeaway', null));
-			else if (next === 'waiting') await commit(setOrderType(cart, 'dine_in', null));
-			else await commit(setOrderType(cart, 'dine_in', tableInput));
+			if (next === 'dine_in') await commit(setOrderType(cart, 'dine_in', tableInput));
+			else await commit(setOrderType(cart, next, null));
 		} catch (err) {
 			error = `✕ ${err instanceof Error ? err.message : 'The order type could not be saved'}`;
 		}
 	}
 
 	async function tableChanged() {
-		if (!cart || segment !== 'sit') return;
+		if (!cart || segment !== 'dine_in') return;
 		try {
 			await commit(setOrderType(cart, 'dine_in', tableInput));
 			error = '';
@@ -261,10 +296,10 @@
 		}`;
 	const lineKey =
 		'min-h-touch-min min-w-touch-min border border-control-line rounded-control bg-raise text-ink px-3 whitespace-nowrap';
-	const segments: { id: Segment; label: string; icon: 'table' | 'clock' | 'bag' }[] = [
-		{ id: 'sit', label: 'Sit now', icon: 'table' },
-		{ id: 'waiting', label: 'Waiting for a table', icon: 'clock' },
-		{ id: 'takeaway', label: 'Takeaway', icon: 'bag' }
+	const ORDER_TYPE_CARDS: { id: OrderType; label: string; icon: PosIconName }[] = [
+		{ id: 'dine_in', label: 'Dine in', icon: 'table' },
+		{ id: 'takeaway', label: 'Takeaway', icon: 'bag' },
+		{ id: 'delivery', label: 'Delivery', icon: 'delivery' }
 	];
 </script>
 
@@ -283,27 +318,27 @@
 				Order type
 			</h3>
 			<div role="group" aria-labelledby="ordertype-label" class="grid gap-3 sm:grid-cols-3">
-				{#each segments as seg (seg.id)}
-					{@const on = segment === seg.id}
+				{#each ORDER_TYPE_CARDS as card (card.id)}
+					{@const on = segment === card.id}
 					<button
 						type="button"
 						aria-pressed={on}
 						class="min-h-touch-lg {choiceClass(on)}"
-						onclick={() => chooseSegment(seg.id)}
+						onclick={() => chooseSegment(card.id)}
 					>
-						<PosIcon name={seg.icon} class="size-6" />
-						<span>{seg.label}</span>
+						<PosIcon name={card.icon} class="size-6" />
+						<span>{card.label}</span>
 						{#if on}<PosIcon name="check-circle" class="ml-auto size-6" />{/if}
 					</button>
 				{/each}
 			</div>
 		</div>
 
-		{#if segment === 'sit'}
+		{#if segment === 'dine_in'}
 			<label class="flex flex-col gap-3">
 				<span class="text-section text-ink flex items-center gap-3">
 					<PosIcon name="table" class="text-accent size-6" />
-					Table
+					Table (optional)
 				</span>
 				<span class="relative block">
 					<PosIcon
@@ -313,7 +348,7 @@
 					<input
 						type="text"
 						maxlength="32"
-						placeholder="Table number or name, e.g. 4"
+						placeholder="Table number or name — leave empty while they wait"
 						bind:value={tableInput}
 						onchange={tableChanged}
 						class="border-control-line rounded-card min-h-touch bg-raise text-ink placeholder:text-ink-2 w-full border pr-4 pl-12"
@@ -321,6 +356,22 @@
 				</span>
 			</label>
 		{/if}
+
+		<!-- T-22: an optional note for the kitchen ticket (spec 11). -->
+		<label class="flex flex-col gap-3">
+			<span class="text-section text-ink flex items-center gap-3">
+				<PosIcon name="clipboard" class="text-accent size-6" />
+				Note for the kitchen
+			</span>
+			<input
+				type="text"
+				maxlength="140"
+				placeholder="Optional — e.g. no onions"
+				bind:value={noteInput}
+				onchange={noteChanged}
+				class="border-control-line rounded-card min-h-touch bg-raise text-ink placeholder:text-ink-2 w-full border px-4"
+			/>
+		</label>
 
 		{#if error}
 			<p class="bg-danger-bg text-danger rounded-control px-3 py-2">{error}</p>
@@ -354,24 +405,27 @@
 					dashboard Settings page
 				</p>
 			{:else if menu && format}
-				<nav aria-label="Menu categories">
-					<div role="tablist" class="flex flex-wrap gap-2">
-						{#each tabs as tab (tab.id)}
-							<button
-								type="button"
-								role="tab"
-								id="tab-{tab.id}"
-								aria-selected={activeTab?.id === tab.id}
-								aria-controls="grid-{tab.id}"
-								class={pillClass(activeTab?.id === tab.id)}
-								onclick={() => {
-									selectedTab = tab.id;
-									panelItem = null;
-								}}>{tab.name}</button
-							>
-						{/each}
-					</div>
-				</nav>
+				<!-- One tab (or none) is not a choice: no tablist, just the grid. -->
+				{#if tabs.length > 1}
+					<nav aria-label="Menu categories">
+						<div role="tablist" class="flex flex-wrap gap-2">
+							{#each tabs as tab (tab.id)}
+								<button
+									type="button"
+									role="tab"
+									id="tab-{tab.id}"
+									aria-selected={activeTab?.id === tab.id}
+									aria-controls="grid-{tab.id}"
+									class={pillClass(activeTab?.id === tab.id)}
+									onclick={() => {
+										selectedTab = tab.id;
+										panelItem = null;
+									}}>{tab.name}</button
+								>
+							{/each}
+						</div>
+					</nav>
+				{/if}
 
 				{#if panelItem}
 					<section
@@ -440,33 +494,64 @@
 						{/if}
 					</section>
 				{:else if activeTab}
-					<div
-						role="tabpanel"
-						id="grid-{activeTab.id}"
-						aria-labelledby="tab-{activeTab.id}"
-						class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4"
-					>
-						{#each activeTab.items as item (item.id)}
+					{#snippet itemCards(items: MenuItem[], money: MoneyFormat)}
+						{#each items as item (item.id)}
 							{@const usable = item.isAvailable && !gridDisabled}
+							{@const photo = item.imageId}
 							<button
 								type="button"
 								disabled={!usable}
-								class="min-h-touch-lg rounded-card flex flex-col items-start justify-center gap-1 border p-4 text-left {usable
-									? 'bg-raise text-ink border-control-line'
-									: 'bg-disabled-bg text-disabled-ink border-control-line'}"
+								class="min-h-touch-lg rounded-card border-control-line flex flex-col items-stretch gap-2 border p-3 text-left {usable
+									? 'bg-raise text-ink'
+									: 'bg-disabled-bg text-disabled-ink'}"
 								onclick={() => tapItem(item)}
 							>
-								<span class="text-caption {usable ? 'text-ink-2' : ''}">{activeTab.name}</span>
+								{#if photo && !brokenPhotos.has(photo)}
+									<img
+										src={tillImageUrl(photo)}
+										alt=""
+										loading="lazy"
+										decoding="async"
+										class="rounded-control aspect-video w-full object-cover {usable
+											? ''
+											: 'opacity-50'}"
+										onerror={() => markBroken(photo)}
+									/>
+								{:else}
+									<span
+										aria-hidden="true"
+										class="bg-raise-2 text-ink-2 rounded-control text-title flex aspect-video w-full items-center justify-center font-semibold"
+										>{initials(item.name)}</span
+									>
+								{/if}
 								<span class="text-pos font-semibold">{item.name}</span>
 								<span class="font-mono tabular-nums {usable ? 'text-accent' : ''}"
-									>{formatAmount(minor(item.priceMinor), format)}</span
+									>{formatAmount(minor(item.priceMinor), money)}</span
 								>
 								{#if !item.isAvailable}<span>Unavailable</span>{/if}
 							</button>
 						{:else}
 							<p class="text-ink-2">No items</p>
 						{/each}
-					</div>
+					{/snippet}
+					{#if tabs.length <= 1}
+						<div
+							role="region"
+							aria-label="Menu items"
+							class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4"
+						>
+							{@render itemCards(activeTab.items, format)}
+						</div>
+					{:else}
+						<div
+							role="tabpanel"
+							id="grid-{activeTab.id}"
+							aria-labelledby="tab-{activeTab.id}"
+							class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4"
+						>
+							{@render itemCards(activeTab.items, format)}
+						</div>
+					{/if}
 				{/if}
 			{/if}
 		</div>
@@ -481,6 +566,9 @@
 			<div class="flex min-w-0 flex-col">
 				<h2 id="check-h" class="text-title">Current Order</h2>
 				<p class="text-caption">{heading}</p>
+				{#if cart?.note}
+					<p class="text-caption text-ink-2">Note: {cart.note}</p>
+				{/if}
 			</div>
 			<span
 				class="border-accent-ink text-caption ml-auto rounded-full border px-3 py-1 font-semibold"

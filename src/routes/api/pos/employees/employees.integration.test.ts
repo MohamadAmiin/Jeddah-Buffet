@@ -214,7 +214,12 @@ describe('GET /api/pos/employees', () => {
 			posIdleLockSeconds: null,
 			timeZone: 'UTC',
 			acceptsCard: null,
-			acceptsMobile: null
+			acceptsMobile: null,
+			// T-21: the receipt header rides here too, null until the owner sets it.
+			receiptAddress: null,
+			receiptPhone: null,
+			taxRegistrationNumber: null,
+			receiptFooter: null
 		});
 
 		await db.transaction((tx) =>
@@ -231,7 +236,11 @@ describe('GET /api/pos/employees', () => {
 			posIdleLockSeconds: 120,
 			timeZone: 'UTC',
 			acceptsCard: null,
-			acceptsMobile: null
+			acceptsMobile: null,
+			receiptAddress: null,
+			receiptPhone: null,
+			taxRegistrationNumber: null,
+			receiptFooter: null
 		});
 	});
 
@@ -259,5 +268,43 @@ describe("the till's sale bootstrap (T-28)", () => {
 		const { body } = await get({ [DEVICE_COOKIE]: a.token });
 		expect(body!.settings.acceptsCard).toBe(true);
 		expect(body!.settings.acceptsMobile).toBe(false);
+	});
+
+	// menu-and-printing T-21: the receipt header rides INSIDE settings, so the
+	// response keeps its five top-level keys.
+	it('passes the receipt header through as stored, null until set', async () => {
+		const a = await makeRestaurant('Cafe Receipt', 'receipt@cafe.com');
+		const before = (await get({ [DEVICE_COOKIE]: a.token })).body!.settings as Record<
+			string,
+			unknown
+		>;
+		expect(before.receiptAddress).toBeNull();
+		expect(before.receiptPhone).toBeNull();
+		expect(before.taxRegistrationNumber).toBeNull();
+		expect(before.receiptFooter).toBeNull();
+
+		await db
+			.update(restaurantSettings)
+			.set({
+				receiptAddress: 'Km4',
+				receiptPhone: '61 555 0142',
+				taxRegistrationNumber: 'TIN-1',
+				receiptFooter: 'Mahadsanid!'
+			})
+			.where(eq(restaurantSettings.restaurantId, a.restaurantId));
+		const { body } = await get({ [DEVICE_COOKIE]: a.token });
+		expect(body!.settings).toMatchObject({
+			receiptAddress: 'Km4',
+			receiptPhone: '61 555 0142',
+			taxRegistrationNumber: 'TIN-1',
+			receiptFooter: 'Mahadsanid!'
+		});
+		expect(Object.keys(body!).sort()).toEqual([
+			'device',
+			'employees',
+			'lastInvoiceSeq',
+			'openSession',
+			'settings'
+		]);
 	});
 });

@@ -13,6 +13,7 @@ function item(over: Partial<Item> & Pick<Item, 'id' | 'categoryId'>): Item {
 		isAvailable: true,
 		sortOrder: 0,
 		modifierGroupIds: [],
+		imageId: null,
 		...over
 	};
 }
@@ -71,6 +72,32 @@ describe('itemsByCategory', () => {
 		expect(tabs.at(-1)).toMatchObject({ id: 'other', name: 'Other' });
 		expect(tabs.at(-1)?.items.map((i) => i.id)).toEqual(['lost']);
 	});
+
+	// menu-and-printing T-16: a category is optional on the dashboard now.
+	it('puts an item with no category under Other', () => {
+		const m = menu({
+			categories: [{ id: 'c1', name: 'One', sortOrder: 0 }],
+			items: [item({ id: 'water', categoryId: null }), item({ id: 'tea', categoryId: 'c1' })]
+		});
+		const tabs = itemsByCategory(m);
+		expect(tabs.map((t) => t.id)).toEqual(['c1', 'other']);
+		expect(tabs[0].items.map((i) => i.id)).toEqual(['tea']);
+		expect(tabs[1].items.map((i) => i.id)).toEqual(['water']);
+	});
+
+	it('returns exactly one tab when no category exists', () => {
+		const m = menu({
+			categories: [],
+			items: [
+				item({ id: 'a', categoryId: null, sortOrder: 1 }),
+				item({ id: 'b', categoryId: null })
+			]
+		});
+		const tabs = itemsByCategory(m);
+		expect(tabs).toHaveLength(1);
+		expect(tabs[0]).toMatchObject({ id: 'other', name: 'Other' });
+		expect(tabs[0].items.map((i) => i.id)).toEqual(['b', 'a']);
+	});
 });
 
 describe('modifierGroupsFor', () => {
@@ -101,6 +128,8 @@ describe('MANDATORY (spec 29) — the till screens hold no number conversion of 
 		'src/routes/(pos)/pos/session/+page.svelte',
 		'src/routes/(pos)/pos/order/+page.svelte',
 		'src/routes/(pos)/pos/pay/+page.svelte',
+		'src/routes/(pos)/pos/sales/+page.svelte',
+		'src/routes/(pos)/pos/printer/+page.svelte',
 		'src/lib/pos/menu-view.ts'
 	];
 	const FORBIDDEN = [

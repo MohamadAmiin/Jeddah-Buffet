@@ -1,0 +1,10 @@
+{
+	"origin": "https://pos.example.com",
+	"token": "0000000000000000000000000000000000000000000000000000000000000000",
+	"port": 9471,
+	"printers": {
+		"receipt": { "host": "192.168.10.50", "port": 9100, "width": 48 },
+		"kitchen": { "host": "192.168.10.51", "port": 9100, "width": 32 }
+	},
+	"dataDir": "/opt/matcami/print-agent/data"
+}
