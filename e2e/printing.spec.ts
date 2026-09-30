@@ -169,6 +169,8 @@ async function signInOnTill(tillPage: Page, name: string, pin: string): Promise<
 }
 
 async function openSales(tillPage: Page): Promise<void> {
+	// Below 1536px the Sales link lives in the employee menu (docs/redesign Phase 1).
+	await tillPage.getByTestId('till-employee').click();
 	await tillPage.getByRole('link', { name: 'Sales', exact: true }).click();
 	await expect(tillPage).toHaveURL(/\/pos\/sales$/);
 	await expect(tillPage.getByRole('heading', { name: 'Sales on this till' })).toBeVisible();

@@ -115,7 +115,7 @@ test('the owner registers the till from the till, and a cashier signs in with a 
 	// The right one.
 	await enterPin(tillPage, '4321');
 	await expect(tillPage).toHaveURL(/\/pos\/session$/);
-	await expect(tillPage.getByRole('status')).toContainText('The Cashier · Cashier');
+	await expect(tillPage.getByTestId('till-employee')).toContainText('The Cashier · Cashier');
 
 	// ── 7. the checklist moved by EXACTLY one step: six minus one ──────────────
 	// Only "Register the POS device" was completed here. Settings still lack the

@@ -109,14 +109,17 @@ test('a delivery, a recipe, a till sale: stock, COGS, reports and margin agree',
 	// this tab first would spend a second attempt from the throttle every spec in
 	// the run shares (10 per address per 10 minutes, process-local).
 	await registerDevice(tillPage, OWNER);
-	const status = tillPage.getByRole('status');
+	const status = tillPage.getByRole('status', { name: 'Connection and sync' });
 	await pickEmployee(tillPage, 'The Cashier');
 	await enterPin(tillPage, '4321');
 	await openSession(tillPage, 50000n);
 	await expect(status).toContainText('0 unsynced');
-	// The till's status bar (redesigned in PR #13) reads "Business date YYYY-MM-DD".
-	await expect(status).toContainText(/Business date \d{4}-\d{2}-\d{2}/);
-	const businessDate = /Business date (\d{4}-\d{2}-\d{2})/.exec(await status.innerText())![1];
+	// The till bar's session key names the business date (docs/redesign Phase 1).
+	const sessionKey = tillPage.getByRole('link', { name: /^Session · business date \d{4}-/ });
+	await expect(sessionKey).toBeVisible();
+	const businessDate = /business date (\d{4}-\d{2}-\d{2})/.exec(
+		(await sessionKey.getAttribute('aria-label'))!
+	)![1];
 	await addItem(tillPage, 'Burger');
 	await addItem(tillPage, 'Burger');
 	await chooseOrderType(tillPage, 'Takeaway');

@@ -101,7 +101,7 @@ test('menu photos, optional categories and a Delivery sale, online and offline',
 	await signIn(tillPage, OWNER);
 	await registerDevice(tillPage, OWNER);
 	await tillPage.evaluate(() => navigator.serviceWorker.ready.then(() => undefined));
-	const status = tillPage.getByRole('status');
+	const status = tillPage.getByRole('status', { name: 'Connection and sync' });
 	await pickEmployee(tillPage, 'The Cashier');
 	await enterPin(tillPage, '4321');
 	await expect(tillPage).toHaveURL(/\/pos\/session$/);
