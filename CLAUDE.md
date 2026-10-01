@@ -121,7 +121,7 @@ Three pins look wrong and are not: **Node 24.21.0** (`vitest@5` excludes Node 25
 ## Domain glossary
 
 - **Account codes** — use spec 23's numbers verbatim (1000 Cash on Hand … 6900 Other Expenses). Never invent one; propose it instead.
-- **POS session** — a cashier shift: opening cash → sales → count → reconciliation → end-of-day report. Distinct from the auth session.
+- **POS session** — a cashier shift: opening cash → sales → count → reconciliation → end-of-day report. Distinct from the auth session. The till and the dashboard call it a **shift** in every label and message (user decision 2026-10-01); `session` stays the name in code, the database, the sync op kinds, the audit events and the `/pos/session` URL.
 - **Item status** — `NEW` (change or delete freely) → `SENT` (kitchen ticket printed; removal is a void, not a delete) → `VOIDED` (waste if already prepared).
 - **Void / refund / comp** — void before payment; refund after payment, back to the original method, food does not come back; comp = no revenue, cost to 5200 Comps & Staff Meals.
 - **Base unit vs purchase unit** — recipes use base units (g, pcs, can); purchases are entered in purchase units (kg, bag, case) and converted by the unit's `base_qty_per_unit` (1 kg of a gram ingredient is 1000.000). An ingredient has one base unit, fixed once stock has moved.

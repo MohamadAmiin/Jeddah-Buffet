@@ -4,7 +4,6 @@ import { DEVICE_COOKIE } from '../src/lib/server/auth/pos-device';
 import {
 	TILL_URL,
 	createCashier,
-	enterPin,
 	pickEmployee,
 	registerDevice,
 	registerRestaurant,
@@ -108,18 +107,40 @@ test('the owner registers the till from the till, and a cashier signs in with a 
 	await expect(page.getByText('POS1')).toBeVisible();
 
 	// ── 6. the cashier, then a PIN sign-in at the till ─────────────────────────
-	await createCashier(page, { displayName: 'The Cashier', pin: '4321' });
+	await createCashier(page, { displayName: 'The Cashier', pin: '654321' });
 	await tillPage.goto(TILL_URL);
 	await pickEmployee(tillPage, 'The Cashier');
 	const pinScreen = tillPage.url();
 
-	// A wrong PIN first: an error, and the till does not move.
-	await enterPin(tillPage, '9999');
+	// A wrong PIN first, TYPED on the hardware keyboard after one tap: digits,
+	// Backspace and Enter do what the keys on the screen do — and Enter signs in
+	// even though the tapped key still has focus (it must not tap that key again).
+	await tillPage.getByRole('button', { name: '9', exact: true }).click();
+	await tillPage.keyboard.type('9998');
+	await expect(tillPage.getByText('5 digits entered')).toBeAttached();
+	await tillPage.keyboard.press('Backspace');
+	await expect(tillPage.getByText('4 digits entered')).toBeAttached();
+	await tillPage.keyboard.press('Enter');
+	// An error, and the till does not move.
+	await expect(tillPage.getByRole('alert')).toContainText('That PIN is not right');
+	await expect(tillPage.getByText('0 digits entered')).toBeAttached();
+	// Escape clears what was typed.
+	await tillPage.keyboard.type('12');
+	await expect(tillPage.getByText('2 digits entered')).toBeAttached();
+	await tillPage.keyboard.press('Escape');
+	await expect(tillPage.getByText('0 digits entered')).toBeAttached();
+	expect(tillPage.url()).toBe(pinScreen);
+
+	// A wrong PIN of the full six digits is checked at the sixth digit, with no
+	// Sign in and no Enter.
+	await tillPage.keyboard.type('999999');
+	// The attempt has been answered once the digits are cleared again.
+	await expect(tillPage.getByText('0 digits entered')).toBeAttached();
 	await expect(tillPage.getByRole('alert')).toContainText('That PIN is not right');
 	expect(tillPage.url()).toBe(pinScreen);
 
-	// The right one.
-	await enterPin(tillPage, '4321');
+	// The right one: the sixth digit signs in by itself.
+	await tillPage.keyboard.type('654321');
 	await expect(tillPage).toHaveURL(/\/pos\/session$/);
 	await expect(tillPage.getByTestId('till-employee')).toContainText('The Cashier · Cashier');
 

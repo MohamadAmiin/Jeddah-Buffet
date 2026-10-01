@@ -9,6 +9,14 @@
 // goes with `credentials: 'omit'` (no cookie ever reaches the agent) and an
 // AbortController timeout, because a print must never hold up a sale.
 //
+// NOBODY TYPES THE PAIRING SECRET. requestPairing asks the agent for it (POST
+// /pair), which the agent answers once, and only while its pairing is open
+// (print-agent/src/pairing.ts). The other way in is the agent's `link`:
+// `<app>/pos/printer#agent=…&token=…`, read by parsePairingFragment — the
+// secret is in the FRAGMENT, which a browser sends to no server. A link opened
+// before the owner is signed in waits in MEMORY (stashPairing) — not in any
+// storage — until the Printer screen takes it; a reload simply drops it.
+//
 // `bindDevice` and `forgetDevice` clear the whole settings store, so a
 // re-registered till must be paired again — deliberate: a token for a till that
 // was handed to another restaurant must not survive (T-28 Watch out).
@@ -92,9 +100,7 @@ export async function saveAgentSettings(settings: AgentSettings): Promise<void> 
 		);
 	}
 	if (!isAgentToken(token)) {
-		throw new Error(
-			'The pairing token is 64 characters of 0-9 and a-f, exactly as init printed it'
-		);
+		throw new Error('The pairing link is damaged — open the link the agent printed again');
 	}
 	await cacheSettings([
 		{ key: PRINT_AGENT_URL_KEY, value: url },
@@ -109,7 +115,88 @@ export async function clearAgentSettings(): Promise<void> {
 	]);
 }
 
+// ── The pairing link ────────────────────────────────────────────────────────
+
+/**
+ * The fragment of the link the agent prints (print-agent/src/main.ts
+ * pairingLink): `#agent=<loopback address>&token=<64 hex>`. Anything else —
+ * no fragment, another address, a short token — is null, never a guess.
+ */
+export function parsePairingFragment(hash: string): AgentSettings | null {
+	const fragment = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+	const url = fragment.get('agent');
+	const token = fragment.get('token');
+	if (!isAgentUrl(url) || !isAgentToken(token)) return null;
+	return { url, token };
+}
+
+let pendingPairing: AgentSettings | null = null;
+
+/** Hold a pairing read from a link until the owner's Printer screen takes it. */
+export function stashPairing(settings: AgentSettings): void {
+	pendingPairing = settings;
+}
+
+export function hasPendingPairing(): boolean {
+	return pendingPairing !== null;
+}
+
+/** Hand the waiting pairing over, once. */
+export function takePairing(): AgentSettings | null {
+	const settings = pendingPairing;
+	pendingPairing = null;
+	return settings;
+}
+
 // ── Requests ────────────────────────────────────────────────────────────────
+
+export type PairingRefusal =
+	/** Open pairing's one claim is gone — this till's, or something else's. */
+	| 'claimed'
+	/** Nobody has opened pairing on the agent. */
+	| 'closed'
+	| 'blocked'
+	| 'unreachable'
+	| 'refused';
+export type PairingResult =
+	{ ok: true; settings: AgentSettings } | { ok: false; reason: PairingRefusal };
+
+/**
+ * Ask the agent on this PC for the pairing secret. Stores NOTHING — the caller
+ * saves the settings it is handed. No Authorization header (the till has none
+ * yet) and no body, so the agent's Host and Origin walls are what stand in
+ * front of it, and whether its pairing is open decides the answer.
+ */
+export async function requestPairing(
+	url: string = DEFAULT_AGENT_URL,
+	fetchFn: typeof fetch = fetch,
+	probe: () => Promise<LocalNetworkPermission> = localNetworkPermission
+): Promise<PairingResult> {
+	if (!isAgentUrl(url)) return { ok: false, reason: 'refused' };
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS);
+	let response: Response;
+	try {
+		response = await fetchFn(url + '/pair', {
+			method: 'POST',
+			credentials: 'omit',
+			mode: 'cors',
+			signal: controller.signal
+		});
+	} catch {
+		return { ok: false, reason: await failureState(probe) };
+	} finally {
+		clearTimeout(timer);
+	}
+	const body = await bodyOf(response);
+	if (response.status === 200 && isAgentToken(body.token)) {
+		return { ok: true, settings: { url, token: body.token } };
+	}
+	if (response.status === 403 && body.error === 'pairing_closed') {
+		return { ok: false, reason: body.reason === 'claimed' ? 'claimed' : 'closed' };
+	}
+	return { ok: false, reason: 'refused' };
+}
 
 async function agentFetch(
 	settings: AgentSettings,

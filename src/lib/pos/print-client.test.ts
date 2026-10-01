@@ -7,12 +7,17 @@ import {
 	agentStatus,
 	clearAgentSettings,
 	DEFAULT_AGENT_URL,
+	hasPendingPairing,
 	localNetworkPermission,
+	parsePairingFragment,
 	printerChip,
 	pulseDrawer,
 	readAgentSettings,
+	requestPairing,
 	saveAgentSettings,
+	stashPairing,
 	submitJob,
+	takePairing,
 	type AgentStatus
 } from './print-client';
 import { readCachedSetting } from './store';
@@ -96,6 +101,110 @@ describe('saveAgentSettings', () => {
 
 	it('the token never reaches localStorage', () => {
 		expect(typeof globalThis.localStorage).toBe('undefined');
+	});
+});
+
+describe('the pairing link', () => {
+	// The exact shape print-agent/src/main.test.ts asserts pairingLink produces.
+	const FRAGMENT = `#agent=http%3A%2F%2F127.0.0.1%3A9471&token=${TOKEN}`;
+
+	it("reads the agent's link, with or without the leading #", () => {
+		expect(parsePairingFragment(FRAGMENT)).toEqual({ url: URL, token: TOKEN });
+		expect(parsePairingFragment(FRAGMENT.slice(1))).toEqual({ url: URL, token: TOKEN });
+		expect(parsePairingFragment(`#token=${TOKEN}&agent=http://localhost:9500`)).toEqual({
+			url: 'http://localhost:9500',
+			token: TOKEN
+		});
+	});
+
+	it.each([
+		['no fragment', ''],
+		['a bare #', '#'],
+		['no token', '#agent=http%3A%2F%2F127.0.0.1%3A9471'],
+		['no agent', `#token=${TOKEN}`],
+		['a short token', `#agent=http%3A%2F%2F127.0.0.1%3A9471&token=${TOKEN.slice(1)}`],
+		['an upper-case token', `#agent=http%3A%2F%2F127.0.0.1%3A9471&token=${'AB'.repeat(32)}`],
+		['an agent that is not loopback', `#agent=http%3A%2F%2F192.168.1.5%3A9471&token=${TOKEN}`],
+		['an https agent elsewhere', `#agent=https%3A%2F%2Fevil.example&token=${TOKEN}`],
+		['an agent with a path', `#agent=http%3A%2F%2F127.0.0.1%3A9471%2Fx&token=${TOKEN}`]
+	])('%s is null, never a guess', (_, hash) => {
+		expect(parsePairingFragment(hash)).toBeNull();
+	});
+
+	it('a stashed pairing waits in memory and is handed over once', async () => {
+		expect(hasPendingPairing()).toBe(false);
+		expect(takePairing()).toBeNull();
+		stashPairing({ url: URL, token: TOKEN });
+		expect(hasPendingPairing()).toBe(true);
+		// Waiting is not pairing: nothing is stored until the owner's screen takes it.
+		expect(await readAgentSettings()).toBeNull();
+		expect(takePairing()).toEqual({ url: URL, token: TOKEN });
+		expect(hasPendingPairing()).toBe(false);
+		expect(takePairing()).toBeNull();
+	});
+});
+
+describe('requestPairing', () => {
+	const granted = async () => 'granted' as const;
+
+	it('POSTs /pair with no Authorization header, no cookie and no body, and hands back the settings', async () => {
+		const { fetchFn, calls } = stubFetch([{ status: 200, body: { token: TOKEN } }]);
+		expect(await requestPairing(URL, fetchFn, granted)).toEqual({
+			ok: true,
+			settings: { url: URL, token: TOKEN }
+		});
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.url).toBe(`${URL}/pair`);
+		expect(calls[0]?.init.method).toBe('POST');
+		expect(calls[0]?.init.credentials).toBe('omit');
+		expect(calls[0]?.init.headers).toBeUndefined();
+		expect(calls[0]?.init.body).toBeUndefined();
+		// Asking is not pairing: the caller saves what it was handed.
+		expect(await readAgentSettings()).toBeNull();
+	});
+
+	it('defaults to the agent on this PC', async () => {
+		const { fetchFn, calls } = stubFetch([{ status: 200, body: { token: TOKEN } }]);
+		await requestPairing(undefined, fetchFn, granted);
+		expect(calls[0]?.url).toBe('http://127.0.0.1:9471/pair');
+	});
+
+	it.each([
+		['claimed', 'claimed'],
+		['not_open', 'closed']
+	] as const)('pairing that is %s is refused as %s', async (reason, expected) => {
+		const { fetchFn } = stubFetch([{ status: 403, body: { error: 'pairing_closed', reason } }]);
+		expect(await requestPairing(URL, fetchFn, granted)).toEqual({ ok: false, reason: expected });
+	});
+
+	it('an answer that is not a 64-hex token is refused, never stored', async () => {
+		for (const body of [{}, { token: 'short' }, { token: 'AB'.repeat(32) }, { token: 42 }]) {
+			const { fetchFn } = stubFetch([{ status: 200, body }]);
+			expect(await requestPairing(URL, fetchFn, granted)).toEqual({ ok: false, reason: 'refused' });
+		}
+		const { fetchFn } = stubFetch([{ status: 403, body: { error: 'bad_origin' } }]);
+		expect(await requestPairing(URL, fetchFn, granted)).toEqual({ ok: false, reason: 'refused' });
+	});
+
+	it('never asks anything but a loopback agent', async () => {
+		const { fetchFn, calls } = stubFetch([]);
+		for (const url of ['https://evil.example', 'http://192.168.1.5:9471', 'http://127.0.0.1:80']) {
+			expect(await requestPairing(url, fetchFn, granted)).toEqual({ ok: false, reason: 'refused' });
+		}
+		expect(calls).toHaveLength(0);
+	});
+
+	it('no answer is unreachable, and blocked only when Chrome itself said denied', async () => {
+		const down = stubFetch([{ throws: new TypeError('Failed to fetch') }]);
+		expect(await requestPairing(URL, down.fetchFn, granted)).toEqual({
+			ok: false,
+			reason: 'unreachable'
+		});
+		const denied = stubFetch([{ throws: new TypeError('Failed to fetch') }]);
+		expect(await requestPairing(URL, denied.fetchFn, async () => 'denied')).toEqual({
+			ok: false,
+			reason: 'blocked'
+		});
 	});
 });
 

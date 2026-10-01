@@ -252,9 +252,9 @@ async function typeMinor(tillPage: Page, amount: bigint): Promise<void> {
 
 export async function openSession(tillPage: Page, openingCashMinor: bigint): Promise<void> {
 	await expect(tillPage).toHaveURL(/\/pos\/session$/);
-	await expect(tillPage.getByRole('heading', { name: 'Open a session' })).toBeVisible();
+	await expect(tillPage.getByRole('heading', { name: 'Open a shift' })).toBeVisible();
 	await typeMinor(tillPage, openingCashMinor);
-	await tillPage.getByRole('button', { name: 'Open session' }).click();
+	await tillPage.getByRole('button', { name: 'Open shift' }).click();
 	await expect(tillPage).toHaveURL(/\/pos\/order$/);
 }
 
@@ -285,7 +285,8 @@ export async function chooseOrderType(
 	).toBeVisible();
 }
 
-export async function payCash(tillPage: Page, tenderedMinor: bigint): Promise<void> {
+/** Pay the open check in cash. With no amount, nothing is keyed: Pay takes the exact total. */
+export async function payCash(tillPage: Page, tenderedMinor?: bigint): Promise<void> {
 	await tillPage.getByRole('link', { name: /^Pay\b/ }).click();
 	await expect(tillPage).toHaveURL(/\/pos\/pay$/);
 	await expect(tillPage.getByRole('heading', { name: 'Amount due' })).toBeVisible();
@@ -293,21 +294,25 @@ export async function payCash(tillPage: Page, tenderedMinor: bigint): Promise<vo
 		.getByRole('radiogroup', { name: 'Tender' })
 		.getByRole('radio', { name: 'Cash', exact: true })
 		.click();
-	await typeMinor(tillPage, tenderedMinor);
+	if (tenderedMinor === undefined) {
+		await expect(tillPage.getByTestId('exact-hint')).toBeVisible();
+	} else {
+		await typeMinor(tillPage, tenderedMinor);
+	}
 	await expect(tillPage.getByText('Change due')).toBeVisible();
 	await tillPage.getByRole('button', { name: /^Pay · Cash/ }).click();
 	await expect(tillPage.getByText('● Paid', { exact: true })).toBeVisible();
 }
 
 export async function closeSession(tillPage: Page, countedCashMinor: bigint): Promise<void> {
-	await tillPage.getByRole('link', { name: /Session · business date/ }).click();
+	await tillPage.getByRole('link', { name: /Shift · business date/ }).click();
 	await expect(tillPage).toHaveURL(/\/pos\/session$/);
-	await expect(tillPage.getByRole('heading', { name: 'Close this session' })).toBeVisible();
+	await expect(tillPage.getByRole('heading', { name: 'Close this shift' })).toBeVisible();
 	await expect(tillPage.getByText('◆ Offline — closing needs a connection')).toHaveCount(0);
 	await expect(tillPage.getByText(/operations still syncing/)).toHaveCount(0);
 	await expect(tillPage.getByText(/from a previous registration/)).toHaveCount(0);
 	await typeMinor(tillPage, countedCashMinor);
-	await tillPage.getByRole('button', { name: 'Close session' }).click();
+	await tillPage.getByRole('button', { name: 'Close shift' }).click();
 	await expect(tillPage.getByText('Expected', { exact: true })).toBeVisible();
 }
 

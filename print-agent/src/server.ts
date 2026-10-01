@@ -6,7 +6,12 @@
 // may talk to it; a request with no Origin is refused too), then the Bearer
 // token compared in constant time. CORS headers alone protect nothing: a page
 // can send a "simple" request with no preflight, so the checks are on every
-// request and the token is never echoed or logged.
+// request and the token is never logged.
+//
+// ONE route runs after the first two walls and before the third: POST /pair,
+// whose whole job is to hand the till its token. It answers only while the
+// pairing is open and only once per opening (pairing.ts) — the single
+// place the token is ever sent.
 //
 // The agent is the one program on the till PC that can open the cash drawer,
 // which is why the drawer is its own endpoint (T-26 never queues or replays it)
@@ -15,6 +20,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AgentConfig } from './config.ts';
+import type { PairingClaim } from './pairing.ts';
 
 export type PrintLine = {
 	text: string;
@@ -36,6 +42,8 @@ export type AgentDeps = {
 	submitJob: (job: Job) => SubmitOutcome | Promise<SubmitOutcome>;
 	pulseDrawer: (request: DrawerRequest) => Promise<DrawerOutcome>;
 	status: () => Promise<AgentStatus>;
+	/** Take open pairing's one claim (pairing.ts claimPairing). */
+	claimPairing: () => PairingClaim;
 };
 
 export const MAX_BODY_BYTES = 65_536;
@@ -217,13 +225,20 @@ export function createAgentServer(config: AgentConfig, deps: AgentDeps): Server 
 			send(res, 204, undefined, extra);
 			return;
 		}
-		// 4. The pairing token, in constant time.
+		const path = (req.url ?? '/').split('?')[0];
+		// 4. Pairing — before the token wall, because the caller does not have it yet.
+		if (req.method === 'POST' && path === '/pair') {
+			const claim = deps.claimPairing();
+			if (claim === 'ok') send(res, 200, { token: config.token });
+			else send(res, 403, { error: 'pairing_closed', reason: claim });
+			return;
+		}
+		// 5. The pairing token, in constant time.
 		if (!tokenMatches(req.headers.authorization, config.token)) {
 			send(res, 401, { error: 'unauthorized' });
 			return;
 		}
 
-		const path = (req.url ?? '/').split('?')[0];
 		if (req.method === 'GET' && path === '/status') {
 			send(res, 200, await deps.status());
 			return;

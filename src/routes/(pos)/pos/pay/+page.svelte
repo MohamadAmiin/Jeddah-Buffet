@@ -86,9 +86,14 @@
 	const figures = $derived(
 		cart ? { totals: cartTotals(cart, taxMode), amounts: lineAmounts(cart) } : null
 	);
+	// CASH WITH NOTHING KEYED IS THE EXACT AMOUNT (decided 2026-10-01): Pay works
+	// at once, the way a cashier handed the right money expects, and `tendered`
+	// stays null only as "the cashier has not said otherwise". Keying an amount or
+	// tapping a quick-cash key replaces it; an amount below the total blocks Pay.
+	const cashTendered = $derived(tendered ?? figures?.totals.total ?? null);
 	const change = $derived(
-		figures && tendered !== null && tendered >= figures.totals.total
-			? changeDue(tendered, figures.totals.total)
+		figures && cashTendered !== null && cashTendered >= figures.totals.total
+			? changeDue(cashTendered, figures.totals.total)
 			: null
 	);
 	const quick = $derived(
@@ -114,7 +119,7 @@
 			: tender === null
 				? 'Choose a tender'
 				: tender === 'cash' && change === null
-					? 'Enter the amount tendered'
+					? 'The amount tendered is less than the total'
 					: null
 	);
 
@@ -232,7 +237,7 @@
 				taxMode,
 				currencyCode: menu.currency as string,
 				menuVersion: menu.version,
-				payment: { method, tenderedMinor: method === 'cash' ? tendered : null },
+				payment: { method, tenderedMinor: method === 'cash' ? cashTendered : null },
 				now: new Date(),
 				// Kept on the local order for the receipt (T-18).
 				cashierName: signedIn.current.displayName,
@@ -243,7 +248,7 @@
 				...result,
 				method,
 				total: figures.totals.total,
-				tendered: method === 'cash' ? tendered : null
+				tendered: method === 'cash' ? cashTendered : null
 			};
 			void flush().catch(() => {});
 			if (method === 'cash') {
@@ -544,9 +549,14 @@
 										<div class="flex items-baseline justify-between gap-3">
 											<dt class="text-ink-2">Amount tendered</dt>
 											<dd class="text-title font-mono font-medium tabular-nums">
-												{formatMoney(tendered ?? minor(0n), money)}
+												{formatMoney(cashTendered ?? minor(0n), money)}
 											</dd>
 										</div>
+										{#if tendered === null}
+											<p class="text-body text-ink-2" data-testid="exact-hint">
+												Exact amount — key in what the guest gave to see the change
+											</p>
+										{/if}
 										<div class="border-line flex flex-col gap-1 border-t pt-3">
 											<dt class="text-ink-2">Change due</dt>
 											<dd class="text-total text-right font-mono tabular-nums">

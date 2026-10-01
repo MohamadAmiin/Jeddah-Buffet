@@ -161,11 +161,11 @@
 			event.clientOpId === closingOpId &&
 			event.http === 403
 		) {
-			refusal = 'Not permitted: this employee cannot close a session';
+			refusal = 'Not permitted: this employee cannot close a shift';
 			waitingForNetwork = false;
 		} else if (event.type === 'stopped' && event.clientOpId === closingOpId) {
 			if (event.reason === 'session_has_unrecorded_ops') {
-				refusal = `${event.count ?? 0} operations from this session need the owner's review on the dashboard before it can close`;
+				refusal = `${event.count ?? 0} operations from this shift need the owner's review on the dashboard before it can close`;
 				waitingForNetwork = false;
 			} else if (event.reason === 'network') {
 				waitingForNetwork = true;
@@ -231,7 +231,7 @@
 			void flush().catch(() => {});
 			void goto(resolve('/pos/order'));
 		} catch {
-			failure = 'This device could not record the session — try again';
+			failure = 'This device could not record the shift — try again';
 		} finally {
 			busy = false;
 		}
@@ -274,7 +274,7 @@
 		const digits = `500${'0'.repeat(format.exponent)}`;
 		return `${digits} is ${formatMoney(minor(BigInt(digits)), format)}`;
 	});
-	// One line above Close session, built from the blockers, so the reason for the
+	// One line above Close shift, built from the blockers, so the reason for the
 	// disabled closer sits right beside it (the full lines are in the left column).
 	const blockedLine = $derived.by(() => {
 		const parts: string[] = [];
@@ -293,7 +293,7 @@
 	);
 </script>
 
-<svelte:head><title>Session · matcami</title></svelte:head>
+<svelte:head><title>Shift · matcami</title></svelte:head>
 
 {#snippet readout(label: string, hint: string, headingId: string)}
 	<div class="flex items-baseline justify-between gap-3">
@@ -314,7 +314,7 @@
      left, the keypad card on the right, its closer the card's last element. -->
 <main class="relative flex min-h-0 flex-1 overflow-y-auto p-3 md:p-4 lg:p-6">
 	{#if !ready}
-		<p class="text-ink-2 m-auto">Loading the session…</p>
+		<p class="text-ink-2 m-auto">Loading the shift…</p>
 	{:else if result && format}
 		{@const negative = result.difference < 0n}
 		{@const zero = result.difference === 0n}
@@ -322,7 +322,7 @@
 			aria-labelledby="closed-h"
 			class="rounded-card border-line bg-raise shadow-raised m-auto flex w-full max-w-xl flex-col gap-4 border p-6"
 		>
-			<h1 id="closed-h" class="text-display">Session closed</h1>
+			<h1 id="closed-h" class="text-display">Shift closed</h1>
 			{#if result.businessDate}
 				<p class="text-ink-2">
 					Business date <span class="text-ink font-mono tabular-nums">{result.businessDate}</span>
@@ -372,7 +372,7 @@
 			<div class="flex flex-col gap-5">
 				<div class="flex flex-col gap-2">
 					<p class="text-eyebrow text-ink-3 uppercase">Start of shift</p>
-					<h1 class="text-display">Open a session</h1>
+					<h1 class="text-display">Open a shift</h1>
 				</div>
 				<dl
 					class="rounded-card border-line bg-raise divide-line-soft flex flex-col divide-y border px-4"
@@ -417,7 +417,7 @@
 					<TillBanner tone="danger" live="alert">{failure}</TillBanner>
 				{/if}
 				{#if busy}
-					<p id="why-open" class="text-body text-ink-2">Saving the session on this till…</p>
+					<p id="why-open" class="text-body text-ink-2">Saving the shift on this till…</p>
 				{/if}
 				<button
 					type="button"
@@ -426,7 +426,7 @@
 					class="min-h-touch-xl rounded-control border-control-line text-title w-full border font-semibold {busy
 						? 'bg-disabled-bg text-disabled-ink'
 						: 'bg-accent text-accent-ink'}"
-					onclick={open}>Open session</button
+					onclick={open}>Open shift</button
 				>
 			</section>
 		</div>
@@ -435,7 +435,7 @@
 			<div class="flex flex-col gap-5">
 				<div class="flex flex-col gap-2">
 					<p class="text-eyebrow text-ink-3 uppercase">End of shift</p>
-					<h1 class="text-display">Close this session</h1>
+					<h1 class="text-display">Close this shift</h1>
 					<p class="text-ink-2">
 						Open on this till since {openedSince}
 						{#if session.businessDate}
@@ -456,7 +456,7 @@
 					{/if}
 				{:else}
 					{#if blockers.length > 0}
-						<ul aria-label="Why the session cannot close yet" class="flex flex-col gap-2">
+						<ul aria-label="Why the shift cannot close yet" class="flex flex-col gap-2">
 							{#each blockers as b (b.id)}
 								<li
 									id={b.id}
@@ -502,7 +502,7 @@
 							0 || busy
 							? 'bg-disabled-bg text-disabled-ink'
 							: 'bg-accent text-accent-ink'}"
-						onclick={close}>Close session</button
+						onclick={close}>Close shift</button
 					>
 				</section>
 			{/if}

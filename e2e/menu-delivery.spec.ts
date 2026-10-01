@@ -123,12 +123,19 @@ test('menu photos, optional categories and a Delivery sale, online and offline',
 		.poll(() => burgerKey.locator('img').evaluate((img) => (img as HTMLImageElement).naturalWidth))
 		.toBeGreaterThan(0);
 
-	// 5. Delivery, one Burger, cash 10.00 — a recorded fact, synced once.
+	// 5. Delivery, one Burger, cash with NOTHING keyed — Pay takes the exact
+	//    total — a recorded fact, synced once.
 	await chooseOrderType(tillPage, 'Delivery');
 	await addItem(tillPage, 'Burger');
-	await payCash(tillPage, 1000n);
+	await payCash(tillPage);
 	await expect(tillPage.getByText('● Paid', { exact: true })).toBeVisible();
 	await expect(status).toContainText('0 unsynced');
+	//    The payment row says what happened: tendered is the total, change is zero.
+	expect(
+		await dbRows(
+			'select method, amount_minor::text, tendered_minor::text, change_minor::text from payments'
+		)
+	).toEqual([{ method: 'cash', amount_minor: '880', tendered_minor: '880', change_minor: '0' }]);
 	expect(await dbRows('select order_type, table_label, status from orders')).toEqual([
 		{ order_type: 'delivery', table_label: null, status: 'paid' }
 	]);

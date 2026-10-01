@@ -84,7 +84,10 @@ invariant 5).
 - `receipt.ts` — the receipt, kitchen-ticket and test-page formatter. Pure: the sale's STORED
   snapshot in, lines of printable ASCII out, 32 or 48 columns; it computes nothing.
 - `print-client.ts` — the loopback agent client: the pairing settings (a loopback address and a
-  64-hex token, in IndexedDB, never `localStorage`), `agentStatus`, `submitJob`, `pulseDrawer`,
+  64-hex token, in IndexedDB, never `localStorage`), obtained from the agent itself
+  (`requestPairing`, answered once while the agent's pairing is open) or read from the
+  agent's pairing link (`parsePairingFragment`; a link opened before the owner signs in waits in
+  memory only) — nothing is typed — `agentStatus`, `submitJob`, `pulseDrawer`,
   the Chrome local-network permission probe and the printer chip.
 - `printing.ts` — what prints when: `printOriginals` (with THE drawer clause), `reprint`
   (marked COPY, never the drawer), `startAutoPrint` and its catch-up, and `listRecentSales` /

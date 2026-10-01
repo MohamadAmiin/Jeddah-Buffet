@@ -76,7 +76,7 @@
 	{#if data.isEmpty}
 		<Card>
 			<p class="text-body text-ink-2">
-				<span aria-hidden="true" class="font-mono">○</span> No sales or sessions on this business date.
+				<span aria-hidden="true" class="font-mono">○</span> No sales or shifts on this business date.
 			</p>
 		</Card>
 	{:else}
@@ -245,12 +245,12 @@
 		</div>
 
 		<!-- Sessions last. A Card (a <div>) with the heading as a direct child: e2e
-		     finds this card as the innermost <div> holding the "Sessions" heading and
+		     finds this card as the innermost <div> holding the "Shifts" heading and
 		     counts its list items. -->
 		<Card>
-			<h3 class="text-section">Sessions</h3>
+			<h3 class="text-section">Shifts</h3>
 			{#if data.sessions.length === 0}
-				<p class="text-body text-ink-2 mt-3">No sessions opened on this business date.</p>
+				<p class="text-body text-ink-2 mt-3">No shifts opened on this business date.</p>
 			{:else}
 				<ul class="divide-line-soft mt-3 divide-y">
 					{#each data.sessions as s (s.id)}

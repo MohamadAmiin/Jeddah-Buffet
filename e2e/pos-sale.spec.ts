@@ -96,7 +96,7 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	await enterPin(tillPage, '4321');
 	await expect(tillPage).toHaveURL(/\/pos\/session$/);
 	await expect(tillPage.getByTestId('till-employee')).toContainText('The Cashier · Cashier');
-	await expect(tillPage.getByRole('banner')).toContainText('○ No session');
+	await expect(tillPage.getByRole('banner')).toContainText('○ No shift');
 	await expect(
 		tillPage.locator('dd').filter({ hasText: /^\s*\d{4}-\d{2}-\d{2}\s*$/ })
 	).toBeVisible();
@@ -105,7 +105,7 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	await openSession(tillPage, 50000n);
 	await expect(status).toContainText('0 unsynced');
 	// The till bar's session key names the business date (docs/redesign Phase 1).
-	const sessionKey = tillPage.getByRole('link', { name: /^Session · business date \d{4}-/ });
+	const sessionKey = tillPage.getByRole('link', { name: /^Shift · business date \d{4}-/ });
 	await expect(sessionKey).toBeVisible();
 	const businessDate = /business date (\d{4}-\d{2}-\d{2})/.exec(
 		(await sessionKey.getAttribute('aria-label'))!
@@ -257,7 +257,7 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	await expect(status).toContainText('1 unsynced');
 	await expect(tillPage.getByTestId('till-employee')).toContainText('The Cashier · Cashier');
 	await expect(
-		tillPage.getByRole('link', { name: `Session · business date ${businessDate} · Close session` })
+		tillPage.getByRole('link', { name: `Shift · business date ${businessDate} · Close shift` })
 	).toBeVisible();
 	await expect(tillPage).toHaveURL(/\/pos\/order$/);
 
@@ -437,7 +437,7 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	await expect(row('By category', 'Counter')).toContainText(/4\s*20\.00/);
 	const sessionsCard = page
 		.locator('div')
-		.filter({ has: page.getByRole('heading', { name: 'Sessions', exact: true }) })
+		.filter({ has: page.getByRole('heading', { name: 'Shifts', exact: true }) })
 		.last();
 	const items = sessionsCard.getByRole('listitem');
 	await expect(items).toHaveCount(2);

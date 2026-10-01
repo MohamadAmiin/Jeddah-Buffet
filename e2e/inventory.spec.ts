@@ -118,7 +118,7 @@ test('a delivery, a recipe, a till sale: stock, COGS, reports and margin agree',
 	await openSession(tillPage, 50000n);
 	await expect(status).toContainText('0 unsynced');
 	// The till bar's session key names the business date (docs/redesign Phase 1).
-	const sessionKey = tillPage.getByRole('link', { name: /^Session · business date \d{4}-/ });
+	const sessionKey = tillPage.getByRole('link', { name: /^Shift · business date \d{4}-/ });
 	await expect(sessionKey).toBeVisible();
 	const businessDate = /business date (\d{4}-\d{2}-\d{2})/.exec(
 		(await sessionKey.getAttribute('aria-label'))!

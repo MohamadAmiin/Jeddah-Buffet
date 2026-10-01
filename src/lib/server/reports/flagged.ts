@@ -169,12 +169,12 @@ export function summarizeOp(kind: OpKind, payload: unknown, format: MoneyFormat 
 			case 'session.open': {
 				const float = money(payload.openingCashMinor, format);
 				if (float === null) return { ...UNREADABLE, lines: [...UNREADABLE.lines] };
-				return { lines: [`Session open · float ${float}`], total: null, tender: null };
+				return { lines: [`Shift open · float ${float}`], total: null, tender: null };
 			}
 			case 'session.close': {
 				const counted = money(payload.countedCashMinor, format);
 				if (counted === null) return { ...UNREADABLE, lines: [...UNREADABLE.lines] };
-				return { lines: [`Session close · counted ${counted}`], total: null, tender: null };
+				return { lines: [`Shift close · counted ${counted}`], total: null, tender: null };
 			}
 			case 'sale.abandoned': {
 				if (typeof payload.reason !== 'string') {
