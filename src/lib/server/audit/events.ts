@@ -206,7 +206,14 @@ export type AuditEvent =
 	| {
 			event: 'opening_stock.recorded';
 			details: { entryId: string; ingredientId: string; qty: string; valueMinor: string };
-	  };
+	  }
+	// tasks/settings-tax-payments-receipt (T-10)
+	| { event: 'tax_rate.created'; details: { name: string; rateBp: number } }
+	| {
+			event: 'tax_rate.updated';
+			details: { changes: Record<string, { old: unknown; new: unknown }> };
+	  }
+	| { event: 'tax_rate.archived'; details: { name: string; rateBp: number } };
 
 export type AuditEventName = AuditEvent['event'];
 
@@ -257,7 +264,10 @@ export const AUDIT_EVENT_NAMES = [
 	'supplier.payment_reversed',
 	'waste.recorded',
 	'stock.counted',
-	'opening_stock.recorded'
+	'opening_stock.recorded',
+	'tax_rate.created',
+	'tax_rate.updated',
+	'tax_rate.archived'
 ] as const satisfies readonly AuditEventName[];
 
 type AssertTrue<T extends true> = T;

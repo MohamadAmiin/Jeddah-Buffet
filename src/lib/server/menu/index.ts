@@ -13,6 +13,9 @@ import {
 import { writeAudit } from '../audit';
 import { IMAGE_MAX_BYTES, type ImageContentType } from '../../menu-images';
 import { sniffImageType } from './images';
+import { withMenuVersionBump } from './version';
+
+export * from './tax-rates';
 
 // THE MENU MODULE (spec 3, 5, 15, 17).
 //
@@ -21,12 +24,17 @@ import { sniffImageType } from './images';
 // write; writers take DbTx and never open a transaction; readers take Executor.
 //
 // THE VERSION BUMP IS STRUCTURAL, NOT A CONVENTION. Every menu write runs inside
-// withMenuVersionBump, the one private helper that increments
-// restaurant_settings.menu_version, in SQL, in the caller's transaction. The raw
-// inserts and updates live only inside callbacks passed to it, so there is no
-// exported path that changes what a till would download without bumping the
-// version it compares (spec 5). A NO-OP returns before the bump: saving an
-// untouched form must not make every till in the building re-download the menu.
+// withMenuVersionBump, the one helper that increments
+// restaurant_settings.menu_version, in SQL, in the caller's transaction. It lives
+// in version.ts; this file and tax-rates.ts are its only callers, and it is not
+// re-exported from here. The raw inserts and updates live only inside callbacks
+// passed to it, so there is no exported path that changes what a till would
+// download without bumping the version it compares (spec 5). Tax-rate writes
+// (tax-rates.ts) bump exactly like item writes: a rate reaches the till inside the
+// snapshot, and a till holding an old rate would send every later sale as a HARD
+// price_tamper (tasks/settings-tax-payments-receipt, risk 4). A NO-OP returns
+// before the bump: saving an untouched form must not make every till in the
+// building re-download the menu.
 //
 // A PRICE CHANGE IS AUDITED (spec 3 names price changes) as menu.price_changed,
 // in the same transaction as the change (invariant 10). The amounts travel as
@@ -62,22 +70,6 @@ export type Changed = { ok: true; changed: boolean };
 const NOT_FOUND: NotFound = { ok: false, reason: 'not_found' };
 const UNCHANGED: Changed = { ok: true, changed: false };
 const CHANGED: Changed = { ok: true, changed: true };
-
-async function withMenuVersionBump<T>(
-	tx: DbTx,
-	restaurantId: string,
-	write: (tx: DbTx) => Promise<T>
-): Promise<T> {
-	const result = await write(tx);
-	// IN SQL, never read-modify-write in TypeScript: two concurrent writes must not
-	// both read 7 and both write 8. updated_at is NOT touched — it means "the owner
-	// changed a setting" and pairs with the settings.updated audit event.
-	await tx
-		.update(restaurantSettings)
-		.set({ menuVersion: sql`${restaurantSettings.menuVersion} + 1` })
-		.where(eq(restaurantSettings.restaurantId, restaurantId));
-	return result;
-}
 
 function assertMinor(value: unknown, field: string): asserts value is bigint {
 	if (typeof value !== 'bigint') {
