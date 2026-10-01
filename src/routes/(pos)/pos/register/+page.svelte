@@ -19,6 +19,9 @@
 	// cleared from memory when the request ends.
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import Icon from '$lib/components/ui/Icon.svelte';
+	import TillBanner from '$lib/components/pos/TillBanner.svelte';
+	import { TILL_FIELD } from '$lib/components/pos/keys';
 
 	let email = $state('');
 	let password = $state('');
@@ -71,79 +74,94 @@
 
 	// POS touch floors and tokens only. `Button` from $lib/components/ui is a
 	// dashboard control on Tailwind's default spacing and must never take the POS
-	// touch tokens, so the key is written here. A disabled control changes its FILL
-	// and INK tokens and keeps its border — never `opacity`, which composites fill
-	// and ink together and defeats every contrast pair tokens.css audits.
-	const field =
-		'min-h-touch bg-raise border border-control-line rounded-control text-pos text-ink px-3';
+	// touch tokens, so the field and key are the till's own (keys.ts). A disabled
+	// control changes its FILL and INK tokens and keeps its border — never `opacity`.
 </script>
 
 <svelte:head>
 	<title>Register this till · matcami</title>
 </svelte:head>
 
-<main class="mx-auto flex max-w-md flex-col gap-4 px-4 py-8">
-	<h1 class="text-title text-ink">Register this device as the till</h1>
-	<p class="text-ink-2">
-		Sign in once with the restaurant owner’s email and password. After that, staff sign in here with
-		their PIN.
-	</p>
-
-	<form class="flex flex-col gap-2" onsubmit={submit}>
-		<label for="register-email" class="text-ink">Owner email</label>
-		<input
-			id="register-email"
-			type="email"
-			autocomplete="username"
-			inputmode="email"
-			required
-			bind:value={email}
-			class={field}
-		/>
-
-		<label for="register-password" class="text-ink">Owner password</label>
-		<input
-			id="register-password"
-			type="password"
-			autocomplete="current-password"
-			required
-			bind:value={password}
-			class={field}
-		/>
-
-		<label for="register-label" class="text-ink">Name for this device</label>
-		<input
-			id="register-label"
-			type="text"
-			required
-			maxlength="60"
-			placeholder="Counter tablet"
-			bind:value={label}
-			class={field}
-		/>
-
-		<!-- Said BEFORE the owner submits, in the form itself: an owner who discovers it
-		     afterwards assumes the app broke. -->
-		<p class="text-ink-2">
-			Registering this device signs you out of the dashboard here. Use another computer for the
-			dashboard — this tablet becomes the till.
-		</p>
-
-		{#if message}
-			<p role="alert" class="bg-danger-bg text-danger rounded-control px-3 py-2">
-				<span aria-hidden="true" class="font-mono">✕</span>
-				{message}
+<!-- A two-column screen, vertically centred, that always fits (docs/redesign
+     Phase 4): the context on the left, the form card on the right with any error
+     at its top and Register this device as its last element. -->
+<main class="relative flex min-h-0 flex-1 overflow-y-auto p-3 md:p-4 lg:p-6">
+	<div class="m-auto grid w-full max-w-5xl items-center gap-6 md:grid-cols-2 lg:gap-12">
+		<div class="flex flex-col gap-4">
+			<p class="text-eyebrow text-ink-3 uppercase">One time, on this tablet</p>
+			<h1 class="text-display">Register this device as the till</h1>
+			<p class="text-ink-2">
+				Sign in once with the restaurant owner’s email and password. After that, staff sign in here
+				with their PIN.
 			</p>
-		{/if}
+			<!-- Said BEFORE the owner submits: an owner who discovers it afterwards
+			     assumes the app broke. -->
+			<p
+				class="rounded-control border-line bg-raise text-ink-2 flex items-start gap-3 border px-4 py-3"
+			>
+				<Icon name="info" class="size-5" />
+				<span
+					>Registering this device signs you out of the dashboard here. Use another computer for the
+					dashboard — this tablet becomes the till.</span
+				>
+			</p>
+		</div>
 
-		<button
-			type="submit"
-			disabled={pending}
-			class={`min-h-touch-lg border-control-line rounded-control text-pos border font-semibold ${
-				pending ? 'bg-disabled-bg text-disabled-ink' : 'bg-accent text-accent-ink'
-			}`}
+		<form
+			class="rounded-card border-line bg-raise shadow-raised flex flex-col gap-3 border p-4"
+			onsubmit={submit}
 		>
-			{pending ? 'Registering…' : 'Register this device'}
-		</button>
-	</form>
+			{#if message}
+				<TillBanner tone="danger" live="alert">{message}</TillBanner>
+			{/if}
+			<div class="flex flex-col gap-1">
+				<label for="register-email" class="font-semibold">Owner email</label>
+				<input
+					id="register-email"
+					type="email"
+					autocomplete="username"
+					inputmode="email"
+					required
+					bind:value={email}
+					class={TILL_FIELD}
+				/>
+			</div>
+			<div class="flex flex-col gap-1">
+				<label for="register-password" class="font-semibold">Owner password</label>
+				<input
+					id="register-password"
+					type="password"
+					autocomplete="current-password"
+					required
+					bind:value={password}
+					class={TILL_FIELD}
+				/>
+			</div>
+			<div class="flex flex-col gap-1">
+				<label for="register-label" class="font-semibold">Name for this device</label>
+				<input
+					id="register-label"
+					type="text"
+					required
+					maxlength="60"
+					placeholder="Counter tablet"
+					bind:value={label}
+					class={TILL_FIELD}
+				/>
+			</div>
+			{#if pending}
+				<p id="why-register" class="text-body text-ink-2">Registering this device…</p>
+			{/if}
+			<button
+				type="submit"
+				disabled={pending}
+				aria-describedby={pending ? 'why-register' : undefined}
+				class="min-h-touch-lg rounded-control border-control-line w-full border font-semibold {pending
+					? 'bg-disabled-bg text-disabled-ink'
+					: 'bg-accent text-accent-ink'}"
+			>
+				Register this device
+			</button>
+		</form>
+	</div>
 </main>

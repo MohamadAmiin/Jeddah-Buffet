@@ -21,6 +21,7 @@
 		list = undefined,
 		autocomplete = undefined,
 		minlength = undefined,
+		numeric = false,
 		...rest
 	}: {
 		id: string;
@@ -42,6 +43,8 @@
 		// 'current-password' and 'new-password' checked instead of merely allowed.
 		autocomplete?: import('svelte/elements').HTMLInputAttributes['autocomplete'];
 		minlength?: number;
+		/** Quantities and money inputs: mono, right-aligned (docs/redesign Phase 6). */
+		numeric?: boolean;
 		[key: string]: unknown;
 	} = $props();
 
@@ -58,7 +61,12 @@
 	// --c-raise and is decorative only — a control whose sole boundary is that line
 	// is effectively unbounded, and that is much of why the old screens read washed
 	// out.
-	const controlClass = 'border-control-line bg-bg text-ink rounded-control border px-3 py-2';
+	// A disabled input takes the disabled PAIR, never opacity, so it no longer looks
+	// editable (docs/redesign Phase 6).
+	const controlClass = $derived(
+		'border-control-line bg-bg text-ink rounded-control border px-3 py-2 disabled:cursor-not-allowed disabled:bg-disabled-bg disabled:text-disabled-ink' +
+			(numeric ? ' text-right font-mono tabular-nums' : '')
+	);
 </script>
 
 <!-- ONE wrapper, and it is the whole point. The caller's form is `flex flex-col

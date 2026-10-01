@@ -157,8 +157,8 @@ async function addBurger(tillPage: Page, options: { noCheese?: boolean } = {}): 
 	const panel = tillPage.getByRole('region', { name: 'Burger options' });
 	await expect(panel).toBeVisible();
 	if (options.noCheese) await panel.getByRole('button', { name: /No cheese/ }).click();
-	await panel.getByRole('button', { name: 'Add', exact: true }).click();
-	await expect(tillPage.getByRole('table')).toContainText('Burger');
+	await panel.getByRole('button', { name: 'Add to order', exact: true }).click();
+	await expect(tillPage.getByRole('list', { name: 'Lines on the check' })).toContainText('Burger');
 }
 
 async function signInOnTill(tillPage: Page, name: string, pin: string): Promise<void> {
@@ -169,6 +169,8 @@ async function signInOnTill(tillPage: Page, name: string, pin: string): Promise<
 }
 
 async function openSales(tillPage: Page): Promise<void> {
+	// Below 1536px the Sales link lives in the employee menu (docs/redesign Phase 1).
+	await tillPage.getByTestId('till-employee').click();
 	await tillPage.getByRole('link', { name: 'Sales', exact: true }).click();
 	await expect(tillPage).toHaveURL(/\/pos\/sales$/);
 	await expect(tillPage.getByRole('heading', { name: 'Sales on this till' })).toBeVisible();
@@ -194,7 +196,10 @@ test('receipts, kitchen tickets and the drawer: cash prints, a reprint is COPY, 
 		currency: 'USD',
 		idleSeconds: 300
 	});
-	await page.getByRole('link', { name: 'Settings', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Settings', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/settings$/);
 	await page.getByLabel('Address').fill('Makka Al-Mukarama Rd, Km4');
 	await page.getByLabel('Phone').fill('61 555 0142');
@@ -220,7 +225,10 @@ test('receipts, kitchen tickets and the drawer: cash prints, a reprint is COPY, 
 	await expect(burgerTile).toContainText('Modifiers: Extras');
 
 	// 3. The owner's own PIN, a cashier, and the till.
-	await page.getByRole('link', { name: 'Employees', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Employees', exact: true })
+		.click();
 	await page.getByRole('link', { name: /The Owner/ }).click();
 	await expect(page).toHaveURL(/\/employees\/[0-9a-f-]+$/);
 	await page.getByLabel('New PIN').fill(OWNER_PIN);
@@ -341,11 +349,11 @@ test('receipts, kitchen tickets and the drawer: cash prints, a reprint is COPY, 
 	await tillPage.route('**/api/pos/sync', (route) => route.abort());
 	await newSale(tillPage);
 	await addBurger(tillPage);
-	await tillPage.getByRole('button', { name: /^Pay\b/ }).click();
+	await tillPage.getByRole('link', { name: /^Pay\b/ }).click();
 	await expect(tillPage).toHaveURL(/\/pos\/pay$/);
 	await tillPage
-		.getByRole('group', { name: 'Tender' })
-		.getByRole('button', { name: /^Card/ })
+		.getByRole('radiogroup', { name: 'Tender' })
+		.getByRole('radio', { name: /^Card/ })
 		.click();
 	const receiptBeforeCard = receipt.bytes().length;
 	const kitchenBeforeCard = kitchen.bytes().length;

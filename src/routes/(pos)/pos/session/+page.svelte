@@ -1,5 +1,7 @@
 <script lang="ts">
 	// /pos/session — open a shift with a float, close it with a count (spec 10).
+	// Laid out as docs/redesign Phase 4 asks: the context on the left, the keypad
+	// card on the right, its closer the card's last element, always on screen.
 	//
 	// The keypad's digits ARE minor units: 50000 reads 500.00 USD. BigInt of a
 	// digit string is the one way a typed amount becomes money here. The till
@@ -21,6 +23,10 @@
 		syncMenu,
 		type LocalSession
 	} from '$lib/pos/store';
+	import Icon from '$lib/components/ui/Icon.svelte';
+	import Keypad, { type KeypadKey } from '$lib/components/pos/Keypad.svelte';
+	import TillBanner from '$lib/components/pos/TillBanner.svelte';
+	import { KEY } from '$lib/components/pos/keys';
 
 	const restored = getContext<Promise<void>>(RESTORED_CONTEXT) ?? Promise.resolve();
 
@@ -30,6 +36,7 @@
 	let format = $state<MoneyFormat | null>(null);
 	let noMenu = $state(false);
 	let timeZone = $state<string | null>(null);
+	let tillLabel = $state<string | null>(null);
 	let clock = $state(new Date());
 
 	let online = $state(true);
@@ -69,25 +76,25 @@
 
 	const blockers = $derived.by(() => {
 		const lines: { id: string; text: string }[] = [];
-		if (!online) lines.push({ id: 'why-offline', text: '◆ Offline — closing needs a connection' });
+		if (!online) lines.push({ id: 'why-offline', text: 'Offline — closing needs a connection' });
 		if (unsynced === null) {
 			lines.push({
 				id: 'why-unknown',
-				text: '◆ Unsynced count unavailable — this device cannot prove its queue is empty'
+				text: 'Unsynced count unavailable — this device cannot prove its queue is empty'
 			});
 		} else if (unsynced > 0) {
-			lines.push({ id: 'why-unsynced', text: `◆ ${unsynced} operations still syncing` });
+			lines.push({ id: 'why-unsynced', text: `${unsynced} operations still syncing` });
 		}
 		if (parked > 0) {
 			lines.push({
 				id: 'why-parked',
-				text: `◆ ${parked} operations from a previous registration need the owner — see the dashboard`
+				text: `${parked} operations from a previous registration need the owner — see the dashboard`
 			});
 		}
 		return lines;
 	});
 
-	function press(key: string) {
+	function press(key: KeypadKey) {
 		if (key === 'back') digits = digits.slice(0, -1);
 		else if (key === 'clear') digits = '';
 		else if (digits.length < 12) digits = digits + key;
@@ -154,11 +161,11 @@
 			event.clientOpId === closingOpId &&
 			event.http === 403
 		) {
-			refusal = '✕ Not permitted: this employee cannot close a session';
+			refusal = 'Not permitted: this employee cannot close a session';
 			waitingForNetwork = false;
 		} else if (event.type === 'stopped' && event.clientOpId === closingOpId) {
 			if (event.reason === 'session_has_unrecorded_ops') {
-				refusal = `✕ ${event.count ?? 0} operations from this session need the owner's review on the dashboard before it can close`;
+				refusal = `${event.count ?? 0} operations from this session need the owner's review on the dashboard before it can close`;
 				waitingForNetwork = false;
 			} else if (event.reason === 'network') {
 				waitingForNetwork = true;
@@ -192,6 +199,11 @@
 			await loadMenuFormat();
 			const zone = await readCachedSetting('timeZone').catch(() => null);
 			timeZone = typeof zone === 'string' ? zone : null;
+			const [code, name] = await Promise.all(
+				['deviceCode', 'restaurantName'].map((k) => readCachedSetting(k).catch(() => null))
+			);
+			tillLabel =
+				typeof code === 'string' ? (typeof name === 'string' ? `${code} · ${name}` : code) : null;
 			await recount();
 			ready = true;
 		})();
@@ -219,7 +231,7 @@
 			void flush().catch(() => {});
 			void goto(resolve('/pos/order'));
 		} catch {
-			failure = '✕ This device could not record the session — try again';
+			failure = 'This device could not record the session — try again';
 		} finally {
 			busy = false;
 		}
@@ -244,7 +256,7 @@
 			await reloadState();
 			void flush().catch(() => {});
 		} catch {
-			failure = '✕ This device could not record the close — try again';
+			failure = 'This device could not record the close — try again';
 		} finally {
 			busy = false;
 		}
@@ -255,145 +267,245 @@
 		void goto(resolve('/pos'));
 	}
 
-	const key =
-		'min-h-touch-lg min-w-touch-lg border border-control-line rounded-control bg-raise text-ink font-mono text-title';
-	const closer =
-		'min-h-touch-xl w-full border border-control-line rounded-control font-semibold text-pos';
-	const enabledCloser = 'bg-accent text-accent-ink';
-	const disabledCloser = 'bg-disabled-bg text-disabled-ink';
+	// The keypad card's hint — "50000 is 500.00 USD" — built from the cached
+	// currency's own format rather than written for one currency.
+	const keypadHint = $derived.by(() => {
+		if (!format) return '';
+		const digits = `500${'0'.repeat(format.exponent)}`;
+		return `${digits} is ${formatMoney(minor(BigInt(digits)), format)}`;
+	});
+	// One line above Close session, built from the blockers, so the reason for the
+	// disabled closer sits right beside it (the full lines are in the left column).
+	const blockedLine = $derived.by(() => {
+		const parts: string[] = [];
+		if (!online) parts.push('offline');
+		if (unsynced === null) parts.push('unsynced count unavailable');
+		else if (unsynced > 0) parts.push(`${unsynced} unsynced`);
+		if (parked > 0) parts.push(`${parked} from a previous registration`);
+		return parts.length === 0 ? null : `Can't close yet: ${parts.join(' · ')}`;
+	});
+	const openedSince = $derived(
+		session === null
+			? ''
+			: new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(
+					new Date(session.openedAt)
+				)
+	);
 </script>
 
 <svelte:head><title>Session · matcami</title></svelte:head>
 
-{#snippet keypad(label: string)}
-	<section aria-label={label} class="flex flex-col gap-3">
-		<h3 class="text-section text-ink">{label}</h3>
-		{#if format}
-			<p class="text-total text-ink text-right font-mono tabular-nums" aria-live="polite">
-				{formatMoney(typed, format)}
-			</p>
-		{/if}
-		<p class="text-caption text-ink-2">Keys enter cents: 50000 is 500.00 USD</p>
-		<div class="grid grid-cols-3 gap-2">
-			{#each ['1', '2', '3', '4', '5', '6', '7', '8', '9'] as d (d)}
-				<button type="button" class={key} onclick={() => press(d)}>{d}</button>
-			{/each}
-			<button type="button" class={key} onclick={() => press('clear')}>Clear</button>
-			<button type="button" class={key} onclick={() => press('0')}>0</button>
-			<button type="button" class={key} onclick={() => press('back')}>
-				<span aria-hidden="true">⌫</span><span class="sr-only">Delete the last digit</span>
-			</button>
-		</div>
-	</section>
+{#snippet readout(label: string, hint: string, headingId: string)}
+	<div class="flex items-baseline justify-between gap-3">
+		<h2 id={headingId} class="text-pos font-sans font-semibold">{label}</h2>
+		<p class="text-body text-ink-2">{hint}</p>
+	</div>
+	{#if format}
+		<output
+			aria-live="polite"
+			class="rounded-control border-control-line bg-bg text-total block border px-4 py-2 text-right font-mono tabular-nums"
+			>{formatMoney(typed, format)}</output
+		>
+	{/if}
+	<Keypad label="{label} keypad" onkey={press} />
 {/snippet}
 
-<main class="mx-auto flex max-w-2xl flex-col gap-4 px-4 py-8">
+<!-- A two-column screen, vertically centred, that always fits: the context on the
+     left, the keypad card on the right, its closer the card's last element. -->
+<main class="relative flex min-h-0 flex-1 overflow-y-auto p-3 md:p-4 lg:p-6">
 	{#if !ready}
-		<p class="text-ink-2">Loading the session…</p>
+		<p class="text-ink-2 m-auto">Loading the session…</p>
 	{:else if result && format}
 		{@const negative = result.difference < 0n}
 		{@const zero = result.difference === 0n}
-		<h2 class="text-title text-ink">Session closed</h2>
-		{#if result.businessDate}
-			<p class="font-mono">Business date {result.businessDate}</p>
-		{/if}
-		<dl class="grid grid-cols-2 gap-y-2">
-			<dt class="text-ink-2">Expected</dt>
-			<dd class="text-right font-mono tabular-nums">{formatMoney(result.expected, format)}</dd>
-			<dt class="text-ink-2">Counted</dt>
-			<dd class="text-right font-mono tabular-nums">{formatMoney(result.counted, format)}</dd>
-			<dt class="text-ink-2">Difference</dt>
-			<dd
-				class="text-right font-mono tabular-nums {negative
-					? 'text-danger'
-					: zero
-						? 'text-ok'
-						: 'text-warn'}"
-			>
-				{formatMoney(result.difference, format)}
-				{#if negative}✕ Short{:else if zero}● Balanced{:else}▲ Over{/if}
-			</dd>
-		</dl>
-		<p class="text-ink-2">
-			{zero ? 'Nothing was posted' : 'The server posted the difference to 6800 Cash Over/Short'}
-		</p>
-		<button type="button" class="{closer} {enabledCloser}" onclick={done}>Done</button>
-	{:else if noMenu || !format}
-		<p class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">
-			◆ No menu on this device yet — connect once so the till can download it
-		</p>
-		<button
-			type="button"
-			class="min-h-touch-lg border-control-line rounded-control bg-raise text-ink border px-4"
-			onclick={retryMenu}>Retry</button
+		<section
+			aria-labelledby="closed-h"
+			class="rounded-card border-line bg-raise shadow-raised m-auto flex w-full max-w-xl flex-col gap-4 border p-6"
 		>
-	{:else if session === null}
-		<h2 class="text-title text-ink">Open a session</h2>
-		<p class="font-mono">
-			{#if expectedDate}
-				Business date: {expectedDate}
-			{:else}
-				Business date: set when the server confirms (no time zone cached)
-			{/if}
-		</p>
-		<p class="text-ink-2">Device clock: {deviceClock}</p>
-		<p class="text-ink-2">The server sets the business date from the moment you open</p>
-		{@render keypad('Opening cash (the float)')}
-		{#if failure}
-			<p class="bg-danger-bg text-danger rounded-control px-3 py-2">{failure}</p>
-		{/if}
-		<button
-			type="button"
-			class="{closer} {busy ? disabledCloser : enabledCloser}"
-			disabled={busy}
-			onclick={open}
-		>
-			Open session
-		</button>
-	{:else}
-		<p class="text-ink-2">
-			A session is already open on this till since {new Intl.DateTimeFormat(undefined, {
-				dateStyle: 'medium',
-				timeStyle: 'short'
-			}).format(new Date(session.openedAt))}
-		</p>
-		<a
-			class="{closer} {enabledCloser} flex items-center justify-center"
-			href={resolve('/pos/order')}>Continue</a
-		>
-		<h2 class="text-title text-ink">Close this session</h2>
-		{#if session.state === 'closing'}
-			<p class="bg-st-billed-bg text-st-billed rounded-control px-3 py-2">
-				◐ Closing… waiting for the server
-			</p>
-			{#if waitingForNetwork}
-				<p class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">
-					◆ Waiting for a connection — the close is queued
-				</p>
-			{/if}
-			{#if refusal}
-				<p class="bg-danger-bg text-danger rounded-control px-3 py-2">{refusal}</p>
+			<h1 id="closed-h" class="text-display">Session closed</h1>
+			{#if result.businessDate}
 				<p class="text-ink-2">
-					The close will retry by itself once the owner has resolved this on the dashboard
+					Business date <span class="text-ink font-mono tabular-nums">{result.businessDate}</span>
 				</p>
 			{/if}
-		{:else}
-			{#each blockers as b (b.id)}
-				<p id={b.id} class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">{b.text}</p>
-			{/each}
-			{@render keypad('Counted cash')}
-			{#if failure}
-				<p class="bg-danger-bg text-danger rounded-control px-3 py-2">{failure}</p>
-			{/if}
+			<dl class="divide-line-soft flex flex-col divide-y">
+				<div class="flex items-baseline justify-between gap-4 py-2">
+					<dt class="text-ink-2">Expected</dt>
+					<dd class="font-mono tabular-nums">{formatMoney(result.expected, format)}</dd>
+				</div>
+				<div class="flex items-baseline justify-between gap-4 py-2">
+					<dt class="text-ink-2">Counted</dt>
+					<dd class="font-mono tabular-nums">{formatMoney(result.counted, format)}</dd>
+				</div>
+				<div class="flex items-baseline justify-between gap-4 py-2">
+					<dt class="text-ink-2">Difference</dt>
+					<dd
+						class="text-right font-mono tabular-nums {negative
+							? 'text-danger'
+							: zero
+								? 'text-ok'
+								: 'text-warn'}"
+					>
+						{formatMoney(result.difference, format)}
+						{#if negative}✕ Short{:else if zero}● Balanced{:else}▲ Over{/if}
+					</dd>
+				</div>
+			</dl>
+			<p class="text-ink-2">
+				{zero ? 'Nothing was posted' : 'The server posted the difference to 6800 Cash Over/Short'}
+			</p>
 			<button
 				type="button"
-				class="{closer} {blockers.length > 0 || busy ? disabledCloser : enabledCloser}"
-				disabled={blockers.length > 0 || busy}
-				aria-describedby={blockers.length > 0 ? blockers.map((b) => b.id).join(' ') : undefined}
-				onclick={close}
+				class="min-h-touch-xl rounded-control border-control-line bg-accent text-title text-accent-ink w-full border font-semibold"
+				onclick={done}>Done</button
 			>
-				Close session
-			</button>
-		{/if}
+		</section>
+	{:else if noMenu || !format}
+		<section class="m-auto flex w-full max-w-xl flex-col items-start gap-3">
+			<TillBanner tone="offline" live="status"
+				>No menu on this device yet — connect once so the till can download it</TillBanner
+			>
+			<button type="button" class="min-h-touch-lg px-4 {KEY}" onclick={retryMenu}>Retry</button>
+		</section>
+	{:else if session === null}
+		<div class="m-auto grid w-full max-w-5xl items-center gap-6 md:grid-cols-2 lg:gap-12">
+			<div class="flex flex-col gap-5">
+				<div class="flex flex-col gap-2">
+					<p class="text-eyebrow text-ink-3 uppercase">Start of shift</p>
+					<h1 class="text-display">Open a session</h1>
+				</div>
+				<dl
+					class="rounded-card border-line bg-raise divide-line-soft flex flex-col divide-y border px-4"
+				>
+					<div class="flex items-baseline justify-between gap-4 py-3">
+						<dt class="text-ink-2">Business date</dt>
+						<dd class="text-right font-mono tabular-nums">
+							{expectedDate ?? 'set when the server confirms (no time zone cached)'}
+						</dd>
+					</div>
+					<div class="flex items-baseline justify-between gap-4 py-3">
+						<dt class="text-ink-2">Device clock</dt>
+						<dd class="text-right">{deviceClock}</dd>
+					</div>
+					{#if tillLabel}
+						<div class="flex items-baseline justify-between gap-4 py-3">
+							<dt class="text-ink-2">Till</dt>
+							<dd class="text-right">{tillLabel}</dd>
+						</div>
+					{/if}
+					{#if signedIn.current}
+						<div class="flex items-baseline justify-between gap-4 py-3">
+							<dt class="text-ink-2">Cashier</dt>
+							<dd class="text-right">{signedIn.current.displayName}</dd>
+						</div>
+					{/if}
+				</dl>
+				<p class="text-ink-2 flex items-start gap-3">
+					<Icon name="info" class="size-5" />
+					<span
+						>The server sets the business date from the moment you open. Count the float in the
+						drawer, then key it in.</span
+					>
+				</p>
+			</div>
+			<section
+				aria-labelledby="float-h"
+				class="rounded-card border-line bg-raise shadow-raised flex flex-col gap-3 border p-4"
+			>
+				{@render readout('Opening cash (the float)', keypadHint, 'float-h')}
+				{#if failure}
+					<TillBanner tone="danger" live="alert">{failure}</TillBanner>
+				{/if}
+				{#if busy}
+					<p id="why-open" class="text-body text-ink-2">Saving the session on this till…</p>
+				{/if}
+				<button
+					type="button"
+					disabled={busy}
+					aria-describedby={busy ? 'why-open' : undefined}
+					class="min-h-touch-xl rounded-control border-control-line text-title w-full border font-semibold {busy
+						? 'bg-disabled-bg text-disabled-ink'
+						: 'bg-accent text-accent-ink'}"
+					onclick={open}>Open session</button
+				>
+			</section>
+		</div>
+	{:else}
+		<div class="m-auto grid w-full max-w-5xl items-center gap-6 md:grid-cols-2 lg:gap-12">
+			<div class="flex flex-col gap-5">
+				<div class="flex flex-col gap-2">
+					<p class="text-eyebrow text-ink-3 uppercase">End of shift</p>
+					<h1 class="text-display">Close this session</h1>
+					<p class="text-ink-2">
+						Open on this till since {openedSince}
+						{#if session.businessDate}
+							· business date <span class="font-mono tabular-nums">{session.businessDate}</span>
+						{/if}
+					</p>
+				</div>
+				{#if session.state === 'closing'}
+					<TillBanner tone="pending" live="status">Closing… waiting for the server</TillBanner>
+					{#if waitingForNetwork}
+						<TillBanner tone="offline">Waiting for a connection — the close is queued</TillBanner>
+					{/if}
+					{#if refusal}
+						<TillBanner tone="danger" live="alert">{refusal}</TillBanner>
+						<p class="text-ink-2">
+							The close will retry by itself once the owner has resolved this on the dashboard
+						</p>
+					{/if}
+				{:else}
+					{#if blockers.length > 0}
+						<ul aria-label="Why the session cannot close yet" class="flex flex-col gap-2">
+							{#each blockers as b (b.id)}
+								<li
+									id={b.id}
+									class="rounded-control bg-st-offline-bg text-st-offline flex items-start gap-3 px-4 py-3"
+								>
+									<span aria-hidden="true" class="font-mono">◆&nbsp;</span><span>{b.text}</span>
+								</li>
+							{/each}
+						</ul>
+					{/if}
+					<!-- Hidden while the session is closing: selling into a closing session
+					     is exactly what the close must not race. -->
+					<a
+						href={resolve('/pos/order')}
+						class="min-h-touch-min flex w-fit items-center gap-2 px-4 {KEY}"
+					>
+						<Icon name="arrow-left" class="size-5" />
+						Back to the order
+					</a>
+				{/if}
+			</div>
+			{#if session.state !== 'closing'}
+				<section
+					aria-labelledby="count-h"
+					class="rounded-card border-line bg-raise shadow-raised flex flex-col gap-3 border p-4"
+				>
+					{@render readout('Counted cash', 'A blind count', 'count-h')}
+					{#if failure}
+						<TillBanner tone="danger" live="alert">{failure}</TillBanner>
+					{/if}
+					{#if blockedLine}
+						<p id="why-close" class="text-body text-st-offline flex items-start gap-2">
+							<span aria-hidden="true" class="font-mono">◆&nbsp;</span>{blockedLine}
+						</p>
+					{/if}
+					<button
+						type="button"
+						disabled={blockers.length > 0 || busy}
+						aria-describedby={blockers.length > 0
+							? ['why-close', ...blockers.map((b) => b.id)].join(' ')
+							: undefined}
+						class="min-h-touch-xl rounded-control border-control-line text-title w-full border font-semibold {blockers.length >
+							0 || busy
+							? 'bg-disabled-bg text-disabled-ink'
+							: 'bg-accent text-accent-ink'}"
+						onclick={close}>Close session</button
+					>
+				</section>
+			{/if}
+		</div>
 	{/if}
 </main>

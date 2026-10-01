@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1280">
+<title>Till · Close the session (blocked) · matcami redesign</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="mockup.css">
+</head>
+<body>
+<div class="mock-root mock-fixed" style="width:1280px;height:800px">
+<div data-surface="pos" class="flex h-dvh flex-col overflow-hidden bg-bg text-pos text-ink">
+<header data-rail class="bg-rail flex h-touch shrink-0 items-center gap-2 px-3 text-rail-ink sm:gap-3 sm:px-4 lg:px-6">
+  <nav aria-label="Till" class="flex shrink-0 items-center gap-3">
+    <a href="/pos/order" aria-label="POS" class="grid size-10 shrink-0 place-items-center rounded-control bg-rail-ink font-display text-title font-bold text-rail sm:hidden">m</a>
+    <span class="hidden size-10 shrink-0 place-items-center rounded-control bg-rail-ink font-display text-title font-bold text-rail sm:grid" aria-hidden="true">m</span>
+    <a href="/pos/order" class="hidden min-h-touch-min items-center gap-2 rounded-full border border-rail-line bg-rail-active px-5 font-semibold sm:flex"><svg class="pos-icon size-5" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.5 8h13l-1 12.5h-11z"></path><path d="M9 8V6.5a3 3 0 0 1 6 0V8"></path></svg>POS</a>
+  </nav>
+  <div class="hidden min-w-0 flex-col lg:flex">
+    <span class="truncate font-semibold leading-tight">Jeddah Buffet</span>
+    <span class="truncate text-body leading-tight text-rail-ink-2">Till POS1</span>
+  </div>
+  <div role="status" aria-label="Connection and sync" class="ml-auto flex shrink-0 items-center gap-2">
+    <span class="inline-flex h-10 items-center gap-1.5 rounded-full bg-st-offline-bg px-2.5 text-body font-semibold text-st-offline sm:px-3"><span class="font-mono" aria-hidden="true">◆</span>Offline</span>
+    <span class="inline-flex h-10 items-center gap-1.5 rounded-full bg-st-offline-bg px-2.5 text-body font-semibold text-st-offline sm:px-3"><span class="font-mono" aria-hidden="true">◆</span>1<span class="sr-only sm:not-sr-only">&#160;unsynced</span></span>
+    <details class="relative">
+      <summary class="inline-flex h-10 items-center gap-1.5 rounded-full border border-st-offline bg-st-offline-bg px-2.5 text-body font-semibold text-st-offline sm:px-3"><span class="font-mono" aria-hidden="true">◆</span>1<span class="sr-only sm:not-sr-only">&#160;warning</span></summary>
+    </details>
+  </div>
+  <p class="hidden shrink-0 flex-col items-end xl:flex">
+    <span class="font-semibold leading-tight tabular-nums">12:29 AM</span>
+    <span class="text-body leading-tight text-rail-ink-2">Wed, Sep 30</span>
+  </p>
+  <a href="/pos/session" class="hidden min-h-touch-min min-w-touch-min shrink-0 items-center justify-center gap-2 rounded-control border border-rail-line bg-rail-raise px-3 font-semibold sm:flex" aria-label="Session · business date 2026-09-30 · Close session">
+    <svg class="pos-icon size-5 text-rail-ink-2" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7.5 11V8a4.5 4.5 0 0 1 9 0v3"></path><path d="M6 11h12v9.5H6z"></path><path d="M12 15v2"></path></svg>
+    <span class="hidden flex-col leading-tight md:flex"><span><span class="font-mono" aria-hidden="true">●</span> Session</span><span class="hidden text-body font-normal text-rail-ink-2 xl:block">Close session</span></span>
+    <svg class="pos-icon hidden size-4 text-rail-ink-2 md:block" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 6l6 6-6 6"></path></svg>
+  </a>
+  <details class="relative shrink-0">
+    <summary class="flex min-h-touch-min items-center gap-2 rounded-control border border-rail-line bg-rail-raise p-1 sm:pr-3">
+      <span class="grid size-10 place-items-center rounded-full bg-rail-active text-body font-semibold" aria-hidden="true">AY</span>
+      <span class="hidden flex-col text-left leading-tight md:flex"><span class="font-semibold">Amina Yusuf</span><span class="hidden text-body text-rail-ink-2 xl:block">Cashier</span></span>
+      <span class="sr-only md:hidden">Amina Yusuf · Cashier</span>
+      <svg class="pos-icon hidden size-4 text-rail-ink-2 sm:block" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 9l6 6 6-6"></path></svg>
+    </summary>
+  </details>
+</header>
+<main class="flex min-h-0 flex-1 overflow-y-auto p-3 md:p-4 lg:p-6">
+  <div class="m-auto grid w-full max-w-5xl items-center gap-6 md:grid-cols-2 lg:gap-12">
+    <div class="flex flex-col gap-5">
+      <div class="flex flex-col gap-2">
+        <p class="text-eyebrow uppercase text-ink-3">End of shift</p>
+        <h1 class="text-display">Close this session</h1>
+        <p class="text-ink-2">Open on this till since Sep 30, 2026, 12:29 AM · business date <span class="font-mono tabular-nums">2026-09-30</span></p>
+      </div>
+      <ul aria-label="Why the session cannot close yet" class="flex flex-col gap-2">
+        <li id="why-offline" class="flex items-start gap-3 rounded-control bg-st-offline-bg px-4 py-3 text-st-offline"><span class="font-mono" aria-hidden="true">◆</span><span>Offline — closing needs a connection</span></li>
+        <li id="why-unsynced" class="flex items-start gap-3 rounded-control bg-st-offline-bg px-4 py-3 text-st-offline"><span class="font-mono" aria-hidden="true">◆</span><span>1 operation still syncing</span></li>
+      </ul>
+      <a href="/pos/order" class="flex min-h-touch-min w-fit items-center gap-2 rounded-control border border-control-line bg-raise px-4 font-semibold"><svg class="pos-icon size-5" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12H5"></path><path d="M11 6l-6 6 6 6"></path></svg>Back to the order</a>
+    </div>
+    <section aria-labelledby="count-h" class="flex flex-col gap-3 rounded-card border border-line bg-raise p-4 shadow-raised">
+      <div class="flex items-baseline justify-between gap-3">
+        <h2 id="count-h" class="font-sans text-pos font-semibold">Counted cash</h2>
+        <p class="text-body text-ink-2">A blind count</p>
+      </div>
+      <output aria-live="polite" class="block rounded-control border border-control-line bg-bg px-4 py-2 text-right font-mono text-total tabular-nums">530.00 USD</output>
+      <div role="group" aria-label="Counted cash keypad" class="grid grid-cols-3 gap-2">
+<button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">1</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">2</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">3</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">4</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">5</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">6</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">7</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">8</button><button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">9</button>  <button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-semibold">Clear</button>
+  <button type="button" class="min-h-touch-lg rounded-control border border-control-line bg-raise font-mono text-title font-medium">0</button>
+  <button type="button" class="min-h-touch-lg grid place-items-center rounded-control border border-control-line bg-raise"><span class="sr-only">Delete the last digit</span><svg class="pos-icon size-7" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 6H9l-6 6 6 6h12z"></path><path d="M12.5 9.5l5 5"></path><path d="M17.5 9.5l-5 5"></path></svg></button>
+</div>
+      <p class="flex items-start gap-2 text-body text-st-offline"><span class="font-mono" aria-hidden="true">◆</span>Can't close yet: offline · 1 unsynced</p>
+      <button type="button" disabled="disabled" aria-describedby="why-offline why-unsynced" class="min-h-touch-xl w-full rounded-control border border-control-line bg-disabled-bg text-title font-semibold text-disabled-ink">Close session</button>
+    </section>
+  </div>
+</main>
+</div>
+</div>
+</body>
+</html>

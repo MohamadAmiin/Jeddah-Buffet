@@ -54,7 +54,10 @@ export async function createEmployee(
 	page: Page,
 	employee: { displayName: string; role: 'cashier' | 'waiter'; pin: string }
 ): Promise<void> {
-	await page.getByRole('link', { name: 'Employees', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Employees', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/employees$/);
 	await page.getByLabel('Name', { exact: true }).fill(employee.displayName);
 	await page
@@ -106,7 +109,7 @@ export async function enterPin(tillPage: Page, pin: string): Promise<void> {
 /** Pick an employee on the till's employee-select screen. */
 export async function pickEmployee(tillPage: Page, displayName: string): Promise<void> {
 	await tillPage.getByRole('button', { name: new RegExp(displayName) }).click();
-	await expect(tillPage.getByRole('heading', { name: 'Enter your PIN' })).toBeVisible();
+	await expect(tillPage.getByRole('heading', { name: /^Enter the PIN for / })).toBeVisible();
 }
 
 /** Every row of one store in the till's IndexedDB, read inside the page. */
@@ -169,7 +172,10 @@ export async function completeSettings(
 		idleSeconds: number;
 	}
 ): Promise<void> {
-	await page.getByRole('link', { name: 'Settings', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Settings', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/settings$/);
 	await page.getByLabel('Tax mode').fill(s.taxMode);
 	await page.getByLabel('Tax rate (basis points)').fill(String(s.taxRateBp));
@@ -177,7 +183,10 @@ export async function completeSettings(
 	await page.getByRole('button', { name: 'Save settings' }).click();
 	await expect(page.getByRole('alert')).toContainText('Settings saved.');
 
-	await page.getByRole('link', { name: 'POS', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'POS device', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/device$/);
 	await page.getByLabel('Auto-lock after (seconds)').fill(String(s.idleSeconds));
 	await page.getByRole('button', { name: 'Save auto-lock' }).click();
@@ -185,7 +194,10 @@ export async function completeSettings(
 }
 
 export async function createCategory(page: Page, name: string): Promise<void> {
-	await page.getByRole('link', { name: 'Menu', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Menu', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/menu$/);
 	await page.getByLabel('Category name').fill(name);
 	await page.getByRole('button', { name: 'Add category' }).click();
@@ -209,7 +221,10 @@ export async function createMenuItem(
 		photo?: { name: string; mimeType: string; buffer: Buffer };
 	}
 ): Promise<void> {
-	await page.getByRole('link', { name: 'Menu', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Menu', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/menu$/);
 	await page.getByRole('button', { name: 'Add item', exact: true }).click();
 	await page.getByLabel('Item name').fill(item.name);
@@ -249,7 +264,7 @@ export async function addItem(tillPage: Page, name: string): Promise<void> {
 		.getByRole('tabpanel')
 		.or(tillPage.getByRole('region', { name: 'Menu items' }));
 	await grid.getByRole('button', { name: new RegExp(name) }).click();
-	await expect(tillPage.getByRole('table')).toContainText(name);
+	await expect(tillPage.getByRole('list', { name: 'Lines on the check' })).toContainText(name);
 }
 
 export async function chooseOrderType(
@@ -257,9 +272,9 @@ export async function chooseOrderType(
 	type: 'Dine in' | 'Takeaway' | 'Delivery',
 	options: { tableLabel?: string } = {}
 ): Promise<void> {
-	await tillPage.getByRole('button', { name: type, exact: true }).click();
+	await tillPage.getByRole('radio', { name: type, exact: true }).click();
 	if (options.tableLabel !== undefined) {
-		await tillPage.getByLabel('Table (optional)').fill(options.tableLabel);
+		await tillPage.getByLabel('Table', { exact: true }).fill(options.tableLabel);
 		await tillPage.keyboard.press('Tab');
 	}
 	const expected =
@@ -271,17 +286,17 @@ export async function chooseOrderType(
 }
 
 export async function payCash(tillPage: Page, tenderedMinor: bigint): Promise<void> {
-	await tillPage.getByRole('button', { name: /^Pay\b/ }).click();
+	await tillPage.getByRole('link', { name: /^Pay\b/ }).click();
 	await expect(tillPage).toHaveURL(/\/pos\/pay$/);
 	await expect(tillPage.getByRole('heading', { name: 'Amount due' })).toBeVisible();
 	await tillPage
-		.getByRole('group', { name: 'Tender' })
-		.getByRole('button', { name: 'Cash', exact: true })
+		.getByRole('radiogroup', { name: 'Tender' })
+		.getByRole('radio', { name: 'Cash', exact: true })
 		.click();
 	await typeMinor(tillPage, tenderedMinor);
 	await expect(tillPage.getByText('Change due')).toBeVisible();
 	await tillPage.getByRole('button', { name: /^Pay · Cash/ }).click();
-	await expect(tillPage.getByText('● Paid')).toBeVisible();
+	await expect(tillPage.getByText('● Paid', { exact: true })).toBeVisible();
 }
 
 export async function closeSession(tillPage: Page, countedCashMinor: bigint): Promise<void> {
@@ -305,7 +320,10 @@ export async function createIngredient(
 	page: Page,
 	i: { name: string; baseUnit: string; unit: { name: string; baseQtyPerUnit: string } }
 ): Promise<void> {
-	await page.getByRole('link', { name: 'Inventory', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Inventory', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/inventory$/);
 	await page.getByLabel('Name', { exact: true }).fill(i.name);
 	await page.getByLabel('Base unit', { exact: true }).fill(i.baseUnit);
@@ -322,7 +340,10 @@ export async function setRecipe(
 	page: Page,
 	r: { itemName: string; rows: { ingredientName: string; qty: string }[] }
 ): Promise<void> {
-	await page.getByRole('link', { name: 'Inventory', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Inventory', exact: true })
+		.click();
 	await page.getByRole('link', { name: 'Recipes', exact: true }).click();
 	await expect(page).toHaveURL(/\/inventory\/recipes/);
 	await page.getByRole('link', { name: r.itemName, exact: true }).click();
@@ -336,7 +357,15 @@ export async function setRecipe(
 		await select.selectOption({ value: (await option.getAttribute('value'))! });
 		await page.getByLabel(`Quantity, row ${index + 1}`).fill(row.qty);
 	}
+	// Wait for the save to FINISH. The page stays on the same URL and shows no
+	// success alert, so neither of the checks below proves it is done — and a click
+	// made while the save's redirect is still in flight is overridden by it.
+	const saved = page.waitForResponse(
+		(response) => response.request().method() === 'POST' && response.url().includes('?/save')
+	);
 	await page.getByRole('button', { name: 'Save recipe' }).click();
+	await saved;
+	await page.waitForLoadState('networkidle');
 	await expect(page).toHaveURL(/\/inventory\/recipes\?item=/);
 	await expect(page.getByRole('alert')).toHaveCount(0);
 }
@@ -350,7 +379,10 @@ export async function recordDelivery(
 		lines: { ingredientName: string; unitName: string; qty: string; total: string }[];
 	}
 ): Promise<void> {
-	await page.getByRole('link', { name: 'Purchases', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Deliveries', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/purchases$/);
 	await page.getByRole('link', { name: 'Record a delivery' }).click();
 	await expect(page).toHaveURL(/\/purchases\/new$/);

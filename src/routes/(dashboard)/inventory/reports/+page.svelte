@@ -3,7 +3,16 @@
 	// every quantity formatQty's. A negative amount carries its leading − AND
 	// text-danger; stock below zero shows ◆ and the words.
 	import { resolve } from '$app/paths';
-	import { Alert, Button, Card, Field, PageHeader, Table } from '$lib/components/ui';
+	import { page } from '$app/state';
+	import {
+		Button,
+		Callout,
+		Field,
+		PageBody,
+		PageHeader,
+		StatTile,
+		Table
+	} from '$lib/components/ui';
 
 	let { data } = $props();
 
@@ -31,6 +40,25 @@
 		{ key: 'onHand', label: 'On hand', numeric: true },
 		{ key: 'status', label: 'Status' }
 	];
+
+	// The inventory section row — the same on every inventory page (copied from
+	// /inventory).
+	const SECTION =
+		'flex items-center border-b-2 border-transparent pb-3 text-sm font-medium text-ink-2 hover:text-ink data-current:border-accent data-current:text-ink';
+	const sections = [
+		{ label: 'Recipes', href: resolve('/inventory/recipes') },
+		{ label: 'Deliveries', href: resolve('/purchases') },
+		{ label: 'Waste', href: resolve('/inventory/waste') },
+		{ label: 'Counts', href: resolve('/inventory/counts') },
+		{ label: 'Reports', href: resolve('/inventory/reports') }
+	];
+
+	// A report card: the heading, its note and its table are DIRECT children of
+	// the <section> — e2e finds a card as the innermost section/div holding its
+	// heading (/Cost of goods sold/) and reads the figures inside it.
+	const CARD = 'rounded-card border-line bg-raise shadow-card flex flex-col overflow-hidden border';
+	const CARD_TITLE = 'text-section px-6 pt-4 pb-3';
+	const CARD_NOTE = 'text-caption text-ink-2 px-6 pb-3';
 </script>
 
 <svelte:head>
@@ -38,167 +66,179 @@
 </svelte:head>
 
 <PageHeader
-	eyebrow="Inventory"
+	crumbs={[{ label: 'Inventory', href: resolve('/inventory') }]}
 	title="Inventory reports"
 	description={`Business days ${data.from} to ${data.to}. Figures come from the stock book and the posted journal.`}
-/>
-
-<div class="flex flex-col gap-5 px-4 pt-8 pb-16 lg:px-7">
-	<p class="text-ink-2 text-sm">
-		<a class="text-ink underline" href={resolve('/inventory')}>Back to inventory</a>
-	</p>
-
-	<Card class="max-w-form">
-		<form method="GET" class="flex flex-col gap-4">
-			<h3 class="text-ink font-semibold">Business days</h3>
+>
+	{#snippet actions()}
+		<form method="GET" class="flex flex-wrap items-end gap-2" aria-label="Business days">
 			<Field id="report-from" name="from" label="From" type="date" required value={data.from} />
 			<Field id="report-to" name="to" label="To" type="date" required value={data.to} />
-			<div>
-				<Button type="submit" variant="secondary">Show</Button>
-			</div>
+			<Button type="submit" variant="secondary">Show</Button>
 		</form>
-	</Card>
+	{/snippet}
+	{#snippet below()}
+		<nav aria-label="Inventory sections" class="-mb-4 flex flex-wrap gap-x-6 gap-y-1 lg:-mb-5">
+			{#each sections as link (link.href)}
+				{@const here = page.url.pathname === link.href}
+				<!-- eslint-disable svelte/no-navigation-without-resolve -- every href above is a resolve() result -->
+				<a
+					href={link.href}
+					class={SECTION}
+					aria-current={here ? 'page' : undefined}
+					data-current={here || page.url.pathname.startsWith(`${link.href}/`) ? '' : undefined}
+					>{link.label}</a
+				>
+				<!-- eslint-enable svelte/no-navigation-without-resolve -->
+			{/each}
+		</nav>
+	{/snippet}
+</PageHeader>
 
-	<Card>
-		<div class="flex flex-col gap-2">
-			<h3 class="text-ink font-semibold">Stock value and the books</h3>
-			{#if data.reconciliation.differs}
-				<Alert tone="danger">
-					✕ The stock value differs from the books by {data.reconciliation.difference ?? '—'} ({data
-						.reconciliation.driftCount}
-					{data.reconciliation.driftCount === 1 ? 'ingredient differs' : 'ingredients differ'} from the
-					stock book).
-				</Alert>
-			{/if}
-			<dl class="grid max-w-form grid-cols-2 gap-2 text-sm">
-				<dt class="text-ink-2">Stock value</dt>
-				<dd class="text-ink text-end font-mono tabular-nums">
-					{data.reconciliation.stockValue ?? '—'}
-				</dd>
-				<dt class="text-ink-2">Inventory account (1200)</dt>
-				<dd class="text-ink text-end font-mono tabular-nums">
-					{data.reconciliation.ledger1200 ?? '—'}
-				</dd>
-				<dt class="text-ink-2">Difference</dt>
-				<dd
-					class={`text-end font-mono tabular-nums ${
-						data.reconciliation.differenceNegative ? 'text-danger' : 'text-ink'
-					}`}
+<PageBody>
+	{#if data.reconciliation.differs}
+		<!-- The tripwire: a STANDING notice, so a Callout (role="status", it owns the
+		     glyph — words only here). -->
+		<Callout tone="danger" title="The stock book and the books disagree">
+			The stock value differs from the books by {data.reconciliation.difference ?? '—'} ({data
+				.reconciliation.driftCount}
+			{data.reconciliation.driftCount === 1 ? 'ingredient differs' : 'ingredients differ'} from the stock
+			book).
+		</Callout>
+	{/if}
+
+	<!-- The totals row. -->
+	<section aria-labelledby="books-h" class="flex flex-col gap-3">
+		<h3 id="books-h" class="text-section">Stock value and the books</h3>
+		<dl class="grid gap-3 sm:grid-cols-3">
+			<StatTile label="Stock value" numeric>
+				<span class="block text-end">{data.reconciliation.stockValue ?? '—'}</span>
+			</StatTile>
+			<StatTile label="Inventory account (1200)" numeric>
+				<span class="block text-end">{data.reconciliation.ledger1200 ?? '—'}</span>
+			</StatTile>
+			<StatTile label="Difference" numeric>
+				<span
+					class={`block text-end ${data.reconciliation.differenceNegative ? 'text-danger' : 'text-ink'}`}
 				>
 					{data.reconciliation.difference ?? '—'}
-				</dd>
-			</dl>
-		</div>
-	</Card>
+				</span>
+			</StatTile>
+		</dl>
+	</section>
 
-	<Card>
-		<div class="flex flex-col gap-2">
-			<h3 class="text-ink font-semibold">Ingredients used per business day</h3>
-			<Table
-				caption="Ingredients used per business day"
-				columns={consumptionColumns}
-				rows={data.consumption}
-				empty="No sales used any ingredient in these business days."
-			>
-				{#snippet cell(row, key)}
-					{#if key === 'businessDate'}
-						<span class="text-ink">{row.businessDate}</span>
-					{:else if key === 'name'}
-						<span class="text-ink font-medium">{row.name}</span>
-					{:else if key === 'qty'}
-						<span class="text-ink">{row.qty}</span>
-					{:else if key === 'cost'}
-						<span class={row.costNegative ? 'text-danger' : 'text-ink'}>{row.cost ?? '—'}</span>
-					{/if}
-				{/snippet}
-			</Table>
-		</div>
-	</Card>
-
-	<Card>
-		<div class="flex flex-col gap-2">
-			<h3 class="text-ink font-semibold">Waste</h3>
-			<Table
-				caption="Waste"
-				columns={wasteColumns}
-				rows={data.waste}
-				empty="No waste in these business days."
-			>
-				{#snippet cell(row, key)}
-					{#if key === 'businessDate'}
-						<span class="text-ink">{row.businessDate}</span>
-					{:else if key === 'name'}
-						<span class="text-ink font-medium">{row.name}</span>
-					{:else if key === 'qty'}
-						<span class="text-ink">{row.qty}</span>
-					{:else if key === 'reason'}
-						<span class="text-ink">{row.reason}</span>
-						{#if row.note}
-							<span class="text-ink-2 block text-sm">{row.note}</span>
-						{/if}
-					{:else if key === 'cost'}
-						<span class={row.costNegative ? 'text-danger' : 'text-ink'}>{row.cost ?? '—'}</span>
-					{/if}
-				{/snippet}
-			</Table>
-		</div>
-	</Card>
-
-	<Card>
-		<div class="flex flex-col gap-2">
-			<h3 class="text-ink font-semibold">Cost of goods sold per business day</h3>
-			<p class="text-ink-2 text-sm">
+	<div class="grid items-start gap-6 xl:grid-cols-2">
+		<section class={CARD}>
+			<h3 class={CARD_TITLE}>Cost of goods sold per business day</h3>
+			<p class={CARD_NOTE}>
 				Sales is the cost of what was sold. Revaluations correct stock that was sold before its
 				delivery was entered.
 			</p>
-			<Table
-				caption="Cost of goods sold per business day"
-				columns={cogsColumns}
-				rows={data.cogs}
-				empty="No cost of goods sold in these business days."
-			>
-				{#snippet cell(row, key)}
-					{#if key === 'businessDate'}
-						<span class="text-ink">{row.businessDate}</span>
-					{:else if key === 'sales'}
-						<span class={row.salesNegative ? 'text-danger' : 'text-ink'}>{row.sales ?? '—'}</span>
-					{:else if key === 'revaluation'}
-						<span class={row.revaluationNegative ? 'text-danger' : 'text-ink'}>
-							{row.revaluation ?? '—'}
-						</span>
-					{:else if key === 'total'}
-						<span class={`font-semibold ${row.totalNegative ? 'text-danger' : 'text-ink'}`}>
-							{row.total ?? '—'}
-						</span>
-					{/if}
-				{/snippet}
-			</Table>
-		</div>
-	</Card>
+			<div class="px-6 md:px-0">
+				<Table
+					caption="Cost of goods sold per business day"
+					columns={cogsColumns}
+					rows={data.cogs}
+					empty="No cost of goods sold in these business days."
+				>
+					{#snippet cell(row, key)}
+						{#if key === 'businessDate'}
+							<span class="text-ink">{row.businessDate}</span>
+						{:else if key === 'sales'}
+							<span class={row.salesNegative ? 'text-danger' : 'text-ink'}>{row.sales ?? '—'}</span>
+						{:else if key === 'revaluation'}
+							<span class={row.revaluationNegative ? 'text-danger' : 'text-ink'}>
+								{row.revaluation ?? '—'}
+							</span>
+						{:else if key === 'total'}
+							<span class={`font-medium ${row.totalNegative ? 'text-danger' : 'text-ink'}`}>
+								{row.total ?? '—'}
+							</span>
+						{/if}
+					{/snippet}
+				</Table>
+			</div>
+		</section>
 
-	<Card>
-		<div class="flex flex-col gap-2">
-			<h3 class="text-ink font-semibold">Stock below zero</h3>
-			<p class="text-ink-2 text-sm">
+		<section class={CARD}>
+			<h3 class={CARD_TITLE}>Ingredients used per business day</h3>
+			<div class="px-6 md:px-0">
+				<Table
+					caption="Ingredients used per business day"
+					columns={consumptionColumns}
+					rows={data.consumption}
+					empty="No sales used any ingredient in these business days."
+				>
+					{#snippet cell(row, key)}
+						{#if key === 'businessDate'}
+							<span class="text-ink">{row.businessDate}</span>
+						{:else if key === 'name'}
+							<span class="text-ink font-medium">{row.name}</span>
+						{:else if key === 'qty'}
+							<span class="text-ink">{row.qty}</span>
+						{:else if key === 'cost'}
+							<span class={row.costNegative ? 'text-danger' : 'text-ink'}>{row.cost ?? '—'}</span>
+						{/if}
+					{/snippet}
+				</Table>
+			</div>
+		</section>
+
+		<section class={CARD}>
+			<h3 class={CARD_TITLE}>Waste</h3>
+			<div class="px-6 md:px-0">
+				<Table
+					caption="Waste"
+					columns={wasteColumns}
+					rows={data.waste}
+					empty="No waste in these business days."
+				>
+					{#snippet cell(row, key)}
+						{#if key === 'businessDate'}
+							<span class="text-ink">{row.businessDate}</span>
+						{:else if key === 'name'}
+							<span class="text-ink font-medium">{row.name}</span>
+						{:else if key === 'qty'}
+							<span class="text-ink">{row.qty}</span>
+						{:else if key === 'reason'}
+							<span class="text-ink">{row.reason}</span>
+							{#if row.note}
+								<span class="text-ink-2 block text-sm">{row.note}</span>
+							{/if}
+						{:else if key === 'cost'}
+							<span class={row.costNegative ? 'text-danger' : 'text-ink'}>{row.cost ?? '—'}</span>
+						{/if}
+					{/snippet}
+				</Table>
+			</div>
+		</section>
+
+		<section class={CARD}>
+			<h3 class={CARD_TITLE}>Stock below zero</h3>
+			<p class={CARD_NOTE}>
 				Sales are never blocked by stock. An ingredient below zero was used before its delivery was
 				entered, or needs a count.
 			</p>
-			<Table
-				caption="Stock below zero"
-				columns={negativeColumns}
-				rows={data.negative}
-				empty="No ingredient is below zero."
-			>
-				{#snippet cell(row, key)}
-					{#if key === 'name'}
-						<span class="text-ink font-medium">{row.name}</span>
-					{:else if key === 'onHand'}
-						<span class="text-danger">{row.onHand}</span>
-					{:else if key === 'status'}
-						<span class="text-danger">◆ below zero</span>
-					{/if}
-				{/snippet}
-			</Table>
-		</div>
-	</Card>
-</div>
+			<div class="px-6 md:px-0">
+				<Table
+					caption="Stock below zero"
+					columns={negativeColumns}
+					rows={data.negative}
+					empty="No ingredient is below zero."
+				>
+					{#snippet cell(row, key)}
+						{#if key === 'name'}
+							<span class="text-ink font-medium">{row.name}</span>
+						{:else if key === 'onHand'}
+							<span class="text-danger">{row.onHand}</span>
+						{:else if key === 'status'}
+							<span class="text-danger"
+								><span aria-hidden="true" class="font-mono">◆</span> below zero</span
+							>
+						{/if}
+					{/snippet}
+				</Table>
+			</div>
+		</section>
+	</div>
+</PageBody>

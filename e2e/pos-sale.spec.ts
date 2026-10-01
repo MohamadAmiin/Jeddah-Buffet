@@ -89,21 +89,27 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	await signIn(tillPage, OWNER);
 	await registerDevice(tillPage, OWNER);
 	await tillPage.evaluate(() => navigator.serviceWorker.ready.then(() => undefined));
-	const status = tillPage.getByRole('status');
+	const status = tillPage.getByRole('status', { name: 'Connection and sync' });
 
 	// 6. Sign in: no session yet, so the PIN lands on /pos/session.
 	await pickEmployee(tillPage, 'The Cashier');
 	await enterPin(tillPage, '4321');
 	await expect(tillPage).toHaveURL(/\/pos\/session$/);
-	await expect(status).toContainText('The Cashier · Cashier');
-	await expect(status).toContainText('○ No session');
-	await expect(tillPage.getByText(/Business date: \d{4}-\d{2}-\d{2}/)).toBeVisible();
+	await expect(tillPage.getByTestId('till-employee')).toContainText('The Cashier · Cashier');
+	await expect(tillPage.getByRole('banner')).toContainText('○ No session');
+	await expect(
+		tillPage.locator('dd').filter({ hasText: /^\s*\d{4}-\d{2}-\d{2}\s*$/ })
+	).toBeVisible();
 
 	// 7. Open with a 500.00 float; the chip shows the SERVER's business date.
 	await openSession(tillPage, 50000n);
 	await expect(status).toContainText('0 unsynced');
-	await expect(status).toContainText(/Business date \d{4}-\d{2}-\d{2}/);
-	const businessDate = /Business date (\d{4}-\d{2}-\d{2})/.exec(await status.innerText())![1];
+	// The till bar's session key names the business date (docs/redesign Phase 1).
+	const sessionKey = tillPage.getByRole('link', { name: /^Session · business date \d{4}-/ });
+	await expect(sessionKey).toBeVisible();
+	const businessDate = /business date (\d{4}-\d{2}-\d{2})/.exec(
+		(await sessionKey.getAttribute('aria-label'))!
+	)![1];
 	const sessions = await dbRows<{
 		status: string;
 		opening_cash_minor: string;
@@ -118,12 +124,13 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	// 8. The first sale, online: Burger + Drink, takeaway, 20.00 tendered.
 	await addItem(tillPage, 'Burger');
 	await addItem(tillPage, 'Drink');
-	const check = tillPage.getByRole('table');
+	const check = tillPage.getByRole('list', { name: 'Lines on the check' });
 	await expect(check).toContainText('@ 8.00 · tax 10.00%');
 	await expect(check).toContainText('@ 2.00 · tax 10.00%');
-	const totals = tillPage.locator('#check-h').locator('xpath=ancestor::section[1]');
+	const totals = tillPage.getByRole('region', { name: 'Current Order' });
 	await expect(totals).toContainText(/Subtotal\s*10\.00/);
-	await expect(totals).toContainText(/Tax\s*1\.00/);
+	// The tax row names the restaurant's tax mode (docs/redesign Phase 2).
+	await expect(totals).toContainText(/Tax \(exclusive\)\s*1\.00/);
 	await expect(totals).toContainText(/Total\s*11\.00/);
 	await chooseOrderType(tillPage, 'Takeaway');
 	await payCash(tillPage, 2000n);
@@ -248,8 +255,10 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	await expect(tillPage.getByRole('heading', { name: 'Who is signing in?' })).toHaveCount(0);
 	await expect(status).toContainText('Offline');
 	await expect(status).toContainText('1 unsynced');
-	await expect(status).toContainText('The Cashier · Cashier');
-	await expect(status).toContainText(`Business date ${businessDate}`);
+	await expect(tillPage.getByTestId('till-employee')).toContainText('The Cashier · Cashier');
+	await expect(
+		tillPage.getByRole('link', { name: `Session · business date ${businessDate} · Close session` })
+	).toBeVisible();
 	await expect(tillPage).toHaveURL(/\/pos\/order$/);
 
 	// 12. Reconnect: the online event flushes the queue.
@@ -344,7 +353,7 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	expect(await count('select count(*)::text as n from journal_entries')).toBe('2');
 	await tillPage.getByRole('button', { name: 'Done' }).click();
 	await expect(tillPage).toHaveURL(/\/pos$/);
-	await expect(status).toContainText('Nobody signed in');
+	await expect(tillPage.getByTestId('till-employee')).toContainText('Nobody signed in');
 
 	// 15. A second session on the same till and date, closed 1.00 short.
 	await pickEmployee(tillPage, 'The Cashier');
@@ -395,7 +404,10 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	// 16. The report, on the owner's dashboard.
 	await page.goto('/dashboard');
 	if (/\/login/.test(page.url())) await signIn(page, OWNER);
-	await page.getByRole('link', { name: 'Reports', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Reports', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/reports/);
 	await expect(page.getByRole('heading', { name: `Sales · ${businessDate}` })).toBeVisible();
 	await page.goto('/reports?date=' + businessDate);
@@ -435,7 +447,10 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 	await expect(items.nth(1)).toContainText(/Difference\s*−1\.00/);
 	await expect(page.getByRole('alert')).toHaveCount(0);
 
-	await page.getByRole('link', { name: 'Overview', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Overview', exact: true })
+		.click();
 	await expect(page.getByText(/sales await your review/)).toHaveCount(0);
 
 	await till.close();

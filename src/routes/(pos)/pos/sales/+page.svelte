@@ -30,6 +30,7 @@
 	import { formatDateTime, ORDER_TYPE_LABELS } from '$lib/pos/receipt';
 	import { onFlushEvent } from '$lib/pos/queue';
 	import { readBoundDeviceId, readCachedSetting, type LocalOrder } from '$lib/pos/store';
+	import { KEY } from '$lib/components/pos/keys';
 
 	const restored = getContext<Promise<void>>(RESTORED_CONTEXT) ?? Promise.resolve();
 
@@ -153,91 +154,92 @@
 		danger: 'bg-danger-bg text-danger',
 		neutral: 'bg-raise-2 text-ink-2'
 	};
-	const action =
-		'min-h-touch-lg border border-control-line rounded-control bg-raise text-ink px-4 font-semibold';
+	const action = `min-h-touch-lg px-4 ${KEY}`;
 	const dead =
 		'min-h-touch-lg border border-control-line rounded-control bg-disabled-bg text-disabled-ink px-4 font-semibold';
 </script>
 
 <svelte:head><title>Sales · matcami</title></svelte:head>
 
-<main class="text-pos mx-auto flex max-w-4xl flex-col gap-4 px-4 py-6">
-	<h1 class="text-title text-ink">Sales on this till</h1>
-	{#if !ready}
-		<p class="text-ink-2">Loading the sales…</p>
-	{:else}
-		{#if failure}
-			<p class="bg-danger-bg text-danger rounded-control px-3 py-2" role="alert">{failure}</p>
-		{/if}
-		{#if !mayPrint}
-			<p class="bg-raise-2 text-ink-2 rounded-control px-3 py-2">
-				○ Reprinting needs the print-receipt permission — ask the owner
-			</p>
-		{/if}
-		{#if sales.length === 0}
-			<p class="text-ink-2">No sales on this till yet</p>
+<main class="text-pos relative flex min-h-0 flex-1 overflow-y-auto p-3 md:p-4 lg:p-6">
+	<div class="mx-auto flex w-full max-w-4xl flex-col gap-4">
+		<h1 class="text-title text-ink">Sales on this till</h1>
+		{#if !ready}
+			<p class="text-ink-2">Loading the sales…</p>
 		{:else}
-			<ul class="flex flex-col gap-3">
-				{#each sales as order (order.id)}
-					{@const mark = saleStatusMark(order)}
-					{@const blocked = blockedBy(order)}
-					<li
-						class="bg-raise border-line rounded-card shadow-flat flex flex-col gap-3 border p-4"
-						data-testid="sale-row"
-					>
-						<div class="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-							<span class="font-mono font-semibold">{order.invoiceNumber ?? '—'}</span>
-							<span class="text-right font-mono tabular-nums">{totalOf(order)}</span>
-						</div>
-						<div class="text-ink-2 flex flex-wrap items-center gap-x-4 gap-y-1">
-							<span>{whenOf(order)}</span>
-							{#if order.sale}
-								<span>{ORDER_TYPE_LABELS[order.sale.payload.orderType]}</span>
-							{/if}
-							<span>{tenderOf(order)}</span>
-							<span class="rounded-full px-3 py-1 font-semibold {TONE[mark.tone]}">
-								<span aria-hidden="true" class="font-mono">{mark.glyph}</span>
-								{mark.text}
-							</span>
-						</div>
-						<div class="flex flex-wrap items-center gap-3">
-							{#each ['receipt', 'kitchen'] as const as kind (kind)}
-								{@const busy = inFlight === `${order.id}:${kind}`}
-								<button
-									type="button"
-									class={blocked !== null || inFlight !== null ? dead : action}
-									disabled={blocked !== null || inFlight !== null}
-									aria-describedby={blocked !== null ? `why-${order.id}` : undefined}
-									onclick={() => void copy(order, kind)}
+			{#if failure}
+				<p class="bg-danger-bg text-danger rounded-control px-3 py-2" role="alert">{failure}</p>
+			{/if}
+			{#if !mayPrint}
+				<p class="bg-raise-2 text-ink-2 rounded-control px-3 py-2">
+					○ Reprinting needs the print-receipt permission — ask the owner
+				</p>
+			{/if}
+			{#if sales.length === 0}
+				<p class="text-ink-2">No sales on this till yet</p>
+			{:else}
+				<ul class="flex flex-col gap-3">
+					{#each sales as order (order.id)}
+						{@const mark = saleStatusMark(order)}
+						{@const blocked = blockedBy(order)}
+						<li
+							class="bg-raise border-line rounded-card shadow-flat flex flex-col gap-3 border p-4"
+							data-testid="sale-row"
+						>
+							<div class="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+								<span class="font-mono font-medium">{order.invoiceNumber ?? '—'}</span>
+								<span class="text-right font-mono tabular-nums">{totalOf(order)}</span>
+							</div>
+							<div class="text-ink-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+								<span>{whenOf(order)}</span>
+								{#if order.sale}
+									<span>{ORDER_TYPE_LABELS[order.sale.payload.orderType]}</span>
+								{/if}
+								<span>{tenderOf(order)}</span>
+								<span class="rounded-full px-3 py-1 font-semibold {TONE[mark.tone]}">
+									<span aria-hidden="true" class="font-mono">{mark.glyph}</span>
+									{mark.text}
+								</span>
+							</div>
+							<div class="flex flex-wrap items-center gap-3">
+								{#each ['receipt', 'kitchen'] as const as kind (kind)}
+									{@const busy = inFlight === `${order.id}:${kind}`}
+									<button
+										type="button"
+										class={blocked !== null || inFlight !== null ? dead : action}
+										disabled={blocked !== null || inFlight !== null}
+										aria-describedby={blocked !== null ? `why-${order.id}` : undefined}
+										onclick={() => void copy(order, kind)}
+									>
+										{busy
+											? 'Sending…'
+											: kind === 'receipt'
+												? 'Reprint receipt'
+												: 'Reprint kitchen ticket'}
+									</button>
+								{/each}
+								{#if blocked !== null}
+									<span id="why-{order.id}" class="text-ink-2">{blocked}</span>
+								{/if}
+							</div>
+							{#if outcomes[order.id]}
+								<p
+									aria-live="polite"
+									class="rounded-control px-3 py-2 {outcomes[order.id].startsWith('●')
+										? 'bg-ok-bg text-ok'
+										: outcomes[order.id].startsWith('◆')
+											? 'bg-st-offline-bg text-st-offline'
+											: outcomes[order.id].startsWith('○')
+												? 'bg-raise-2 text-ink-2'
+												: 'bg-danger-bg text-danger'}"
 								>
-									{busy
-										? 'Sending…'
-										: kind === 'receipt'
-											? 'Reprint receipt'
-											: 'Reprint kitchen ticket'}
-								</button>
-							{/each}
-							{#if blocked !== null}
-								<span id="why-{order.id}" class="text-ink-2">{blocked}</span>
+									{outcomes[order.id]}
+								</p>
 							{/if}
-						</div>
-						{#if outcomes[order.id]}
-							<p
-								aria-live="polite"
-								class="rounded-control px-3 py-2 {outcomes[order.id].startsWith('●')
-									? 'bg-ok-bg text-ok'
-									: outcomes[order.id].startsWith('◆')
-										? 'bg-st-offline-bg text-st-offline'
-										: outcomes[order.id].startsWith('○')
-											? 'bg-raise-2 text-ink-2'
-											: 'bg-danger-bg text-danger'}"
-							>
-								{outcomes[order.id]}
-							</p>
-						{/if}
-					</li>
-				{/each}
-			</ul>
+						</li>
+					{/each}
+				</ul>
+			{/if}
 		{/if}
-	{/if}
+	</div>
 </main>

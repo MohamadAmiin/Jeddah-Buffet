@@ -26,6 +26,7 @@
 	} from '$lib/pos/print-client';
 	import { renderTestPage } from '$lib/pos/receipt';
 	import { readCachedSetting } from '$lib/pos/store';
+	import { KEY, TILL_FIELD } from '$lib/components/pos/keys';
 
 	const restored = getContext<Promise<void>>(RESTORED_CONTEXT) ?? Promise.resolve();
 
@@ -170,124 +171,126 @@
 		}
 	}
 
-	const field =
-		'min-h-touch border border-control-line rounded-control bg-raise text-ink w-full px-4 font-mono';
+	// The till's own key classes (keys.ts). A disabled key takes the disabled PAIR,
+	// never opacity (docs/redesign Phase 8).
+	const field = `${TILL_FIELD} w-full font-mono`;
 	const primary =
-		'min-h-touch-xl w-full border border-control-line rounded-control bg-accent text-accent-ink font-semibold text-pos disabled:opacity-60';
-	const secondary =
-		'min-h-touch-lg border border-control-line rounded-control bg-raise text-ink px-4 font-semibold disabled:opacity-60';
+		'min-h-touch-xl w-full border border-control-line rounded-control bg-accent text-accent-ink font-semibold text-pos disabled:bg-disabled-bg disabled:text-disabled-ink';
+	const secondary = `min-h-touch-lg px-4 ${KEY}`;
 </script>
 
 <svelte:head><title>Printer · matcami</title></svelte:head>
 
-<main class="mx-auto flex max-w-2xl flex-col gap-4 px-4 py-8">
-	{#if !ready}
-		<p class="text-ink-2">Loading…</p>
-	{:else if !isOwner}
-		<h2 class="text-title text-ink">Printer</h2>
-		<p class="bg-raise-2 text-ink-2 rounded-control px-3 py-2">
-			Only the owner can set up the printer.
-		</p>
-		<a
-			class="min-h-touch-lg border-control-line rounded-control bg-raise text-ink inline-flex items-center justify-center border px-4 font-semibold"
-			href={resolve('/pos/order')}>Back to the till</a
-		>
-	{:else}
-		<h2 class="text-title text-ink">Printer</h2>
-		{#if chip !== null}
-			<p
-				data-testid="printer-state"
-				class="rounded-control px-3 py-2 font-semibold {chip.tone === 'ok'
-					? 'bg-ok-bg text-ok'
-					: chip.tone === 'offline'
-						? 'bg-st-offline-bg text-st-offline'
-						: chip.tone === 'danger'
-							? 'bg-danger-bg text-danger'
-							: 'bg-raise-2 text-ink-2'}"
-			>
-				<span aria-hidden="true" class="font-mono">{chip.glyph}</span>
-				{chip.text}
+<main class="relative flex min-h-0 flex-1 overflow-y-auto p-3 md:p-4 lg:p-6">
+	<div class="m-auto flex w-full max-w-2xl flex-col gap-4">
+		{#if !ready}
+			<p class="text-ink-2">Loading…</p>
+		{:else if !isOwner}
+			<h2 class="text-title text-ink">Printer</h2>
+			<p class="bg-raise-2 text-ink-2 rounded-control px-3 py-2">
+				Only the owner can set up the printer.
 			</p>
-		{/if}
-		<p class="text-ink-2">
-			The print agent runs on this PC and owns the printers and the cash drawer. Run
-			<code class="font-mono">init</code> there, then enter the address and token it printed.
-		</p>
-
-		<form
-			class="flex flex-col gap-4"
-			onsubmit={(event) => {
-				event.preventDefault();
-				void saveAndTest();
-			}}
-		>
-			<label class="flex flex-col gap-1">
-				<span class="font-semibold">Agent address</span>
-				<input
-					class={field}
-					type="url"
-					name="agentUrl"
-					bind:value={url}
-					autocomplete="off"
-					spellcheck="false"
-					inputmode="url"
-				/>
-				<span class="text-caption text-ink-2"
-					>http://127.0.0.1:9471 unless the agent's port was changed</span
+			<a
+				class="min-h-touch-lg inline-flex items-center justify-center px-4 {KEY}"
+				href={resolve('/pos/order')}>Back to the till</a
+			>
+		{:else}
+			<h2 class="text-title text-ink">Printer</h2>
+			{#if chip !== null}
+				<p
+					data-testid="printer-state"
+					class="rounded-control px-3 py-2 font-semibold {chip.tone === 'ok'
+						? 'bg-ok-bg text-ok'
+						: chip.tone === 'offline'
+							? 'bg-st-offline-bg text-st-offline'
+							: chip.tone === 'danger'
+								? 'bg-danger-bg text-danger'
+								: 'bg-raise-2 text-ink-2'}"
 				>
-			</label>
-			<label class="flex flex-col gap-1">
-				<span class="font-semibold">Pairing token</span>
-				<input
-					class={field}
-					type="password"
-					name="agentToken"
-					bind:value={token}
-					autocomplete="off"
-					spellcheck="false"
-					placeholder={paired
-						? 'Paired — leave blank to keep the saved token'
-						: '64 characters from init'}
-				/>
-			</label>
-			<button type="submit" class={primary} disabled={busy} data-testid="save-and-test">
-				{busy ? 'Working…' : paired && token.trim() === '' ? 'Test print' : 'Save and test print'}
-			</button>
-		</form>
-
-		{#if failure}
-			<p class="bg-danger-bg text-danger rounded-control px-3 py-2" role="alert">{failure}</p>
-		{/if}
-		{#if results.length > 0}
-			<ul class="flex flex-col gap-2" aria-live="polite" data-testid="test-results">
-				{#each results as line (line)}
-					<li
-						class="rounded-control px-3 py-2 {line.startsWith('●')
-							? 'bg-ok-bg text-ok'
-							: line.startsWith('◆')
-								? 'bg-st-offline-bg text-st-offline'
-								: line.startsWith('✕')
-									? 'bg-danger-bg text-danger'
-									: 'bg-raise-2 text-ink-2'}"
-					>
-						{line}
-					</li>
-				{/each}
-			</ul>
-		{/if}
-
-		<div class="border-line flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+					<span aria-hidden="true" class="font-mono">{chip.glyph}</span>
+					{chip.text}
+				</p>
+			{/if}
 			<p class="text-ink-2">
-				Pairing is stored on this till. Registering the till again clears it.
+				The print agent runs on this PC and owns the printers and the cash drawer. Run
+				<code class="font-mono">init</code> there, then enter the address and token it printed.
 			</p>
-			<button
-				type="button"
-				class={secondary}
-				disabled={busy || !paired}
-				onclick={() => void forget()}
+
+			<form
+				class="flex flex-col gap-4"
+				onsubmit={(event) => {
+					event.preventDefault();
+					void saveAndTest();
+				}}
 			>
-				Forget pairing
-			</button>
-		</div>
-	{/if}
+				<label class="flex flex-col gap-1">
+					<span class="font-semibold">Agent address</span>
+					<input
+						class={field}
+						type="url"
+						name="agentUrl"
+						bind:value={url}
+						autocomplete="off"
+						spellcheck="false"
+						inputmode="url"
+					/>
+					<span class="text-caption text-ink-2"
+						>http://127.0.0.1:9471 unless the agent's port was changed</span
+					>
+				</label>
+				<label class="flex flex-col gap-1">
+					<span class="font-semibold">Pairing token</span>
+					<input
+						class={field}
+						type="password"
+						name="agentToken"
+						bind:value={token}
+						autocomplete="off"
+						spellcheck="false"
+						placeholder={paired
+							? 'Paired — leave blank to keep the saved token'
+							: '64 characters from init'}
+					/>
+				</label>
+				<button type="submit" class={primary} disabled={busy} data-testid="save-and-test">
+					{busy ? 'Working…' : paired && token.trim() === '' ? 'Test print' : 'Save and test print'}
+				</button>
+			</form>
+
+			{#if failure}
+				<p class="bg-danger-bg text-danger rounded-control px-3 py-2" role="alert">{failure}</p>
+			{/if}
+			{#if results.length > 0}
+				<ul class="flex flex-col gap-2" aria-live="polite" data-testid="test-results">
+					{#each results as line (line)}
+						<li
+							class="rounded-control px-3 py-2 {line.startsWith('●')
+								? 'bg-ok-bg text-ok'
+								: line.startsWith('◆')
+									? 'bg-st-offline-bg text-st-offline'
+									: line.startsWith('✕')
+										? 'bg-danger-bg text-danger'
+										: 'bg-raise-2 text-ink-2'}"
+						>
+							{line}
+						</li>
+					{/each}
+				</ul>
+			{/if}
+
+			<div class="border-line flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+				<p class="text-ink-2">
+					Pairing is stored on this till. Registering the till again clears it.
+				</p>
+				<button
+					type="button"
+					class={secondary}
+					disabled={busy || !paired}
+					onclick={() => void forget()}
+				>
+					Forget pairing
+				</button>
+			</div>
+		{/if}
+	</div>
 </main>

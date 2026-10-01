@@ -98,7 +98,10 @@ test('a delivery, a recipe, a till sale: stock, COGS, reports and margin agree',
 	// 3. The stock book after the delivery.
 	const stockRow = (name: string) =>
 		page.getByRole('table', { name: 'Ingredients' }).getByRole('row', { name: new RegExp(name) });
-	await page.getByRole('link', { name: 'Inventory', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Inventory', exact: true })
+		.click();
 	await expect(stockRow('Meat')).toContainText('2000.000 g');
 	await expect(stockRow('Bun')).toContainText('12.000 pcs');
 
@@ -109,14 +112,17 @@ test('a delivery, a recipe, a till sale: stock, COGS, reports and margin agree',
 	// this tab first would spend a second attempt from the throttle every spec in
 	// the run shares (10 per address per 10 minutes, process-local).
 	await registerDevice(tillPage, OWNER);
-	const status = tillPage.getByRole('status');
+	const status = tillPage.getByRole('status', { name: 'Connection and sync' });
 	await pickEmployee(tillPage, 'The Cashier');
 	await enterPin(tillPage, '4321');
 	await openSession(tillPage, 50000n);
 	await expect(status).toContainText('0 unsynced');
-	// The till's status bar (redesigned in PR #13) reads "Business date YYYY-MM-DD".
-	await expect(status).toContainText(/Business date \d{4}-\d{2}-\d{2}/);
-	const businessDate = /Business date (\d{4}-\d{2}-\d{2})/.exec(await status.innerText())![1];
+	// The till bar's session key names the business date (docs/redesign Phase 1).
+	const sessionKey = tillPage.getByRole('link', { name: /^Session · business date \d{4}-/ });
+	await expect(sessionKey).toBeVisible();
+	const businessDate = /business date (\d{4}-\d{2}-\d{2})/.exec(
+		(await sessionKey.getAttribute('aria-label'))!
+	)![1];
 	await addItem(tillPage, 'Burger');
 	await addItem(tillPage, 'Burger');
 	await chooseOrderType(tillPage, 'Takeaway');
@@ -171,7 +177,10 @@ test('a delivery, a recipe, a till sale: stock, COGS, reports and margin agree',
 	]);
 
 	// 7. The reports, for the session's business date.
-	await page.getByRole('link', { name: 'Inventory', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Inventory', exact: true })
+		.click();
 	await page
 		.getByRole('navigation', { name: 'Inventory sections' })
 		.getByRole('link', { name: 'Reports', exact: true })
@@ -187,13 +196,19 @@ test('a delivery, a recipe, a till sale: stock, COGS, reports and margin agree',
 	// 8. The menu: the Burger's cost and margin at the averages now. Each item is a
 	// photo tile (menu-and-printing T-13) whose text begins with the photo or its
 	// "No photo" stand-in, so the tile is found by the name it contains.
-	await page.getByRole('link', { name: 'Menu', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Menu', exact: true })
+		.click();
 	const burger = page.getByRole('listitem').filter({ hasText: 'Burger' }).first();
 	await expect(burger).toContainText(/Cost\s*1\.33/);
 	await expect(burger).toContainText(/Margin\s*6\.67/);
 
 	// 9. The stock book agrees with the books: no mismatch alert.
-	await page.getByRole('link', { name: 'Inventory', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Inventory', exact: true })
+		.click();
 	await expect(page.getByText(/differs from the books/)).toHaveCount(0);
 	await expect(page.getByText(/differs from the stock book/)).toHaveCount(0);
 

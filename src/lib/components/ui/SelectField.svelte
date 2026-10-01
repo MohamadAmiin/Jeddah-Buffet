@@ -36,7 +36,9 @@
 			.join(' ') || undefined
 	);
 
-	const controlClass = 'border-control-line bg-bg text-ink rounded-control border px-3 py-2';
+	// A disabled select takes the disabled PAIR, never opacity (docs/redesign Phase 6).
+	const controlClass =
+		'border-control-line bg-bg text-ink rounded-control border px-3 py-2 disabled:cursor-not-allowed disabled:bg-disabled-bg disabled:text-disabled-ink';
 </script>
 
 <div class="flex flex-col gap-1">

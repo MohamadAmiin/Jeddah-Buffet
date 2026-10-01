@@ -10,6 +10,7 @@
 	// hydration — the defect this design exists to avoid.
 
 	import { onMount } from 'svelte';
+	import Icon, { type IconName } from './Icon.svelte';
 	import {
 		DEFAULT_THEME,
 		THEME_COOKIE,
@@ -17,6 +18,8 @@
 		parseTheme,
 		type Theme
 	} from '$lib/theme';
+
+	let { compact = false }: { compact?: boolean } = $props();
 
 	let selected = $state<Theme | null>(null);
 
@@ -109,35 +112,33 @@
 	const notChosen = 'border-transparent text-rail-ink-2 hover:border-rail-line';
 </script>
 
-<!-- Each button's accessible name is EXACTLY its own word. No "Switch to…" prefix and
-     no icon-only button leaning on a title attribute. Playwright matches an
-     accessible name as a case-insensitive substring, so a label containing
-     `Sign out`, `Sign in`, `Save settings` or `Create restaurant` would make an
-     existing journey step resolve to two elements; Light, Dark and System contain
-     none of them. -->
-<div role="group" aria-label="Theme" class="border-line rounded-control flex gap-1 border p-1">
+<!-- Each button's accessible name is EXACTLY its own word — Light, Dark, System —
+     also when compact, where the word is sr-only beside the icon. No "Switch to…"
+     prefix: Playwright matches an accessible name as a case-insensitive substring,
+     so a label containing `Sign out`, `Sign in`, `Save settings` or `Create
+     restaurant` would make an existing journey step resolve to two elements.
+     The frame is border-rail-line: this control sits on the rail. COMPACT (the
+     collapsed rail) stacks three 40px icon buttons instead of hiding the control. -->
+{#snippet option(value: 'light' | 'dark' | 'system', word: string, icon: IconName)}
 	<button
 		type="button"
-		aria-pressed={selected === 'light'}
-		onclick={() => choose('light')}
-		class={`rounded-control border px-2 py-1 text-xs ${selected === 'light' ? chosen : notChosen}`}
+		aria-pressed={selected === value}
+		onclick={() => (value === 'system' ? chooseSystem() : choose(value))}
+		class="rounded-control flex items-center justify-center gap-1.5 border text-xs {compact
+			? 'size-10'
+			: 'flex-1 px-2 py-1'} {selected === value ? chosen : notChosen}"
 	>
-		Light
+		<Icon name={icon} class="size-4" stroke={1.6} />
+		<span class={compact ? 'sr-only' : ''}>{word}</span>
 	</button>
-	<button
-		type="button"
-		aria-pressed={selected === 'dark'}
-		onclick={() => choose('dark')}
-		class={`rounded-control border px-2 py-1 text-xs ${selected === 'dark' ? chosen : notChosen}`}
-	>
-		Dark
-	</button>
-	<button
-		type="button"
-		aria-pressed={selected === 'system'}
-		onclick={chooseSystem}
-		class={`rounded-control border px-2 py-1 text-xs ${selected === 'system' ? chosen : notChosen}`}
-	>
-		System
-	</button>
+{/snippet}
+
+<div
+	role="group"
+	aria-label="Theme"
+	class="border-rail-line rounded-control flex gap-1 border p-1 {compact ? 'flex-col' : ''}"
+>
+	{@render option('light', 'Light', 'sun')}
+	{@render option('dark', 'Dark', 'moon')}
+	{@render option('system', 'System', 'monitor')}
 </div>

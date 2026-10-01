@@ -78,13 +78,19 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	await createEmployee(page, { displayName: 'The Runner', role: 'waiter', pin: '6789' });
 	// The idle lock: without it the till never restores a signed-in employee on
 	// reload (T-26), and step 7's reload is exactly that restore.
-	await page.getByRole('link', { name: 'POS', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'POS device', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/device$/);
 	await page.getByLabel('Auto-lock after (seconds)').fill('120');
 	await page.getByRole('button', { name: 'Save auto-lock' }).click();
 	await expect(page.getByRole('alert')).toContainText('Auto-lock saved.');
 	// Leave /device: step 11 reaches it again by its rail link and needs a fresh load.
-	await page.getByRole('link', { name: 'Overview', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Overview', exact: true })
+		.click();
 
 	// ── 2. the till, with the persistence request COUNTED before the first load ──
 	const till = await browser.newContext();
@@ -117,6 +123,9 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	});
 
 	// ── 3. the bundle landed, and holds no plaintext PIN ───────────────────────
+	// Wait for it: the first IndexedDB open (which asks to persist) can come from
+	// the till bar's own reads, before the employee directory has been written.
+	await expect.poll(async () => (await storeRows(tillPage, 'employees')).length).toBe(4);
 	const bundle = await storeRows<{
 		id: string;
 		displayName: string;
@@ -182,9 +191,11 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	await pickEmployee(tillPage, 'The Cashier');
 	await enterPin(tillPage, '4321');
 	await expect(tillPage).toHaveURL(/\/pos\/session$/);
-	await expect(tillPage.getByRole('status')).toContainText('The Cashier · Cashier');
+	await expect(tillPage.getByTestId('till-employee')).toContainText('The Cashier · Cashier');
 	// Online attempts are the server's to record: nothing is waiting on the till.
-	await expect(tillPage.getByRole('status')).toContainText('0 unsynced');
+	await expect(tillPage.getByRole('status', { name: 'Connection and sync' })).toContainText(
+		'0 unsynced'
+	);
 
 	// ── 6. OFFLINE: the fallback fires, and the failed request is the proof ─────
 	const failedPinRequests: string[] = [];
@@ -201,10 +212,12 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	await enterPin(tillPage, '0000');
 	await expect(tillPage.getByRole('alert')).toContainText('That PIN is not right');
 	// Invariant 5: the unsynced count is on screen, and it moved with no reload.
-	await expect(tillPage.getByRole('status')).toContainText('1 unsynced');
+	await expect(tillPage.getByRole('status', { name: 'Connection and sync' })).toContainText(
+		'1 unsynced'
+	);
 	await enterPin(tillPage, '5678');
 	await expect(tillPage).toHaveURL(/\/pos\/session$/);
-	await expect(tillPage.getByRole('status')).toContainText('The Waiter · Waiter');
+	await expect(tillPage.getByTestId('till-employee')).toContainText('The Waiter · Waiter');
 	// The till ATTEMPTED the network and caught the throw — never assert the
 	// opposite: a till that short-circuited on navigator.onLine would make the
 	// online half above unreachable.
@@ -217,15 +230,19 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	await expect(tillPage.getByRole('alert')).toContainText('That PIN is not right');
 	await enterPin(tillPage, '4321');
 	await expect(tillPage).toHaveURL(/\/pos\/session$/);
-	await expect(tillPage.getByRole('status')).toContainText('The Cashier · Cashier');
+	await expect(tillPage.getByTestId('till-employee')).toContainText('The Cashier · Cashier');
 
 	// ── 7. the offline session survives a reload ──────────────────────────────
 	// Spec 6's actual guarantee: a till that dies on refresh is not an offline till.
 	await tillPage.reload();
-	await expect(tillPage.getByRole('status')).toContainText('Offline');
-	await expect(tillPage.getByRole('status')).toContainText('4 unsynced');
+	await expect(tillPage.getByRole('status', { name: 'Connection and sync' })).toContainText(
+		'Offline'
+	);
+	await expect(tillPage.getByRole('status', { name: 'Connection and sync' })).toContainText(
+		'4 unsynced'
+	);
 	await expect(tillPage.getByRole('heading', { name: 'Who is signing in?' })).toHaveCount(0);
-	await expect(tillPage.getByRole('status')).toContainText('The Cashier · Cashier');
+	await expect(tillPage.getByTestId('till-employee')).toContainText('The Cashier · Cashier');
 
 	// ── 8. every offline attempt was recorded locally, with its own key ────────
 	const records = await storeRows<OfflineRecord>(tillPage, 'offline_logins');
@@ -286,7 +303,9 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	});
 	await till.setOffline(false);
 	await tillPage.goto(TILL_URL);
-	await expect(tillPage.getByRole('status')).toContainText('0 unsynced');
+	await expect(tillPage.getByRole('status', { name: 'Connection and sync' })).toContainText(
+		'0 unsynced'
+	);
 	const auditRows = await dbRows<{
 		client_op_id: string;
 		event: string;
@@ -320,11 +339,15 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 		dbRows<{ n: string }>('select count(*)::text as n from audit_log').then((rows) => rows[0].n);
 	const before = await auditCount();
 	await tillPage.reload();
-	await expect(tillPage.getByRole('status')).toContainText('0 unsynced');
+	await expect(tillPage.getByRole('status', { name: 'Connection and sync' })).toContainText(
+		'0 unsynced'
+	);
 	expect(await auditCount()).toBe(before);
 	await till.setOffline(true);
 	await till.setOffline(false);
-	await expect(tillPage.getByRole('status')).toContainText('0 unsynced');
+	await expect(tillPage.getByRole('status', { name: 'Connection and sync' })).toContainText(
+		'0 unsynced'
+	);
 	expect(await auditCount()).toBe(before);
 	const pinBody = pinBodies.find((b) => b.includes('"pin.login"'));
 	expect(pinBody).toBeDefined();
@@ -346,7 +369,10 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	// till so, it must not go on signing staff in offline from the PIN hashes it
 	// still holds. The accepted stolen-tablet GAP covers a till that never
 	// reconnects, not one that has been told. The unsynced records stay.
-	await page.getByRole('link', { name: 'POS', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'POS device', exact: true })
+		.click();
 	await page.getByText('Revoke this device…').click();
 	await page.getByRole('button', { name: 'Revoke device' }).click();
 	await expect(page.getByRole('alert')).toContainText('Device revoked');
@@ -356,7 +382,8 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	expect(await storeRows(tillPage, 'employees')).toEqual([]);
 
 	await tillPage.goto(`/pos/pin?employee=${idOf('The Cashier')}`);
-	await expect(tillPage.getByRole('heading', { name: 'Enter your PIN' })).toBeVisible();
+	// The bundle is forgotten, so the screen cannot name who the PIN is for.
+	await expect(tillPage.getByRole('heading', { name: /^Enter the PIN\b/ })).toBeVisible();
 	await till.setOffline(true);
 	await enterPin(tillPage, '4321');
 	await expect(tillPage.getByRole('alert')).toContainText('cannot check a PIN offline');
@@ -365,7 +392,9 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	expect(
 		(await storeRows<OfflineRecord>(tillPage, 'offline_logins')).filter((r) => r.synced === false)
 	).toHaveLength(0);
-	await expect(tillPage.getByRole('status')).toContainText('0 unsynced');
+	await expect(tillPage.getByRole('status', { name: 'Connection and sync' })).toContainText(
+		'0 unsynced'
+	);
 
 	// ── 12. re-registered as POS2: a new offline login syncs under POS2 ────────
 	await till.setOffline(false);
@@ -384,7 +413,9 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	await pickEmployee(tillPage, 'The Waiter');
 	await enterPin(tillPage, '5678');
 	await expect(tillPage).toHaveURL(/\/pos\/session$/);
-	await expect(tillPage.getByRole('status')).toContainText('1 unsynced');
+	await expect(tillPage.getByRole('status', { name: 'Connection and sync' })).toContainText(
+		'1 unsynced'
+	);
 	const newRecords = (await storeRows<OfflineRecord>(tillPage, 'offline_logins')).filter(
 		(r) => r.synced === false
 	);
@@ -392,7 +423,9 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 	expect(newRecords[0].deviceId).toBe(pos2Id);
 
 	await till.setOffline(false);
-	await expect(tillPage.getByRole('status')).toContainText('0 unsynced');
+	await expect(tillPage.getByRole('status', { name: 'Connection and sync' })).toContainText(
+		'0 unsynced'
+	);
 	const deviceOf = async (clientOpId: string) =>
 		(
 			await dbRows<{ device_id: string }>(

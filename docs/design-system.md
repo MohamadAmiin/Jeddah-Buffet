@@ -170,6 +170,36 @@ PIN fields: PinField only — digits, 4 to 6, masked with a show/hide toggle; th
 - `ThemeToggle` — the dashboard light/dark theme control.
 
 **Tables.** Tables stack below Tailwind's `md` breakpoint and **never scroll horizontally**. Below `md`, each row presents column labels beside their values. Money and counts use `font-mono tabular-nums` and are right-aligned at `md` and above.
+
+**Layout groundwork (docs/redesign, Phase 0).** Conventions every later layout change builds on, on both surfaces:
+
+- **"You are here".** A current nav row or tab carries a bare `data-current` attribute and is styled with Tailwind v4's built-in `data-current:` variant. The exact page also carries `aria-current="page"` for assistive tech. No custom variant.
+- **Stacking scale** (Tailwind's own `z-*`): `z-10` sticky aside · `z-20` sticky action bar · `z-30` phone top bar · `z-40` navigation drawer and phone check sheet · `z-50` skip link and till menus. The drawer and sheet sit on `bg-scrim` (`--c-scrim`).
+- **Focus on a rail.** Every rail-coloured surface (the Sidebar, the phone top bar, the navigation drawer, the till bar) carries `data-rail`, and `base.css` swaps the ring to `--c-rail-ring` there, because the accent ring measures 2.37:1 on the dashboard rail and 1.58:1 on the till bar. A light panel that opens inside a rail carries `data-panel` and keeps the accent ring. `tokens.test.ts` asserts `rail-ring` on `rail` at 3:1.
+- **Mono weights.** IBM Plex Mono ships 400 and 500 only. A mono figure is `font-medium` at most, including where `font-mono` meets a heavier role (`text-display`, `text-title`, `text-section`); a heavier weight is synthesised bold. `text-total` is a complete role at weight 500.
+- **One icon set.** `src/lib/components/ui/Icon.svelte` (24×24, `currentColor`, round caps, `aria-hidden`; stroke 1.8, 1.6 on the rail). `PosIcon` is a thin wrapper over it. An icon never carries meaning alone.
+- **Till components and key classes.** Shared till components live in `src/lib/components/pos/`, where the touch tokens are allowed (they stay banned in `ui/`). The key class strings (`KEY`, `KEY_CHOSEN`, `TILL_FIELD`) come from `src/lib/components/pos/keys.ts`, not retyped. The money tripwire in `menu-view.test.ts` scans every file in `pos/`.
+
+**The till shell (docs/redesign, Phases 1–4). THE TILL NEVER SCROLLS THE DOCUMENT.** The viewport is the frame: one `h-dvh overflow-hidden` shell, the 64px `TillBar` on top, and below it panes that scroll inside themselves, every closer pinned to the bottom of its pane.
+
+- **One bar, one row.** `TillBar` (`pos/TillBar.svelte`) holds the POS link, the restaurant and till, the status group — `role="status"` named "Connection and sync", holding ONLY the Online/Offline and unsynced pills — one warnings chip for everything else, the printer chip, the clock, the session key and the employee menu. Only the restaurant block may shrink; everything else is `shrink-0` and appears by breakpoint. It stays one 64px row, online and offline, down to 390px.
+- **The primary action always lives in the same place.** On `/pos/order` and `/pos/pay` it is the 96px closer at the bottom-right of the shared `Check` (`pos/Check.svelte`, `edit` and `bill` modes); on the keypad screens it is the last element of the keypad or form card, and the card is vertically centred and always fits. A closer that cannot be pressed keeps its NAME and says why beside it (`pos/Closer.svelte`).
+- **One of each.** `Keypad`, `Closer`, `TillBanner` (every till notice; it draws the glyph, callers pass words) and the `Icon` set.
+- **A scrolling box is `position: relative`,** so `sr-only` text inside it cannot stretch the document (it did: 1057px with twelve lines on the check).
+
+**The dashboard shell (docs/redesign, Phase 5).** From `lg` a full-height, sticky rail (`Sidebar variant="rail"`, collapsible); below `lg` a 56px `MobileBar` whose menu button opens the same navigation in `NavDrawer` — a native modal `<dialog>` that is its own scrim (focus trap, Escape, focus return, closes on a tap outside and on navigation). A skip link comes first. A rail row is current BY PREFIX (`data-current`); `aria-current="page"` marks the exact page only.
+
+**Page templates (docs/redesign, Phases 6–7).** Every dashboard page is `PageHeader` + `PageBody`, or `PageColumns` inside `PageBody` — one centred `max-w-page` container and one gutter rule.
+
+- **`PageHeader`** — eyebrow or breadcrumb, the title (`text-title`), a description, one primary action; a `below` slot for sub-navigation.
+- **`PageColumns`** — main plus a side column: *default* (always visible), *collapsible* (create panels: beside the list at `xl`, opened ABOVE it below `xl` by an "Add …" link, `?add=1#<panel id>`) or *asideFirst* (master–detail). `showAside={false}` when the side column would be empty.
+- **No create form sits below its list.** It is a `CreatePanel` in a collapsible side column.
+- **Long forms get the sticky `ActionBar`** (`sticky bottom-0 z-20 mt-auto`), after `PageBody`, its submit using `form="…"`: Save is always in view, and the form's result appears beside it.
+- **An outcome message appears in the card — or the ActionBar — of the form that produced it,** never at the top of the page, and at most one `role="alert"` is visible.
+- **`Callout`** is a standing notice with an action (`role="status"`); **`StatTile`** is one figure on the Overview.
+- **Button defaults to `secondary`:** a primary is chosen on purpose, one per view.
+
+`e2e/layout.spec.ts` measures these rules at 1280×800, 1280×720, 1024×768 and 390×844.
 ### Legal ink-on-surface pairs
 
 **Check this table before pairing an ink with a surface. Adding a new pair means measuring it.** Ratios are WCAG relative luminance computed from the hex values in `src/lib/styles/tokens.css`. Every rule is the **intersection of both themes**, so no screen has to be reasoned about twice.

@@ -48,20 +48,60 @@ describe('dashboard UI primitives', () => {
 		expect(source).not.toContain('sessionStorage');
 	});
 
-	it.each(['CheckField', 'SelectField', 'Table'])(
-		'%s uses no arbitrary values or POS-only tokens',
-		(name) => {
-			const source = readPrimitive(name);
+	// docs/redesign Phase 6: a primary is chosen on purpose, one per view.
+	it('Button defaults to the secondary variant and merges a caller class', () => {
+		const source = readPrimitive('Button');
 
-			const arbitraryColor = new RegExp('\\[#[0-9a-fA-F]{3,8}\\]');
-			const arbitrarySize = new RegExp('\\[\\d+(?:\\.\\d+)?px\\]');
-			const posTouch = ['p', 'touch'].join('-');
-			const screenToken = ['--c', 'screen'].join('-');
+		expect(source).toContain("variant = 'secondary'");
+		expect(source).toContain('${className}');
+	});
 
-			expect(source).not.toMatch(arbitraryColor);
-			expect(source).not.toMatch(arbitrarySize);
-			expect(source).not.toContain(posTouch);
-			expect(source).not.toContain(screenToken);
-		}
-	);
+	it('Table insets headers and cells alike, headers in the body face', () => {
+		const source = readPrimitive('Table');
+
+		expect(source).toContain('px-6 py-3 text-start');
+		expect(source).toContain('md:px-6');
+		expect(source).not.toMatch(/<th[\s\S]*?font-mono[\s\S]*?<\/th>/);
+	});
+
+	it('ActionBar is a sticky bar at the bottom that follows the page container', () => {
+		const source = readPrimitive('ActionBar');
+
+		expect(source).toContain('sticky bottom-0');
+		expect(source).toContain('mt-auto');
+		expect(source).toContain('max-w-page');
+	});
+
+	it('PageColumns keeps the main content first in the DOM unless asideFirst', () => {
+		const source = readPrimitive('PageColumns');
+
+		expect(source).toContain('{#if asideFirst}{@render side()}{/if}');
+		expect(source).toContain('{#if !asideFirst}{@render side()}{/if}');
+		expect(source).toContain('order-first xl:sticky xl:top-6 xl:order-none');
+	});
+
+	it.each([
+		'CheckField',
+		'SelectField',
+		'Table',
+		'PageHeader',
+		'PageBody',
+		'PageColumns',
+		'CreatePanel',
+		'ActionBar',
+		'Callout',
+		'StatTile'
+	])('%s uses no arbitrary values or POS-only tokens', (name) => {
+		const source = readPrimitive(name);
+
+		const arbitraryColor = new RegExp('\\[#[0-9a-fA-F]{3,8}\\]');
+		const arbitrarySize = new RegExp('\\[\\d+(?:\\.\\d+)?px\\]');
+		const posTouch = ['p', 'touch'].join('-');
+		const screenToken = ['--c', 'screen'].join('-');
+
+		expect(source).not.toMatch(arbitraryColor);
+		expect(source).not.toMatch(arbitrarySize);
+		expect(source).not.toContain(posTouch);
+		expect(source).not.toContain(screenToken);
+	});
 });

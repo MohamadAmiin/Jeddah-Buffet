@@ -9,11 +9,12 @@ import { describe, it, expect } from 'vitest';
 const source = readFileSync(fileURLToPath(new URL('./Sidebar.svelte', import.meta.url)), 'utf8');
 
 describe('the dashboard rail', () => {
-	// The label and the URL differ on purpose: "POS" is the row the owner looks
-	// for, and /device is the dashboard page that registers, revokes and launches
-	// the till — /pos is the till itself.
-	it('has a POS row pointing at the dashboard page, not at the till', () => {
-		expect(source).toMatch(/label:\s*'POS',\s*href:\s*'\/device',\s*icon:\s*'pos'/);
+	// The label and the URL differ on purpose: "POS device" is the row the owner
+	// looks for (docs/redesign Phase 5: one name per section), and /device is the
+	// dashboard page that registers, revokes and launches the till — /pos is the
+	// till itself.
+	it('has a POS device row pointing at the dashboard page, not at the till', () => {
+		expect(source).toMatch(/label:\s*'POS device',\s*href:\s*'\/device',\s*icon:\s*'pos'/);
 	});
 
 	it('has no Devices row left', () => {
@@ -50,8 +51,17 @@ describe('the dashboard rail', () => {
 		expect(source.match(/href: null/g)?.length).toBe(1);
 	});
 
-	it('has a live Purchases row', () => {
-		expect(source).toMatch(/label:\s*'Purchases',\s*href:\s*'\/purchases'/);
+	// Called what its page is called: /purchases is titled Deliveries.
+	it('has a live Deliveries row', () => {
+		expect(source).toMatch(/label:\s*'Deliveries',\s*href:\s*'\/purchases'/);
+	});
+
+	// "You are here" by prefix: a sub-page keeps its section lit (data-current), and
+	// only the exact page is aria-current.
+	it('marks the current row by prefix, and aria-current only on the exact page', () => {
+		expect(source).toContain('pathname.startsWith(`${href}/`)');
+		expect(source).toContain("aria-current={pathname === item.href ? 'page' : undefined}");
+		expect(source).toContain('data-current:bg-rail-active');
 	});
 
 	it('has a live Inventory row', () => {

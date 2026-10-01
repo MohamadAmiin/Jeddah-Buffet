@@ -6,12 +6,13 @@
 	// in the specimen they show, so the layout lives here exactly once — two copies
 	// of one grid is precisely how two pages drift apart.
 	//
-	// THE STACKING MOVE IS `order`, NEVER SOURCE ORDER. The DOM keeps the form panel
-	// FIRST at every width, so the first tab stop on the page is the first field. A
-	// keyboard user never tabs through the brand half to reach the door. Below the
-	// two-column breakpoint the brand half moves ABOVE the form visually, because it
-	// is the smaller of the two and a form pushed under a full screen of brand is a
-	// form nobody reaches.
+	// THE FORM COMES FIRST, in the DOM AND on screen, at every width (docs/redesign
+	// Phase 7, mockup Phone-Sign-in). The first tab stop on the page is the first
+	// field, and on a phone the first thing seen is the door itself. Below the
+	// two-column breakpoint the brand half becomes a COMPACT BAND after the form:
+	// the eyebrow and the statement only — the specimen (the `brand` snippet) is
+	// hidden below `sm`, where it would be a second screen of scrolling that says
+	// nothing the statement does not.
 	//
 	// THE BREAKPOINT IS `lg` (64rem), NOT the sample's 54rem. There is no
 	// --breakpoint-* token in the token layer and this file may not invent one, so
@@ -73,7 +74,7 @@
 	     child whose default min-width:auto would otherwise let a long string push the
 	     whole page sideways. -->
 	<div
-		class="bg-raise order-2 flex min-w-0 items-center justify-center px-5 py-10 sm:px-8 sm:py-14 lg:order-1 lg:col-span-5 lg:px-14"
+		class="bg-raise flex min-w-0 items-center justify-center px-5 py-8 sm:px-8 sm:py-14 lg:col-span-5 lg:px-14"
 	>
 		<div class="max-w-form flex w-full min-w-0 flex-col gap-6">
 			<div class="flex flex-col gap-1">
@@ -134,15 +135,18 @@
 	     statement is a real h2 instead, so the panel is already named by its own
 	     heading in the document outline. -->
 	<aside
-		class="bg-accent text-accent-ink order-1 flex min-w-0 items-center justify-center px-5 py-10 sm:px-8 sm:py-14 lg:order-2 lg:col-span-4 lg:px-12"
+		class="bg-accent text-accent-ink flex min-w-0 items-center justify-center px-5 py-8 sm:px-8 sm:py-14 lg:col-span-4 lg:px-12"
 	>
-		<div class="max-w-form flex w-full min-w-0 flex-col gap-5">
+		<div class="max-w-form flex w-full min-w-0 flex-col gap-4 sm:gap-5">
 			<p class="text-eyebrow font-mono uppercase">{eyebrow}</p>
 			<h2 class="text-title">{statement}</h2>
 			<!-- A short, full-strength rule rather than a faded full-width one: the
 			     accent ground has one legal ink and no faded variant of it. -->
 			<hr class="border-accent-ink w-10 border-t-2" />
-			{@render brand()}
+			<!-- The specimen and its caption: hidden below sm, where the band is compact. -->
+			<div class="hidden min-w-0 flex-col gap-5 sm:flex">
+				{@render brand()}
+			</div>
 		</div>
 	</aside>
 </main>

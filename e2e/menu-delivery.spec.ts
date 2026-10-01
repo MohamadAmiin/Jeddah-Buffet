@@ -101,7 +101,7 @@ test('menu photos, optional categories and a Delivery sale, online and offline',
 	await signIn(tillPage, OWNER);
 	await registerDevice(tillPage, OWNER);
 	await tillPage.evaluate(() => navigator.serviceWorker.ready.then(() => undefined));
-	const status = tillPage.getByRole('status');
+	const status = tillPage.getByRole('status', { name: 'Connection and sync' });
 	await pickEmployee(tillPage, 'The Cashier');
 	await enterPin(tillPage, '4321');
 	await expect(tillPage).toHaveURL(/\/pos\/session$/);
@@ -112,8 +112,8 @@ test('menu photos, optional categories and a Delivery sale, online and offline',
 	//    Dine in pressed before anything is chosen.
 	await expect(tillPage.getByRole('tab', { name: 'Drinks' })).toBeVisible();
 	await expect(tillPage.getByRole('tab', { name: 'Other' })).toBeVisible();
-	await expect(tillPage.getByRole('button', { name: 'Dine in', exact: true })).toHaveAttribute(
-		'aria-pressed',
+	await expect(tillPage.getByRole('radio', { name: 'Dine in', exact: true })).toHaveAttribute(
+		'aria-checked',
 		'true'
 	);
 	await tillPage.getByRole('tab', { name: 'Other' }).click();
@@ -127,14 +127,17 @@ test('menu photos, optional categories and a Delivery sale, online and offline',
 	await chooseOrderType(tillPage, 'Delivery');
 	await addItem(tillPage, 'Burger');
 	await payCash(tillPage, 1000n);
-	await expect(tillPage.getByText('● Paid')).toBeVisible();
+	await expect(tillPage.getByText('● Paid', { exact: true })).toBeVisible();
 	await expect(status).toContainText('0 unsynced');
 	expect(await dbRows('select order_type, table_label, status from orders')).toEqual([
 		{ order_type: 'delivery', table_label: null, status: 'paid' }
 	]);
 
 	// 6. The dashboard report lists the Delivery row: one sale, 8.80.
-	await page.getByRole('link', { name: 'Reports', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Reports', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/reports/);
 	const byOrderType = page
 		.getByRole('heading', { name: 'By order type' })
@@ -142,7 +145,10 @@ test('menu photos, optional categories and a Delivery sale, online and offline',
 	await expect(byOrderType).toContainText(/Delivery\s*1\s*8\.80/);
 
 	// 7. Sold out and archived on the dashboard; the till re-syncs on employee select.
-	await page.getByRole('link', { name: 'Menu', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Menu', exact: true })
+		.click();
 	await page
 		.getByRole('listitem')
 		.filter({ hasText: 'Tea' })

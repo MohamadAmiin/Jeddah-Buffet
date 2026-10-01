@@ -65,6 +65,11 @@
          without the copy: --c-accent correct, --c-ring still the page accent. */
   --c-ring: var(--c-accent);
   --c-control-line: var(--c-ink-3);
+  /* The focus ring on a rail-coloured surface (the Sidebar, the phone bar, the
+     navigation drawer, the till bar): the accent ring measures 2.37:1 on the
+     dashboard rail and 1.58:1 on the till bar, below WCAG 1.4.11. base.css swaps
+     it in under [data-rail]. An alias, so the till scope re-declares it too. */
+  --c-rail-ring: var(--c-rail-ink);
 
   /* domain status. Colour is NEVER the only carrier — pair each with its glyph:
      item  NEW ◇ · SENT ▲ · VOIDED ✕ (struck through)
@@ -115,6 +120,10 @@
   --c-shadow-raised:   0 1px 0 rgb(255 255 255 / .8), 0 6px 20px -14px rgb(22 27 32 / .45);
   --c-shadow-floating: 0 1px 0 rgb(255 255 255 / .9), 0 18px 44px -22px rgb(22 27 32 / .55);
   --c-shadow: var(--c-shadow-raised);
+
+  /* The veil behind the navigation drawer and the phone check sheet. Not a text
+     ground, so it is not in the contrast census. */
+  --c-scrim: rgb(22 27 32 / 0.55);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -148,6 +157,7 @@
     --c-shadow-raised:   0 1px 0 rgb(255 255 255 / .04), 0 8px 24px -12px rgb(0 0 0 / .8);
     --c-shadow-floating: 0 1px 0 rgb(255 255 255 / .06), 0 22px 50px -20px rgb(0 0 0 / .9);
     --c-shadow: var(--c-shadow-raised);
+    --c-scrim: rgb(0 0 0 / 0.6);
   }
 }
 :root[data-theme="dark"] {
@@ -173,6 +183,7 @@
   --c-disabled-bg:#2b3139; --c-disabled-ink:#a8b3bc;   /* 6.15 */
   --c-rail:#1b2329; --c-rail-active:#0f6b7e; --c-rail-raise:#252f36;
   --c-rail-ink:#ffffff; --c-rail-ink-2:#8799a4; --c-rail-line:#697981;
+  --c-scrim: rgb(0 0 0 / 0.6);
 }
 
 /* ── 1b. THE POS DEVICE SURFACE — LIGHT, PINNED IN BOTH THEMES ───────────────
@@ -225,6 +236,7 @@
      alias declared above it never recomputes here. See the note in :root. */
   --c-ring: var(--c-accent);
   --c-control-line: var(--c-ink-3);
+  --c-rail-ring: var(--c-rail-ink);
 
   --c-shadow-flat:     0 1px 0 rgb(255 255 255 / .8), 0 1px 2px -1px rgb(22 27 32 / .18);
   --c-shadow-raised:   0 1px 0 rgb(255 255 255 / .8), 0 6px 20px -14px rgb(22 27 32 / .45);
@@ -235,6 +247,7 @@
      token, so a dark-theme viewer never inherits a dark value into the till. */
   --c-rail:#0b3b36; --c-rail-active:#16775f; --c-rail-raise:#134a43;
   --c-rail-ink:#ffffff; --c-rail-ink-2:#a8c8c1; --c-rail-line:#5f8d85;
+  --c-scrim: rgb(22 27 32 / 0.55);
 }
 
 /* ── 2. themeable tokens → Tailwind utilities (bg-raise, text-ink-2, …) ─── */
@@ -281,6 +294,9 @@
   --color-rail-ink:    var(--c-rail-ink);
   --color-rail-ink-2:  var(--c-rail-ink-2);
   --color-rail-line:   var(--c-rail-line);
+  --color-rail-ring:   var(--c-rail-ring);
+
+  --color-scrim:       var(--c-scrim);
 
   --shadow-card:     var(--c-shadow);
   --shadow-flat:     var(--c-shadow-flat);
@@ -332,8 +348,17 @@
   --text-eyebrow--letter-spacing: 0.16em;
   --text-eyebrow--font-weight: 500;
 
-  --text-pos:   1.0625rem;  /* 17px — POS body, read standing at arm's length */
-  --text-total: 2.5rem;     /* 40px — the order total, the most-read number */
+  /* 17px — POS body, read standing at arm's length */
+  --text-pos: 1.0625rem;
+  --text-pos--line-height: 1.45;
+
+  /* 40px — the order total, the most-read number. A complete role: a bare size
+     sat the 40px figure in a 60px line box. Weight 500 because IBM Plex Mono
+     ships only 400 and 500 — anything heavier is synthesised bold. */
+  --text-total: 2.5rem;
+  --text-total--line-height: 1.1;
+  --text-total--letter-spacing: -0.01em;
+  --text-total--font-weight: 500;
 
   /* Dashboard scale. Static, not themeable — plain @theme is correct here.
      Yields rounded-card, rounded-control and max-w-page. */

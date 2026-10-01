@@ -44,6 +44,33 @@
 		outline-offset: 2px;
 	}
 
+	/* On a rail-coloured surface (the Sidebar, the phone bar, the navigation drawer,
+	   the till bar) the accent ring is 2.37:1 or worse, so the ring switches to
+	   --c-rail-ring. A light panel that opens inside a rail ([data-panel]: the till's
+	   employee menu and warnings list) keeps the normal ring, or it would be white
+	   on white. */
+	[data-rail] {
+		--c-ring: var(--c-rail-ring);
+	}
+	[data-rail] [data-panel] {
+		--c-ring: var(--c-accent);
+	}
+
+	/* Preflight's placeholder colour measures 3.33:1; ink-2 is the lightest legal
+	   ink on every ground. */
+	::placeholder {
+		color: var(--c-ink-2);
+	}
+
+	/* A <summary> used as a control draws its own chevron, so drop the marker —
+	   the second rule is for Safari and iPad. */
+	summary {
+		list-style: none;
+	}
+	summary::-webkit-details-marker {
+		display: none;
+	}
+
 	/* Controls inherit the page face instead of silently falling back to the
 	   browser's own. */
 	input,

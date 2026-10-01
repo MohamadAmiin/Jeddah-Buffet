@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440">
+<title>Dashboard · Menu · matcami redesign</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="mockup.css">
+</head>
+<body>
+<div class="mock-root" style="width:1440px;height:900px">
+<a href="#content" class="sr-only focus:not-sr-only">Skip to content</a>
+<div class="min-h-dvh bg-bg lg:flex">
+  <aside data-rail aria-label="Workspace" class="bg-rail sticky top-0 hidden h-dvh w-65 shrink-0 flex-col border-r border-rail-line text-rail-ink lg:flex">
+    <div class="flex items-center gap-3 px-4 py-4">
+  <span class="grid size-10 shrink-0 place-items-center rounded-control bg-rail-ink font-display text-title text-rail" aria-hidden="true">m</span>
+  <div class="flex min-w-0 flex-1 flex-col">
+<h1 class="truncate font-sans text-section">Jeddah Buffet</h1>    <p class="text-caption text-rail-ink-2">Owner workspace</p>
+  </div>
+  <button type="button" aria-expanded="true" class="grid size-8 place-items-center rounded-control border border-rail-line text-rail-ink-2 hover:text-rail-ink" aria-label="Collapse the sidebar"><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M15 6l-6 6 6 6"></path></svg></button>
+</div>
+    <nav aria-label="Dashboard sections" class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-3 pb-4 pt-1">
+  <div class="flex flex-col gap-1">
+    <ul class="flex flex-col gap-0.5">
+      <li>
+        <a href="/dashboard" class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption font-medium text-rail-ink hover:bg-rail-raise data-current:border-rail-ink data-current:bg-rail-active data-current:font-semibold"><svg class="rail-icon size-5 text-rail-ink-2" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.5 4h3A1.5 1.5 0 0 1 10 5.5v3A1.5 1.5 0 0 1 8.5 10h-3A1.5 1.5 0 0 1 4 8.5v-3A1.5 1.5 0 0 1 5.5 4z"></path><path d="M15.5 4h3A1.5 1.5 0 0 1 20 5.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 14 8.5v-3A1.5 1.5 0 0 1 15.5 4z"></path><path d="M5.5 14h3a1.5 1.5 0 0 1 1.5 1.5v3A1.5 1.5 0 0 1 8.5 20h-3A1.5 1.5 0 0 1 4 18.5v-3A1.5 1.5 0 0 1 5.5 14z"></path><path d="M15.5 14h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3a1.5 1.5 0 0 1-1.5-1.5v-3a1.5 1.5 0 0 1 1.5-1.5z"></path></svg>Overview</a>
+      </li>
+    </ul>
+  </div>
+  <div class="flex flex-col gap-1">
+<p id="rail-grp-catalogue" class="px-3 pb-0.5 text-eyebrow uppercase text-rail-ink-2">Catalogue</p>    <ul class="flex flex-col gap-0.5" aria-labelledby="rail-grp-catalogue">
+      <li>
+        <a href="/menu" aria-current="page" data-current="true" class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption font-medium text-rail-ink hover:bg-rail-raise data-current:border-rail-ink data-current:bg-rail-active data-current:font-semibold"><svg class="rail-icon size-5 text-rail-ink" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 6.5C10 5 7 4.5 4 5v13.5c3-.5 6 0 8 1.5 2-1.5 5-2 8-1.5V5c-3-.5-6 0-8 1.5z"></path><path d="M12 6.5V20"></path></svg>Menu</a>
+      </li>
+      <li>
+        <a href="/inventory" class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption font-medium text-rail-ink hover:bg-rail-raise data-current:border-rail-ink data-current:bg-rail-active data-current:font-semibold"><svg class="rail-icon size-5 text-rail-ink-2" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3.5 7.5 12 3.5l8.5 4v9L12 20.5l-8.5-4z"></path><path d="M3.5 7.5 12 11.5l8.5-4"></path><path d="M12 11.5v9"></path></svg>Inventory</a>
+      </li>
+    </ul>
+  </div>
+  <div class="flex flex-col gap-1">
+<p id="rail-grp-money" class="px-3 pb-0.5 text-eyebrow uppercase text-rail-ink-2">Money</p>    <ul class="flex flex-col gap-0.5" aria-labelledby="rail-grp-money">
+      <li>
+        <a href="/purchases" class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption font-medium text-rail-ink hover:bg-rail-raise data-current:border-rail-ink data-current:bg-rail-active data-current:font-semibold"><svg class="rail-icon size-5 text-rail-ink-2" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 4h2.2l2.3 11h10.8L20.5 7H6.4"></path><path d="M9 20v.1"></path><path d="M17.5 20v.1"></path></svg>Deliveries</a>
+      </li>
+      <li>
+        <span class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption text-rail-ink-2"><svg class="rail-icon size-5" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"></path><path d="M9 8h6"></path><path d="M9 12h6"></path></svg>Expenses<span class="ml-auto rounded-full border border-rail-line px-1.5 py-0.5 font-mono text-eyebrow uppercase">Soon<span class="sr-only"> — not built yet</span></span></span>
+      </li>
+      <li>
+        <a href="/reports" class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption font-medium text-rail-ink hover:bg-rail-raise data-current:border-rail-ink data-current:bg-rail-active data-current:font-semibold"><svg class="rail-icon size-5 text-rail-ink-2" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20h16"></path><path d="M7 16.5v-5"></path><path d="M12 16.5V7"></path><path d="M17 16.5v-8"></path></svg>Reports</a>
+      </li>
+    </ul>
+  </div>
+  <div class="flex flex-col gap-1">
+<p id="rail-grp-setup" class="px-3 pb-0.5 text-eyebrow uppercase text-rail-ink-2">Setup</p>    <ul class="flex flex-col gap-0.5" aria-labelledby="rail-grp-setup">
+      <li>
+        <a href="/employees" class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption font-medium text-rail-ink hover:bg-rail-raise data-current:border-rail-ink data-current:bg-rail-active data-current:font-semibold"><svg class="rail-icon size-5 text-rail-ink-2" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"></path><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"></path><path d="M16 4.3a3.5 3.5 0 0 1 0 6.7"></path><path d="M18.2 14.3c1.7.8 2.8 2.9 2.8 5.7"></path></svg>Employees</a>
+      </li>
+      <li>
+        <a href="/device" class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption font-medium text-rail-ink hover:bg-rail-raise data-current:border-rail-ink data-current:bg-rail-active data-current:font-semibold"><svg class="rail-icon size-5 text-rail-ink-2" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 10.5h16V20H4z"></path><path d="M7 10.5V4h10v6.5"></path><path d="M9.5 7h5"></path><path d="M8 14h2"></path><path d="M14 14h2"></path><path d="M8 17h2"></path><path d="M14 17h2"></path></svg>POS device</a>
+      </li>
+      <li>
+        <a href="/settings" class="flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption font-medium text-rail-ink hover:bg-rail-raise data-current:border-rail-ink data-current:bg-rail-active data-current:font-semibold"><svg class="rail-icon size-5 text-rail-ink-2" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 7h9"></path><path d="M17 7h3"></path><path d="M4 17h3"></path><path d="M11 17h9"></path><path d="M15 5v4"></path><path d="M9 15v4"></path></svg>Settings</a>
+      </li>
+    </ul>
+  </div>
+</nav>
+    <div class="flex flex-col gap-3 border-t border-rail-line p-3">
+  <div class="flex items-center gap-3">
+    <span class="grid size-9 shrink-0 place-items-center rounded-full bg-rail-active text-caption font-semibold" aria-hidden="true">TO</span>
+    <div class="flex min-w-0 flex-1 flex-col">
+      <span class="truncate text-caption font-medium">The Owner</span>
+      <span class="text-eyebrow uppercase text-rail-ink-2">Owner</span>
+    </div>
+    <form method="POST" action="/logout"><button type="submit" class="flex min-h-9 items-center gap-1.5 rounded-control border border-rail-line px-2.5 text-caption font-medium hover:bg-rail-raise"><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4"></path><path d="M9.5 16.5 5 12l4.5-4.5"></path><path d="M5 12h11"></path></svg>Sign out</button></form>
+  </div>
+  <div role="group" aria-label="Theme" class="grid grid-cols-3 gap-1 rounded-control border border-rail-line p-1">
+    <button type="button" aria-pressed="true" class="flex min-h-8 items-center justify-center gap-1.5 rounded-control text-caption text-rail-ink-2 aria-pressed:bg-rail-ink aria-pressed:font-medium aria-pressed:text-rail"><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 16.5a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9z"></path><path d="M12 2.5v2"></path><path d="M12 19.5v2"></path><path d="M4.2 4.2l1.4 1.4"></path><path d="M18.4 18.4l1.4 1.4"></path><path d="M2.5 12h2"></path><path d="M19.5 12h2"></path><path d="M4.2 19.8l1.4-1.4"></path><path d="M18.4 5.6l1.4-1.4"></path></svg>Light</button>
+    <button type="button" aria-pressed="false" class="flex min-h-8 items-center justify-center gap-1.5 rounded-control text-caption text-rail-ink-2 aria-pressed:bg-rail-ink aria-pressed:font-medium aria-pressed:text-rail"><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 14.2A8.3 8.3 0 1 1 9.8 4a6.6 6.6 0 0 0 10.2 10.2z"></path></svg>Dark</button>
+    <button type="button" aria-pressed="false" class="flex min-h-8 items-center justify-center gap-1.5 rounded-control text-caption text-rail-ink-2 aria-pressed:bg-rail-ink aria-pressed:font-medium aria-pressed:text-rail"><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 5h18v11H3z"></path><path d="M8.5 20h7"></path><path d="M12 16v4"></path></svg>System</button>
+  </div>
+</div>
+  </aside>
+  <header data-rail class="bg-rail sticky top-0 z-30 flex h-14 items-center gap-3 px-4 text-rail-ink lg:hidden">
+    <button type="button" aria-expanded="false" aria-controls="nav-drawer" class="grid size-10 shrink-0 place-items-center rounded-control border border-rail-line" aria-label="Open navigation"><svg class="pos-icon size-5" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6.5h16"></path><path d="M4 12h16"></path><path d="M4 17.5h16"></path></svg></button>
+    <span class="grid size-8 shrink-0 place-items-center rounded-control bg-rail-ink font-display text-section text-rail" aria-hidden="true">m</span>
+    <h1 class="min-w-0 flex-1 truncate font-sans text-section">Jeddah Buffet</h1>
+    <span class="grid size-9 shrink-0 place-items-center rounded-full bg-rail-active text-caption font-semibold" aria-hidden="true">TO</span>
+  </header>
+  <main id="content" class="flex min-w-0 flex-1 flex-col">
+<header class="border-b border-line bg-raise">
+  <div class="mx-auto flex w-full max-w-page flex-wrap items-center gap-x-6 gap-y-3 px-4 py-4 lg:px-8 lg:py-5">
+    <div class="flex min-w-0 flex-1 basis-80 flex-col gap-1">
+      <p class="text-eyebrow uppercase text-ink-3">Catalogue</p>
+      <h2 class="text-title">Menu</h2>
+<p class="max-w-measure text-body text-ink-2">What the till sells: categories, items and their prices, and the modifier groups that change them. An item is archived, never deleted — it stays on past receipts and reports.</p>    </div>
+<div class="flex flex-wrap items-center gap-2"><a href="?add=1#add-item" class="inline-flex min-h-10 items-center justify-center gap-2 rounded-control border px-4 text-sm font-medium border-transparent bg-accent text-accent-ink xl:hidden"><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>Add an item</a></div>  </div>
+<div class="mx-auto w-full max-w-page px-4 lg:px-8"><nav aria-label="Menu views" class="flex gap-6">
+  <a href="/menu" aria-current="page" class="flex items-center gap-2 border-b-2 border-transparent pb-3 text-sm font-medium text-ink-2 aria-current:border-accent aria-current:text-ink">Items <span class="rounded-full bg-bg-2 px-2 py-0.5 font-mono text-xs text-ink-2">6</span></a>
+  <a href="/menu?view=groups" class="flex items-center gap-2 border-b-2 border-transparent pb-3 text-sm font-medium text-ink-2 aria-current:border-accent aria-current:text-ink">Modifier groups <span class="rounded-full bg-bg-2 px-2 py-0.5 font-mono text-xs text-ink-2">2</span></a>
+</nav>
+</div></header>
+<div class="mx-auto w-full max-w-page px-4 py-6 lg:px-8">
+  <div class="grid items-start gap-6 xl:grid-cols-12">
+    <section aria-labelledby="items-h" class="rounded-card border border-line bg-raise shadow-card xl:col-span-8">
+      <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-6 py-4">
+        <h3 id="items-h" class="text-section">Items</h3>
+        <p class="text-caption text-ink-2">Cost and margin use today's average ingredient costs.</p>
+      </div>
+      <h4 class="border-t border-line-soft bg-raise-2 px-6 py-2 font-sans"><span class="text-eyebrow uppercase text-ink-3">Drinks</span> <span class="text-caption text-ink-2">· 3 items</span></h4>
+      <table class="w-full">
+        <caption class="sr-only">Drinks</caption>
+        <thead class="hidden md:table-header-group">
+          <tr class="border-b border-line-soft">
+            <th scope="col" class="px-6 py-2 text-left text-xs font-medium text-ink-2">Item</th>
+            <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-ink-2">Modifier groups</th>
+            <th scope="col" class="px-3 py-2 text-right text-xs font-medium text-ink-2">Price</th>
+            <th scope="col" class="px-3 py-2 text-right text-xs font-medium text-ink-2">Cost</th>
+            <th scope="col" class="px-3 py-2 text-right text-xs font-medium text-ink-2">Margin</th>
+            <th scope="col" class="px-6 py-2 text-right text-xs font-medium text-ink-2"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-line-soft">
+          <tr class="bg-accent-soft">
+            <td class="px-6 py-3"><span class="flex flex-col"><span class="font-medium">Mango Juice</span><span class="text-caption text-ink-2">Tax: Restaurant rate</span></span></td>
+            <td class="px-3 py-3 text-sm"><span class="rounded-full border border-line bg-raise-2 px-2 py-0.5 text-caption">Size</span></td>
+            <td class="px-3 py-3 text-right font-mono tabular-nums">2.50</td>
+            <td class="px-3 py-3 text-right font-mono text-sm tabular-nums text-ink-2">0.74</td>
+            <td class="px-3 py-3 text-right font-mono text-sm tabular-nums text-ink-2">1.76</td>
+            <td class="px-6 py-3 text-right"><button type="button" aria-expanded="true" class="inline-flex min-h-9 items-center gap-1.5 rounded-control border border-control-line bg-raise px-3 text-sm font-medium">Edit<span class="sr-only"> Mango Juice</span><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 15l6-6 6 6"></path></svg></button></td>
+          </tr>
+          <tr class="bg-accent-soft">
+            <td class="px-6 pb-5" colspan="6">
+              <form class="flex flex-col gap-4 rounded-card border border-line bg-raise p-5">
+                <div class="grid gap-4 md:grid-cols-3">
+                  <div class="flex flex-col gap-1">
+  <label for="edit-name" class="text-sm font-medium text-ink-2">Name</label>
+  <input id="edit-name" type="text" value="Mango Juice" class="min-h-10 w-full rounded-control border border-control-line bg-bg px-3 text-ink" />
+</div>
+                  <div class="flex flex-col gap-1">
+  <label for="edit-price" class="text-sm font-medium text-ink-2">New price</label>
+  <input id="edit-price" type="text" value="2.50" class="min-h-10 w-full rounded-control border border-control-line bg-bg px-3 text-ink font-mono tabular-nums" aria-describedby="edit-price-hint" />
+<p id="edit-price-hint" class="text-xs text-ink-3">In USD. The old price stays on past sales.</p></div>
+                  <div class="flex flex-col gap-1">
+  <label for="edit-tax" class="text-sm font-medium text-ink-2">Tax rate (basis points)</label>
+  <input id="edit-tax" type="text" value="" class="min-h-10 w-full rounded-control border border-control-line bg-bg px-3 text-ink font-mono tabular-nums" aria-describedby="edit-tax-hint" />
+<p id="edit-tax-hint" class="text-xs text-ink-3">Blank = restaurant rate (500).</p></div>
+                </div>
+                <div class="flex flex-wrap items-center gap-2 text-sm">
+                  <span class="font-medium text-ink-2">Modifier groups</span>
+                  <span class="inline-flex items-center gap-1 rounded-full border border-line bg-raise-2 py-0.5 pl-2.5 pr-1">Size<button type="button" class="grid size-6 place-items-center rounded-full hover:bg-bg-2" aria-label="Detach Size from Mango Juice"><svg class="pos-icon size-3.5" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg></button></span>
+                  <button type="button" class="inline-flex min-h-10 items-center justify-center gap-2 rounded-control border px-4 text-sm font-medium border-transparent text-ink hover:bg-raise-2 "><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg>Attach a group</button>
+                  <a href="/inventory/recipes?item=mango" class="ml-auto font-medium text-accent underline underline-offset-2">Edit recipe · cost 0.74</a>
+                </div>
+                <div class="flex flex-wrap items-center gap-2 border-t border-line-soft pt-4">
+                  <button type="submit" class="inline-flex min-h-10 items-center justify-center gap-2 rounded-control border px-4 text-sm font-medium border-transparent bg-accent text-accent-ink ">Save item</button>
+                  <button type="button" class="inline-flex min-h-10 items-center justify-center gap-2 rounded-control border px-4 text-sm font-medium border-transparent text-ink hover:bg-raise-2 ">Cancel</button>
+                  <details class="ml-auto"><summary class="inline-flex min-h-10 items-center rounded-control px-3 text-sm font-medium text-danger">Archive Mango Juice…</summary></details>
+                </div>
+              </form>
+            </td>
+          </tr>
+          <tr class="">
+            <td class="px-6 py-3"><span class="flex flex-col"><span class="font-medium">Shaah</span><span class="text-caption text-ink-2">Tax: Restaurant rate</span></span></td>
+            <td class="px-3 py-3 text-sm"><span class="text-ink-3">—</span></td>
+            <td class="px-3 py-3 text-right font-mono tabular-nums">1.25</td>
+            <td class="px-3 py-3 text-right font-mono text-sm tabular-nums text-ink-2">0.05</td>
+            <td class="px-3 py-3 text-right font-mono text-sm tabular-nums text-ink-2">1.20</td>
+            <td class="px-6 py-3 text-right"><button type="button" aria-expanded="false" class="inline-flex min-h-9 items-center gap-1.5 rounded-control border border-control-line bg-raise px-3 text-sm font-medium">Edit<span class="sr-only"> Shaah</span><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 9l6 6 6-6"></path></svg></button></td>
+          </tr>
+          <tr class="">
+            <td class="px-6 py-3"><span class="flex flex-col"><span class="font-medium">Water</span><span class="text-caption text-ink-2">Tax: 0% · No recipe yet</span></span></td>
+            <td class="px-3 py-3 text-sm"><span class="text-ink-3">—</span></td>
+            <td class="px-3 py-3 text-right font-mono tabular-nums">0.75</td>
+            <td class="px-3 py-3 text-right font-mono text-sm tabular-nums text-ink-2">—</td>
+            <td class="px-3 py-3 text-right font-mono text-sm tabular-nums text-ink-2">—</td>
+            <td class="px-6 py-3 text-right"><button type="button" aria-expanded="false" class="inline-flex min-h-9 items-center gap-1.5 rounded-control border border-control-line bg-raise px-3 text-sm font-medium">Edit<span class="sr-only"> Water</span><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 9l6 6 6-6"></path></svg></button></td>
+          </tr>
+        </tbody>
+      </table>
+      <h4 class="border-t border-line-soft bg-raise-2 px-6 py-2 font-sans"><span class="text-eyebrow uppercase text-ink-3">Mains</span> <span class="text-caption text-ink-2">· 3 items</span></h4>
+      <table class="w-full">
+        <caption class="sr-only">Mains</caption>
+        <thead class="hidden md:table-header-group">
+          <tr class="border-b border-line-soft">
+            <th scope="col" class="px-6 py-2 text-left text-xs font-medium text-ink-2">Item</th>
+            <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-ink-2">Modifier groups</th>
+            <th scope="col" class="px-3 py-2 text-right text-xs font-medium text-ink-2">Price</th>
+            <th scope="col" class="px-3 py-2 text-right text-xs font-medium text-ink-2">Cost</th>
+            <th scope="col" class="px-3 py-2 text-right text-xs font-medium text-ink-2">Margin</th>
+            <th scope="col" class="px-6 py-2 text-right text-xs font-medium text-ink-2"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-line-soft">
+          <tr class="">
+            <td class="px-6 py-3"><span class="flex flex-col"><span class="font-medium">Baasto Suugo</span><span class="text-caption text-ink-2">Tax: Restaurant rate</span></span></td>
+            <td class="px-3 py-3 text-sm"><span class="rounded-full border border-line bg-raise-2 px-2 py-0.5 text-caption">Extras</span></td>
+            <td class="px-3 py-3 text-right font-mono tabular-nums">8.50</td>
+            <td class="px-3 py-3 text-right font-mono text-sm tabular-nums text-ink-2">1.38</td>
+            <td class="px-3 py-3 text-right font-mono text-sm tabular-nums text-ink-2">7.12</td>
+            <td class="px-6 py-3 text-right"><button type="button" aria-expanded="false" class="inline-flex min-h-9 items-center gap-1.5 rounded-control border border-control-line bg-raise px-3 text-sm font-medium">Edit<span class="sr-only"> Baasto Suugo</span><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 9l6 6 6-6"></path></svg></button></td>
+          </tr>
+          <tr class="">
+            <td class="px-6 py-3"><span class="flex flex-col"><span class="font-medium">Bariis Iskukaris</span><span class="text-caption text-ink-2">Tax: Restaurant rate</span></span></td>
+            <td class="px-3 py-3 text-sm"><span class="rounded-full border border-line bg-raise-2 px-2 py-0.5 text-caption">Extras</span></td>
+            <td class="px-3 py-3 text-right font-mono tabular-nums">9.00</td>
+            <td class="px-3 py-3 text-right font-mono text-sm tabular-nums text-ink-2">1.58</td>
+            <td class="px-3 py-3 text-right font-mono text-sm tabular-nums text-ink-2">7.42</td>
+            <td class="px-6 py-3 text-right"><button type="button" aria-expanded="false" class="inline-flex min-h-9 items-center gap-1.5 rounded-control border border-control-line bg-raise px-3 text-sm font-medium">Edit<span class="sr-only"> Bariis Iskukaris</span><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 9l6 6 6-6"></path></svg></button></td>
+          </tr>
+          <tr class="">
+            <td class="px-6 py-3"><span class="flex flex-col"><span class="font-medium">Chicken Suqaar</span><span class="text-caption text-ink-2">Tax: Restaurant rate</span></span></td>
+            <td class="px-3 py-3 text-sm"><span class="text-ink-3">—</span></td>
+            <td class="px-3 py-3 text-right font-mono tabular-nums">7.50</td>
+            <td class="px-3 py-3 text-right font-mono text-sm tabular-nums text-ink-2">0.00</td>
+            <td class="px-3 py-3 text-right font-mono text-sm tabular-nums text-ink-2">7.50</td>
+            <td class="px-6 py-3 text-right"><button type="button" aria-expanded="false" class="inline-flex min-h-9 items-center gap-1.5 rounded-control border border-control-line bg-raise px-3 text-sm font-medium">Edit<span class="sr-only"> Chicken Suqaar</span><svg class="pos-icon size-4" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 9l6 6 6-6"></path></svg></button></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+    <div id="add-item" class="order-first hidden flex-col gap-6 xl:sticky xl:top-6 xl:order-none xl:col-span-4 xl:flex">
+      <section aria-labelledby="add-item-h" class="flex flex-col rounded-card border border-line bg-raise shadow-card">
+        <div class="flex items-center justify-between gap-3 border-b border-line-soft px-6 py-4"><h3 id="add-item-h" class="text-section">Add an item</h3><svg class="pos-icon size-5 text-ink-3" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z"></path><path d="M12 8v8"></path><path d="M8 12h8"></path></svg></div>
+        <form method="POST" action="?/createItem" class="flex flex-col gap-4 p-6">
+          <div class="flex flex-col gap-1">
+  <label for="item-category" class="text-sm font-medium text-ink-2">Category</label>
+  <select id="item-category" class="min-h-10 w-full rounded-control border border-control-line bg-bg px-3 text-ink"><option>Choose a category</option></select>
+</div>
+          <div class="flex flex-col gap-1">
+  <label for="item-name" class="text-sm font-medium text-ink-2">Item name</label>
+  <input id="item-name" type="text" value="" class="min-h-10 w-full rounded-control border border-control-line bg-bg px-3 text-ink" />
+</div>
+          <div class="flex flex-col gap-1">
+  <label for="item-price" class="text-sm font-medium text-ink-2">Price</label>
+  <input id="item-price" type="text" value="" class="min-h-10 w-full rounded-control border border-control-line bg-bg px-3 text-ink font-mono tabular-nums" aria-describedby="item-price-hint" />
+<p id="item-price-hint" class="text-xs text-ink-3">In USD, for example 8.50.</p></div>
+          <div class="flex flex-col gap-1">
+  <label for="item-tax" class="text-sm font-medium text-ink-2">Item tax rate (basis points)</label>
+  <input id="item-tax" type="text" value="" class="min-h-10 w-full rounded-control border border-control-line bg-bg px-3 text-ink font-mono tabular-nums" aria-describedby="item-tax-hint" />
+<p id="item-tax-hint" class="text-xs text-ink-3">Leave blank to use the restaurant rate. 825 means 8.25%.</p></div>
+          <button type="submit" class="inline-flex min-h-10 items-center justify-center gap-2 rounded-control border px-4 text-sm font-medium border-transparent bg-accent text-accent-ink self-start">Add item</button>
+        </form>
+      </section>
+      <section aria-labelledby="add-cat-h" class="flex flex-col gap-3 rounded-card border border-line bg-raise p-6 shadow-card">
+        <h3 id="add-cat-h" class="text-section">Add a category</h3>
+        <form method="POST" action="?/createCategory" class="flex items-end gap-2">
+          <div class="flex min-w-0 flex-1 flex-col gap-1"><label for="cat-name" class="text-sm font-medium text-ink-2">Category name</label><input id="cat-name" class="min-h-10 w-full rounded-control border border-control-line bg-bg px-3 text-ink" /></div>
+          <button type="submit" class="inline-flex min-h-10 items-center justify-center gap-2 rounded-control border px-4 text-sm font-medium border-control-line bg-raise text-ink hover:bg-raise-2 ">Add</button>
+        </form>
+      </section>
+    </div>
+  </div>
+</div>
+  </main>
+</div>
+
+</div>
+</body>
+</html>

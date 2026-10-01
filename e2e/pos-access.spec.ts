@@ -55,7 +55,10 @@ test('the owner registers the till from the till, and a cashier signs in with a 
 	// ── 2. the POS page, reached by its rail LABEL, shows no device ─────────────
 	// The label is POS and the href is /device, on purpose (T-30): /pos belongs to
 	// the till, and no dashboard route may begin with "pos" (T-45 step 8).
-	await page.getByRole('link', { name: 'POS', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'POS device', exact: true })
+		.click();
 	await expect(page).toHaveURL(/\/device$/);
 	await expect(page.getByText('POS1')).toHaveCount(0);
 
@@ -98,7 +101,10 @@ test('the owner registers the till from the till, and a cashier signs in with a 
 	// The owner's own session, in the office, is untouched.
 	await page.goto('/dashboard');
 	await expect(page).toHaveURL(/\/dashboard$/);
-	await page.getByRole('link', { name: 'POS', exact: true }).click();
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'POS device', exact: true })
+		.click();
 	await expect(page.getByText('POS1')).toBeVisible();
 
 	// ── 6. the cashier, then a PIN sign-in at the till ─────────────────────────
@@ -115,7 +121,7 @@ test('the owner registers the till from the till, and a cashier signs in with a 
 	// The right one.
 	await enterPin(tillPage, '4321');
 	await expect(tillPage).toHaveURL(/\/pos\/session$/);
-	await expect(tillPage.getByRole('status')).toContainText('The Cashier · Cashier');
+	await expect(tillPage.getByTestId('till-employee')).toContainText('The Cashier · Cashier');
 
 	// ── 7. the checklist moved by EXACTLY one step: six minus one ──────────────
 	// Only "Register the POS device" was completed here. Settings still lack the

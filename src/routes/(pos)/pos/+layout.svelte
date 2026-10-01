@@ -17,9 +17,9 @@
 	// tokens.css pins the COMPLETE palette — grounds, inks, accent, status, the
 	// aliases, the rail family and the shadow rungs. A surface pinned one way whose
 	// inks still theme is the defect that has shipped twice (1.08:1, then 1.21:1).
-	// `bg-bg text-ink` are NOT redundant: <body> sits outside this scope and paints
-	// the viewer's themed ground, so this element must resolve the PINNED values
-	// itself; `min-h-screen` stops the themed body showing under a short page.
+	// `bg-bg text-ink` are NOT redundant: this element must resolve the PINNED values
+	// itself. <body> is stamped too (tillBody, below), so overscroll around the till
+	// never shows the viewer's dark ground — no server change, handleTheme untouched.
 	//
 	// EVERY PRESSABLE POS SURFACE TAKES A `border border-control-line` EDGE. A white
 	// key (--c-raise) on the POS ground (--c-bg) measures 1.12:1, so elevation alone
@@ -41,7 +41,7 @@
 		readMenuSyncError,
 		type LocalSession
 	} from '$lib/pos/store';
-	import PosIcon from '$lib/components/pos/PosIcon.svelte';
+	import TillBar from '$lib/components/pos/TillBar.svelte';
 	import {
 		RESTORED_CONTEXT,
 		restoreFromMirror,
@@ -55,6 +55,17 @@
 	import { readLocalSession } from '$lib/pos/session';
 
 	let { children } = $props();
+
+	// <body> takes the till's pinned palette and color-scheme while the till is
+	// mounted, and gives it back on the way out.
+	function tillBody(node: HTMLElement) {
+		node.setAttribute('data-surface', 'pos');
+		return {
+			destroy() {
+				node.removeAttribute('data-surface');
+			}
+		};
+	}
 
 	// T-30: RESTORE GATE. Published synchronously so child pages can await it
 	// before their sign-in guard runs. `restoreFromMirror` runs from an onMount
@@ -351,6 +362,21 @@
 					.join('')
 	);
 
+	// Every till warning that is not the connection or the unsynced count, merged
+	// into the bar's ONE warnings chip. Each is written out in full in its panel.
+	const warnings = $derived(
+		[
+			unsyncedUnreadable ? 'Unsynced count unavailable' : null,
+			parked > 0 ? `${parked} operations from a previous registration` : null,
+			skewMinutes !== null ? `Clock is off by ${skewMinutes} min` : null,
+			menuSyncError !== null && online ? 'Menu update failed — reload the till' : null,
+			signedIn.current !== null && idleSeconds === null ? 'Idle lock not set' : null,
+			printerPill !== null && (printerPill.tone === 'offline' || printerPill.tone === 'danger')
+				? printerPill.text
+				: null
+		].filter((warning): warning is string => warning !== null)
+	);
+
 	onMount(() => {
 		if (!('serviceWorker' in navigator)) return;
 		const register = () => {
@@ -375,221 +401,41 @@
 	<link rel="manifest" href="/pos.webmanifest" />
 </svelte:head>
 
-<div data-surface="pos" class="text-pos bg-bg text-ink min-h-screen">
-	<!-- THE STATUS REGION: the top bar and the context strip together. Everything a
-	     cashier must always see lives here — connection, the unsynced count (spec 6),
-	     who is signed in, the session and its business date — each as a glyph AND a
-	     word. The clock ticks every 30 s, so it opts out of the live announcements. -->
-	<div role="status">
-		<div
-			class="bg-rail text-rail-ink flex flex-wrap items-center gap-x-6 gap-y-3 px-4 py-3 lg:px-6"
-		>
-			<div class="flex items-center gap-3">
-				<span
-					aria-hidden="true"
-					class="bg-rail-ink text-rail rounded-control font-display text-title inline-flex size-10 items-center justify-center font-bold"
-					>m</span
-				>
-				<span class="flex flex-col leading-tight">
-					<span class="font-display text-section font-semibold">matcami</span>
-					<span class="text-caption text-rail-ink-2">Point of sale</span>
-				</span>
-			</div>
+<svelte:body use:tillBody />
 
-			<nav aria-label="Till" class="flex flex-wrap items-center gap-2">
-				<a
-					href={resolve(signedIn.current !== null ? '/pos/order' : '/pos')}
-					aria-current={onSales ? undefined : 'page'}
-					class="text-rail-ink min-h-touch-min inline-flex items-center gap-2 rounded-full px-5 font-semibold {onSales
-						? 'border-rail-line border'
-						: 'bg-rail-active'}"
-				>
-					<PosIcon name="bag" />
-					POS
-				</a>
-				{#if signedIn.current !== null}
-					<!-- Recent sales and reprints (T-31). Same tab styling; the current one
-					     is filled AND carries aria-current, the other is outlined. -->
-					<a
-						href={resolve('/pos/sales')}
-						aria-current={onSales ? 'page' : undefined}
-						class="text-rail-ink min-h-touch-min inline-flex items-center gap-2 rounded-full px-5 font-semibold {onSales
-							? 'bg-rail-active'
-							: 'border-rail-line border'}"
-					>
-						<PosIcon name="clipboard" />
-						Sales
-					</a>
-				{/if}
-			</nav>
-
-			<div class="ml-auto flex items-center gap-4">
-				<PosIcon name={online ? 'wifi' : 'wifi-off'} class="text-rail-ink-2 size-6" />
-				{#if signedIn.current !== null}
-					<details class="relative">
-						<summary
-							class="min-h-touch-min flex cursor-pointer list-none items-center gap-3 rounded-full"
-						>
-							<span
-								aria-hidden="true"
-								class="bg-rail-active text-rail-ink inline-flex size-10 items-center justify-center rounded-full font-semibold"
-								>{initials}</span
-							>
-							<!-- One text run, "Name · Role", with the separator's spaces explicit so no
-							     reflow of this markup can swallow them. -->
-							<span class="font-semibold"
-								>{`${signedIn.current.displayName}`}<span class="text-rail-ink-2 font-normal"
-									>{` · ${roleLabel}`}</span
-								></span
-							>
-							<PosIcon name="chevron-down" class="text-rail-ink-2 size-4" />
-						</summary>
-						<div
-							class="bg-raise text-ink border-line rounded-card shadow-floating absolute right-0 z-10 mt-2 w-56 border p-2"
-						>
-							<a
-								href={resolve('/pos')}
-								class="min-h-touch-min rounded-control hover:bg-raise-2 flex items-center px-3"
-								>Switch employee</a
-							>
-							{#if signedIn.current.isOwner}
-								<!-- Setup is owner-only, and it is enforced on the device — the only
-								     place printing exists (T-29; /pos/printer says so to anyone else). -->
-								<a
-									href={resolve('/pos/printer')}
-									class="min-h-touch-min rounded-control hover:bg-raise-2 flex items-center gap-2 px-3"
-								>
-									<PosIcon name="printer" class="text-ink-2 size-5" />
-									Printer
-								</a>
-							{/if}
-						</div>
-					</details>
-				{:else}
-					<span class="text-rail-ink-2">Nobody signed in</span>
-				{/if}
-			</div>
-		</div>
-
-		<div class="flex flex-wrap items-stretch gap-3 px-4 pt-4 lg:px-6">
-			<div
-				class="bg-raise border-line rounded-card shadow-flat flex min-w-0 flex-1 flex-wrap items-center gap-x-6 gap-y-3 border px-4 py-3"
-			>
-				<div class="flex items-center gap-3">
-					<span
-						class="bg-accent-soft text-accent rounded-control inline-flex size-10 items-center justify-center"
-					>
-						<PosIcon name="store" />
-					</span>
-					<span class="flex flex-col leading-tight">
-						<span class="font-semibold">{restaurantName ?? 'Restaurant'}</span>
-						<span class="text-caption text-ink-2"
-							>{deviceCode ? `Till ${deviceCode}` : 'Till not registered'}</span
-						>
-					</span>
-				</div>
-				<div class="flex items-center gap-3" aria-live="off">
-					<PosIcon name="calendar" class="text-ink-2 size-6" />
-					<span class="flex flex-col leading-tight">
-						<span class="font-semibold">{today}</span>
-						<span class="text-caption text-ink-2">{clockTime}</span>
-					</span>
-				</div>
-				<div class="flex flex-wrap items-center gap-2">
-					<span
-						class="rounded-full px-3 py-1 font-semibold {online
-							? 'bg-ok-bg text-ok'
-							: 'bg-st-offline-bg text-st-offline'}"
-					>
-						<span aria-hidden="true" class="font-mono">{online ? '●' : '◆'}</span>
-						{online ? 'Online' : 'Offline'}
-					</span>
-					{#if unsynced !== null}
-						<span class="bg-raise-2 text-ink-2 border-line rounded-full border px-3 py-1"
-							>{unsynced} unsynced</span
-						>
-					{:else if unsyncedUnreadable}
-						<span class="bg-st-offline-bg text-st-offline rounded-full px-3 py-1"
-							>unsynced count unavailable</span
-						>
-					{/if}
-					{#if parked > 0}
-						<span class="bg-st-offline-bg text-st-offline rounded-full px-3 py-1"
-							>◆ {parked} operations from a previous registration</span
-						>
-					{/if}
-					{#if skewMinutes !== null}
-						<span class="bg-st-offline-bg text-st-offline rounded-full px-3 py-1"
-							>◆ Clock is off by {skewMinutes} min</span
-						>
-					{/if}
-					{#if menuSyncError !== null && online}
-						<span class="bg-st-offline-bg text-st-offline rounded-full px-3 py-1"
-							>◆ Menu update failed — reload the till</span
-						>
-					{/if}
-					{#if printerPill !== null}
-						<span
-							data-testid="printer-chip"
-							class="rounded-full px-3 py-1 font-semibold {printerPill.tone === 'ok'
-								? 'bg-ok-bg text-ok'
-								: printerPill.tone === 'offline'
-									? 'bg-st-offline-bg text-st-offline'
-									: printerPill.tone === 'danger'
-										? 'bg-danger-bg text-danger'
-										: 'bg-raise-2 text-ink-2'}"
-						>
-							<span aria-hidden="true" class="font-mono">{printerPill.glyph}</span>
-							{printerPill.text}
-						</span>
-					{/if}
-				</div>
-			</div>
-
-			<div
-				class="bg-accent-soft rounded-card flex flex-wrap items-center gap-x-6 gap-y-3 px-4 py-3"
-			>
-				<div class="flex items-center gap-3">
-					<span
-						class="bg-raise text-accent rounded-control inline-flex size-10 items-center justify-center"
-					>
-						<PosIcon name="lock" />
-					</span>
-					{#if session === null}
-						<span class="flex flex-col leading-tight">
-							<span class="font-semibold">○ No session</span>
-							<span class="text-caption text-ink-2">Open one to start selling</span>
-						</span>
-					{:else if signedIn.current !== null}
-						<a
-							href={resolve('/pos/session')}
-							aria-label="Session · business date {session.businessDate ?? 'pending sync'}"
-							class="min-h-touch-min rounded-control flex flex-col justify-center leading-tight underline-offset-2 hover:underline"
-						>
-							<span class="font-semibold">● Session</span>
-							<span class="text-caption text-ink-2"
-								>Business date {session.businessDate ?? 'pending sync'}</span
-							>
-						</a>
-					{:else}
-						<span class="flex flex-col leading-tight">
-							<span class="font-semibold">● Session</span>
-							<span class="text-caption text-ink-2"
-								>Business date {session.businessDate ?? 'pending sync'}</span
-							>
-						</span>
-					{/if}
-				</div>
-				{#if signedIn.current !== null && idleSeconds === null}
-					<span
-						class="bg-raise text-accent border-line inline-flex items-center gap-2 rounded-full border px-3 py-1"
-					>
-						<PosIcon name="clock" class="size-4" />
-						Idle lock not set
-					</span>
-				{/if}
-			</div>
-		</div>
+<!-- THE SHELL (docs/redesign Phase 1): the viewport is the frame. h-dvh and
+     overflow-hidden, so the document never scrolls on the till; each screen
+     scrolls inside its own panes. The wrapper's overflow-y-auto is the safety
+     net for a screen that does not fit yet — a rebuilt screen fits, so it never
+     scrolls. -->
+<div data-surface="pos" class="text-pos bg-bg text-ink flex h-dvh flex-col overflow-hidden">
+	<TillBar
+		{restaurantName}
+		{deviceCode}
+		{online}
+		unsynced={unsynced !== null
+			? { count: unsynced }
+			: unsyncedUnreadable
+				? { unreadable: true }
+				: null}
+		{warnings}
+		printer={printerPill}
+		{clockTime}
+		{today}
+		session={session === null
+			? null
+			: { state: session.state, businessDate: session.businessDate ?? null }}
+		employee={signedIn.current === null
+			? null
+			: {
+					name: signedIn.current.displayName,
+					role: roleLabel,
+					initials,
+					isOwner: signedIn.current.isOwner
+				}}
+		current={onSales ? 'sales' : page.url.pathname === '/pos/order' ? 'order' : 'other'}
+	/>
+	<div class="relative flex min-h-0 flex-1 flex-col overflow-y-auto">
+		{@render children()}
 	</div>
-	{@render children()}
 </div>

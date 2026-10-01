@@ -9,11 +9,17 @@
 	// small token family — rail / rail-active / rail-ink / rail-ink-2 / rail-line —
 	// because a saturated block has to hold white text, a selected row, muted labels
 	// and a visible edge, and the page tokens have no legal value for any of those on
-	// a teal ground. Every pair is measured in tokens.css.
-	// ground, not a strip of links floating on the ground. Nine flat items are a
-	// list; four groups are a structure.
+	// its ground. Every pair is measured in tokens.css. It is data-rail, so its focus
+	// ring is --c-rail-ring (base.css).
+	//
+	// TWO VARIANTS (docs/redesign Phase 5). `rail`: the full-height, sticky column
+	// from lg up, collapsible. `drawer`: the same content inside the navigation
+	// drawer below lg, with a Close navigation button instead of the collapse
+	// chevron and the restaurant name as a <p> (the phone bar holds the page's h1).
+	// The component renders twice on every page, so every id carries the variant.
 	import { resolve } from '$app/paths';
 	import { RAIL_COOKIE, RAIL_MAX_AGE_SECONDS } from '$lib/rail';
+	import Icon from './Icon.svelte';
 	import ThemeToggle from './ThemeToggle.svelte';
 
 	type IconName =
@@ -48,7 +54,9 @@
 		displayName,
 		role,
 		pathname,
-		collapsed = false
+		collapsed = false,
+		variant = 'rail',
+		onclose
 	}: {
 		restaurantName: string | null;
 		displayName: string;
@@ -60,14 +68,16 @@
 		 * hydration. Only the toggle below writes it.
 		 */
 		collapsed?: boolean;
+		variant?: 'rail' | 'drawer';
+		/** The drawer's Close navigation button. */
+		onclose?: () => void;
 	} = $props();
 
 	// An OVERRIDE, not a copy. `let x = $state(collapsed)` would capture the prop
-	// once and then ignore it, which Svelte warns about and which would go wrong the
-	// first time a navigation delivered a different server value. Until the owner
-	// touches the control, the server's value governs; after that, theirs does.
+	// once and then ignore it. Until the owner touches the control, the server's
+	// value governs; after that, theirs does. The drawer is never collapsed.
 	let override = $state<boolean | null>(null);
-	const isCollapsed = $derived(override ?? collapsed);
+	const isCollapsed = $derived(variant === 'rail' && (override ?? collapsed));
 
 	function toggleRail() {
 		override = !isCollapsed;
@@ -77,27 +87,26 @@
 			document.cookie = `${RAIL_COOKIE}=${value}; path=/; max-age=${RAIL_MAX_AGE_SECONDS}; samesite=lax${secure}`;
 		} catch {
 			// A blocked cookie write must not break the control. The rail still
-			// collapses for this page view; it simply will not be remembered, which is
-			// the honest outcome rather than a dead button.
+			// collapses for this page view; it simply will not be remembered.
 		}
 	}
 
 	// One entry per dashboard permission key, in the order an owner sets the
 	// restaurant up. Rows with an href have routes; the rest render as visibly
-	// disabled WITH A REASON rather than as dead links that 404, or as hidden items
-	// that leave the owner wondering whether the product has those features at all.
+	// disabled WITH A REASON rather than as dead links that 404.
 	//
-	// The POS row's LABEL is "POS" and its URL is /device, on purpose: /pos belongs
-	// to the till, whose service worker is scoped to /pos by STRING prefix, so no
+	// ONE NAME PER SECTION (docs/redesign Phase 5): the row is called what its page
+	// is called — "Deliveries" for /purchases, "POS device" for /device. /device, not
+	// /pos: the till's service worker is scoped to /pos by STRING prefix, so no
 	// dashboard URL may begin with the characters "pos".
 	const groups: NavGroup[] = [
 		{
-			id: 'nav-workspace',
+			id: 'workspace',
 			label: null,
 			items: [{ label: 'Overview', href: '/dashboard', icon: 'overview' }]
 		},
 		{
-			id: 'nav-catalogue',
+			id: 'catalogue',
 			label: 'Catalogue',
 			items: [
 				{ label: 'Menu', href: '/menu', icon: 'menu' },
@@ -105,48 +114,43 @@
 			]
 		},
 		{
-			id: 'nav-money',
+			id: 'money',
 			label: 'Money',
 			items: [
-				{ label: 'Purchases', href: '/purchases', icon: 'purchases' },
+				{ label: 'Deliveries', href: '/purchases', icon: 'purchases' },
 				{ label: 'Expenses', href: null, icon: 'expenses' },
 				{ label: 'Reports', href: '/reports', icon: 'reports' }
 			]
 		},
 		{
-			id: 'nav-setup',
+			id: 'setup',
 			label: 'Setup',
 			items: [
 				{ label: 'Employees', href: '/employees', icon: 'employees' },
-				{ label: 'POS', href: '/device', icon: 'pos' },
+				{ label: 'POS device', href: '/device', icon: 'pos' },
 				{ label: 'Settings', href: '/settings', icon: 'settings' }
 			]
 		}
 	];
 
-	// ONE row geometry for all nine, links and non-links alike, so the rail reads as
-	// a single list. border-l-4 is carried by EVERY row and painted in the rail's own
-	// surface when the row is not current, so the accent bar costs no reflow when it
-	// moves. (The sample draws that bar at 3px; no border-width token exists and an
-	// arbitrary value is forbidden, so it is the 4px step here.)
+	// "You are here" BY PREFIX: /inventory/recipes keeps Inventory lit. The row gets
+	// data-current; aria-current="page" goes to the EXACT page only.
+	const isCurrent = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
+
+	// ONE row geometry for all nine, links and non-links alike. border-l-4 is carried
+	// by EVERY row and painted in the rail's own colour when the row is not current,
+	// so the bar costs no reflow when it moves. The current row carries three
+	// signals — the bar, the fill and the weight — plus aria-current: colour never
+	// carries meaning alone (WCAG 1.4.1).
 	const row = $derived(
-		'relative flex min-h-10 items-center gap-2.5 rounded-control border-l-4 px-2.5 text-caption whitespace-nowrap' +
-			// Collapsed, the row is an icon in a square: centre it and drop the gap, or
-			// the icon sits left of centre against a 4px bar.
-			(isCollapsed ? ' lg:justify-center lg:gap-0 lg:px-0' : '')
+		'relative flex min-h-10 items-center gap-2.5 rounded-control border-l-4 border-rail px-2.5 text-caption whitespace-nowrap' +
+			(isCollapsed ? ' justify-center gap-0 px-0' : '')
 	);
+	const link =
+		'font-medium text-rail-ink hover:bg-rail-raise data-current:border-rail-ink data-current:bg-rail-active data-current:font-semibold';
+	const soon = 'text-rail-ink-2';
 
-	// THE CURRENT ITEM CARRIES THREE SIGNALS, not one: the soft accent fill, accent
-	// text and icon, and the bar — plus aria-current="page" for anyone who reads the
-	// page rather than sees it. Colour never carries meaning alone (WCAG 1.4.1).
-	const current = 'border-l-rail-ink bg-rail-active text-rail-ink font-semibold';
-	// hover uses rail-RAISE, not rail-active: active is now the accent, and a row
-	// under the pointer must not look like the page you are on.
-	const link = 'border-l-rail text-rail-ink font-medium hover:bg-rail-raise';
-	const soon = 'border-l-rail text-rail-ink-2';
-
-	// Initials only, and aria-hidden — the name is written beside it. Split on
-	// whitespace so a one-word display name still yields one letter.
+	// Initials only, and aria-hidden — the name is written beside it.
 	const initials = $derived(
 		displayName
 			.split(/\s+/)
@@ -155,6 +159,24 @@
 			.map((word) => [...word][0]?.toUpperCase() ?? '')
 			.join('')
 	);
+
+	// THE COLLAPSED RAIL'S TOOLTIP. A row collapsed to its icon still has its label
+	// (sr-only) for assistive tech; sighted users get this tooltip on hover and
+	// focus. It is drawn in the TOP LAYER (the Popover API), placed from the row's
+	// box, because anything positioned inside the scrolling nav would be clipped.
+	let tip = $state<HTMLDivElement>();
+	let tipText = $state('');
+	function showTip(event: Event, label: string) {
+		if (!isCollapsed || !tip) return;
+		const box = (event.currentTarget as HTMLElement).getBoundingClientRect();
+		tipText = label;
+		tip.style.top = `${box.top + box.height / 2}px`;
+		tip.style.left = `${box.right + 8}px`;
+		if (!tip.matches(':popover-open')) tip.showPopover();
+	}
+	function hideTip() {
+		if (tip?.matches(':popover-open')) tip.hidePopover();
+	}
 </script>
 
 {#snippet icon(name: IconName, tone: string)}
@@ -220,208 +242,177 @@
 	</svg>
 {/snippet}
 
-<!-- Full height and sticky from `lg` up; ABOVE the content below it, never hidden.
-     A rail that vanishes on a phone takes with it the one screen that says which
-     parts of the product are built. -->
 <aside
+	data-rail
 	aria-label="Workspace"
-	class={`bg-rail border-rail-line flex min-w-0 flex-col border-b transition-[width] duration-150 lg:sticky lg:top-0 lg:h-screen lg:shrink-0 lg:border-r lg:border-b-0 ${isCollapsed ? 'lg:w-18' : 'lg:w-65'}`}
+	class="bg-rail text-rail-ink flex min-w-0 flex-col {variant === 'rail'
+		? `border-rail-line sticky top-0 hidden h-dvh shrink-0 border-r lg:flex ${isCollapsed ? 'w-18' : 'w-65'}`
+		: 'h-full w-full'}"
 >
-	<!-- BRAND. The mark is one letter of the display face on an accent tile — type,
-	     not an asset: nothing to commission, nothing to cache, and it re-colours with
-	     the theme because it names roles rather than colours. aria-hidden, because
-	     the restaurant name is written beside it. -->
+	<!-- BRAND. One letter of the display face on a tile — type, not an asset. -->
 	<div
-		class={`flex flex-none items-center gap-3 pt-5 pb-4 ${isCollapsed ? 'px-2 lg:flex-col lg:gap-2 lg:px-0' : 'px-4'}`}
+		class="flex flex-none items-center gap-3 pt-5 pb-4 {isCollapsed
+			? 'flex-col gap-2 px-2'
+			: 'px-4'}"
 	>
 		<span
 			aria-hidden="true"
-			class="bg-rail-ink text-rail font-display rounded-control grid size-10 flex-none place-items-center text-title"
+			class="bg-rail-ink text-rail font-display rounded-control text-title grid size-10 flex-none place-items-center"
 		>
 			m
 		</span>
-		<!-- A REAL heading element, and the only h1 on every dashboard screen.
-		     e2e/auth.spec.ts asserts getByRole('heading', { name: <restaurant> }) twice
-		     — after registration and again after the rename — so a styled div breaks
-		     the journey even though it looks identical.
-
-		     COLLAPSED, the wrapper is .sr-only rather than removed. The heading must
-		     stay in the accessibility tree and in the DOM: hiding it with `display:none`
-		     would take the h1 off the page entirely and break both assertions, and
-		     would leave a screen-reader user on a dashboard with no name. -->
-		<div class={`flex min-w-0 flex-col ${isCollapsed ? 'lg:sr-only' : ''}`}>
-			<h1 class="text-section text-rail-ink break-words">{restaurantName ?? 'matcami'}</h1>
+		<!-- The rail's name is THE h1 at lg and up (e2e/auth.spec.ts asserts it as a
+		     heading). Collapsed, it is sr-only, never removed. In the drawer it is a
+		     <p>: below lg the phone bar holds the page's h1. -->
+		<div class="flex min-w-0 flex-col {isCollapsed ? 'sr-only' : ''}">
+			{#if variant === 'rail'}
+				<h1 class="text-section text-rail-ink break-words">{restaurantName ?? 'matcami'}</h1>
+			{:else}
+				<p class="text-section font-display text-rail-ink break-words">
+					{restaurantName ?? 'matcami'}
+				</p>
+			{/if}
 			<p class="text-caption text-rail-ink-2">Owner workspace</p>
 		</div>
 
-		<!-- The collapse control. lg only: below it the rail is a horizontal row of
-		     the same items, which has no width to give back.
-
-		     Its accessible name says what will HAPPEN, not what the state is — a
-		     button called "Collapsed" leaves a screen-reader user guessing whether
-		     that is a description or a destination. aria-expanded carries the state. -->
-		<button
-			type="button"
-			onclick={toggleRail}
-			aria-expanded={!isCollapsed}
-			aria-controls="rail-nav"
-			class={`border-rail-line text-rail-ink-2 hover:text-rail-ink hover:border-rail-ink-2 rounded-control hidden size-8 flex-none place-items-center border lg:grid ${isCollapsed ? '' : 'ml-auto'}`}
-		>
-			<span class="sr-only">{isCollapsed ? 'Expand the sidebar' : 'Collapse the sidebar'}</span>
-			<svg
-				aria-hidden="true"
-				viewBox="0 0 24 24"
-				class="size-4"
-				fill="none"
-				stroke="currentColor"
-				stroke-width="1.75"
-				stroke-linecap="round"
-				stroke-linejoin="round"
+		{#if variant === 'rail'}
+			<!-- Its name says what will HAPPEN; aria-expanded carries the state. -->
+			<button
+				type="button"
+				onclick={toggleRail}
+				aria-expanded={!isCollapsed}
+				aria-controls="rail-nav"
+				class="border-rail-line text-rail-ink-2 hover:text-rail-ink hover:border-rail-ink-2 rounded-control grid size-8 flex-none place-items-center border {isCollapsed
+					? ''
+					: 'ml-auto'}"
 			>
-				<path d={isCollapsed ? 'M9 6l6 6-6 6' : 'M15 6l-6 6 6 6'} />
-			</svg>
-		</button>
+				<span class="sr-only">{isCollapsed ? 'Expand the sidebar' : 'Collapse the sidebar'}</span>
+				<Icon name={isCollapsed ? 'chevron-right' : 'chevron-left'} class="size-4" stroke={1.6} />
+			</button>
+		{:else}
+			<button
+				type="button"
+				onclick={() => onclose?.()}
+				class="border-rail-line text-rail-ink rounded-control ml-auto grid size-10 flex-none place-items-center border"
+			>
+				<span class="sr-only">Close navigation</span>
+				<Icon name="x" class="size-5" stroke={1.6} />
+			</button>
+		{/if}
 	</div>
 
-	<!-- THE SCROLL CONTAINER. scroll-py reserves room for the 2px focus ring plus its
-	     2px offset when a row is scrolled into view, and the spacer after the last
-	     group makes that room real scrollable content — padding alone does not, and
-	     the ring on the last row is then clipped away at the scrollport edge. -->
+	<!-- THE SCROLL CONTAINER. scroll-py leaves room for the focus ring when a row is
+	     scrolled into view; the spacer after the last group makes that room real. -->
 	<nav
-		id="rail-nav"
+		id="{variant}-nav"
 		aria-label="Dashboard sections"
-		class="flex min-w-0 flex-none scroll-py-1.5 flex-row items-center gap-1.5 overflow-x-auto overflow-y-hidden px-4 pt-1 pb-2 lg:min-h-0 lg:flex-1 lg:flex-col lg:items-stretch lg:gap-0 lg:overflow-x-hidden lg:overflow-y-auto lg:px-3 lg:pb-1.5"
+		class="flex min-h-0 flex-1 scroll-py-1.5 flex-col gap-5 overflow-y-auto px-3 pt-1 pb-4"
 	>
 		{#each groups as group (group.id)}
-			{#if group.label}
-				<!-- ink-3, NOT accent: accent is reserved for the current item, and three
-				     accent labels above it would drown the one signal that means "you are
-				     here". Written in natural case and uppercased by CSS, so a screen
-				     reader says "Catalogue" instead of spelling it. -->
-				<p
-					id={group.id}
-					class={`text-eyebrow text-rail-ink-2 border-rail-line mx-0.5 flex-none border-l py-1 pl-3.5 uppercase lg:mx-0 lg:mt-4 lg:mb-1.5 lg:border-l-0 lg:py-0 ${isCollapsed ? 'lg:sr-only lg:mt-3' : ''}`}
+			<div class="flex flex-col gap-1.5">
+				{#if group.label}
+					<!-- Written in natural case, uppercased by CSS, so a screen reader says
+					     "Catalogue" rather than spelling it. -->
+					<p
+						id="{variant}-nav-{group.id}"
+						class="text-eyebrow text-rail-ink-2 px-2.5 uppercase {isCollapsed ? 'sr-only' : ''}"
+					>
+						{group.label}
+					</p>
+				{/if}
+				<ul
+					aria-labelledby={group.label ? `${variant}-nav-${group.id}` : undefined}
+					class="flex flex-col gap-0.5"
 				>
-					{group.label}
-				</p>
-			{/if}
-			<ul
-				aria-labelledby={group.label ? group.id : undefined}
-				class="flex flex-none flex-row gap-1.5 lg:flex-col lg:gap-0.5"
-			>
-				{#each group.items as item (item.label)}
-					<li>
-						{#if item.href}
-							<a
-								href={resolve(item.href)}
-								aria-current={pathname === item.href ? 'page' : undefined}
-								class={`${row} ${pathname === item.href ? current : link}`}
-							>
-								{@render icon(
-									item.icon,
-									pathname === item.href ? 'text-rail-ink' : 'text-rail-ink-2'
-								)}
-								<span class={`min-w-0 ${isCollapsed ? 'lg:sr-only' : ''}`}>{item.label}</span>
-							</a>
-						{:else}
-							<!--
-								Genuinely non-interactive: aria-disabled and NO link target, so a
-								keyboard user does not tab into a control that does nothing. A
-								disabled control must say why — that rule is from the design system
-								and applies here as much as on the POS; the Soon pill says it on the
-								row and the note under the nav says when each one arrives.
-
-								`relative` is not decoration. The pill carries an .sr-only span,
-								which is absolutely positioned; with no positioned ancestor its
-								containing block is the initial one, so it escapes this nav's
-								overflow and the DOCUMENT scrolls sideways on a phone.
-							-->
-							<span aria-disabled="true" class={`${row} ${soon}`}>
-								{@render icon(item.icon, 'text-rail-ink-2')}
-								<span class={`min-w-0 ${isCollapsed ? 'lg:sr-only' : ''}`}>{item.label}</span>
-								<span
-									class={`text-eyebrow text-rail-ink-2 border-rail-line ml-auto flex-none rounded-full border px-1.5 py-0.5 font-mono uppercase ${isCollapsed ? 'lg:sr-only' : ''}`}
+					{#each group.items as item (item.label)}
+						<li>
+							{#if item.href}
+								{@const here = isCurrent(item.href)}
+								<a
+									href={resolve(item.href)}
+									data-current={here ? '' : undefined}
+									aria-current={pathname === item.href ? 'page' : undefined}
+									class="{row} {link}"
+									onmouseenter={(event) => showTip(event, item.label)}
+									onmouseleave={hideTip}
+									onfocus={(event) => showTip(event, item.label)}
+									onblur={hideTip}
 								>
-									Soon<span class="sr-only"> — not built yet</span>
+									{@render icon(item.icon, here ? 'text-rail-ink' : 'text-rail-ink-2')}
+									<span class="min-w-0 {isCollapsed ? 'sr-only' : ''}">{item.label}</span>
+								</a>
+							{:else}
+								<!-- Genuinely non-interactive: aria-disabled and NO link target. A
+								     disabled control must say why — the Soon pill says it on the row. -->
+								<!-- svelte-ignore a11y_no_static_element_interactions -->
+								<span
+									aria-disabled="true"
+									class="{row} {soon}"
+									onmouseenter={(event) => showTip(event, `${item.label} — soon`)}
+									onmouseleave={hideTip}
+								>
+									{@render icon(item.icon, 'text-rail-ink-2')}
+									<span class="min-w-0 {isCollapsed ? 'sr-only' : ''}">{item.label}</span>
+									<span
+										class="text-eyebrow text-rail-ink-2 border-rail-line ml-auto flex-none rounded-full border px-1.5 py-0.5 font-mono uppercase {isCollapsed
+											? 'sr-only'
+											: ''}"
+									>
+										Soon<span class="sr-only"> — not built yet</span>
+									</span>
 								</span>
-							</span>
-						{/if}
-					</li>
-				{/each}
-			</ul>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			</div>
 		{/each}
-		<!-- Real scrollable content, so the focus ring on the last row has somewhere
-		     to land. See the scroll-py note above. -->
 		<div aria-hidden="true" class="h-1.5 flex-none"></div>
 	</nav>
 
-	<!-- The scroll cue is WRITTEN, not left to a scrollbar: an overlay scrollbar is
-	     invisible until you have already guessed to swipe. lg:hidden takes it out of
-	     the accessibility tree at desktop, where it would be a lie.
-
-	     The paragraph that used to sit here — explaining that the seven greyed rows
-	     are not built — has been removed. Each row already says "Soon" beside its own
-	     label, which is where a reader looks; repeating it as a block of prose under
-	     the nav made it the largest piece of text in the rail while saying the least. -->
-	<p class="text-caption text-rail-ink-2 flex-none px-4 pb-4 lg:hidden">
-		The row above scrolls sideways; all nine sections are in it.
-	</p>
-
+	<!-- WHO IS SIGNED IN, Sign out beside it, and the theme below. -->
 	<div
-		class={`border-rail-line mt-auto flex flex-none flex-row flex-wrap items-center gap-3 border-t py-4 lg:flex-col ${isCollapsed ? 'px-2 lg:items-center lg:gap-2 lg:px-0' : 'px-4 lg:items-stretch'}`}
+		class="border-rail-line flex flex-none flex-col gap-3 border-t py-4 {isCollapsed
+			? 'items-center px-2'
+			: 'px-4'}"
 	>
-		<div class={`flex min-w-0 items-center gap-2.5 ${isCollapsed ? 'lg:gap-0' : ''}`}>
+		<div class="flex min-w-0 items-center gap-2.5 {isCollapsed ? 'flex-col' : ''}">
 			<span
 				aria-hidden="true"
-				class="bg-rail-active text-rail-ink grid size-9 flex-none place-items-center rounded-full font-mono text-caption font-semibold"
+				class="bg-rail-active text-rail-ink text-caption grid size-9 flex-none place-items-center rounded-full font-mono font-medium"
 			>
 				{initials}
 			</span>
-			<!-- sr-only, not removed: collapsing the rail is a visual choice and must not
-			     take the signed-in identity out of the accessibility tree. -->
-			<div class={`flex min-w-0 flex-col ${isCollapsed ? 'lg:sr-only' : ''}`}>
+			<!-- sr-only when collapsed, never removed: collapsing is a visual choice. -->
+			<div class="flex min-w-0 flex-1 flex-col {isCollapsed ? 'sr-only' : ''}">
 				<span class="text-caption text-rail-ink font-medium break-words">{displayName}</span>
-				<!-- The role is a fact about the signed-in person, not a decoration: it is
-				     what decides which of these sections will ever be reachable. -->
 				<span class="text-eyebrow text-rail-ink-2 uppercase">{role}</span>
 			</div>
-		</div>
-
-		<!-- Hidden outright when collapsed, not shrunk. It is three labelled buttons
-		     and 72px cannot hold them legibly; an unreadable control is worse than an
-		     absent one, and expanding the rail brings it straight back. This is a
-		     display choice with no accessibility cost — the theme is still whatever it
-		     was, and nothing else in the product depends on this control being present. -->
-		<div class={isCollapsed ? 'lg:hidden' : 'contents'}>
-			<ThemeToggle />
-		</div>
-
-		<!--
-			A FORM, never an anchor. /logout refuses GET (its load returns 405), so a
-			link would be triggerable by any image tag on any page. The design carries
-			that: "Sign out" is a submit button and it looks like one.
-		-->
-		<form method="POST" action="/logout" class={`ml-auto ${isCollapsed ? 'lg:ml-0' : 'lg:ml-0'}`}>
-			<button
-				type="submit"
-				class={`border-rail-line text-rail-ink hover:bg-rail-raise rounded-control text-caption flex items-center justify-center border font-medium ${isCollapsed ? 'lg:size-10 lg:gap-0 lg:px-0 gap-2 px-3 py-2' : 'gap-2 px-3 py-2 lg:w-full'}`}
-			>
-				<svg
-					class="size-4 flex-none"
-					viewBox="0 0 24 24"
-					stroke="currentColor"
-					fill="none"
-					stroke-width="1.6"
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					aria-hidden="true"
+			<!-- A FORM, never an anchor: /logout refuses GET, so a link would be
+			     triggerable by any image tag on any page. -->
+			<form method="POST" action="/logout">
+				<button
+					type="submit"
+					class="border-rail-line text-rail-ink hover:bg-rail-raise rounded-control text-caption flex min-h-9 items-center justify-center gap-2 border font-medium {isCollapsed
+						? 'size-10'
+						: 'px-3'}"
 				>
-					<path d="M15 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2v-2.5" />
-					<path d="M11 12h9" />
-					<path d="m17.5 8.5 3.5 3.5-3.5 3.5" />
-				</svg>
-				<span class={isCollapsed ? 'lg:sr-only' : ''}>Sign out</span>
-			</button>
-		</form>
+					<Icon name="log-out" class="size-4" stroke={1.6} />
+					<span class={isCollapsed ? 'sr-only' : ''}>Sign out</span>
+				</button>
+			</form>
+		</div>
+		<ThemeToggle compact={isCollapsed} />
 	</div>
 </aside>
+
+{#if variant === 'rail'}
+	<div
+		bind:this={tip}
+		popover="manual"
+		aria-hidden="true"
+		class="rounded-control border-line bg-raise text-caption text-ink shadow-floating inset-auto m-0 -translate-y-1/2 border px-2 py-1"
+	>
+		{tipText}
+	</div>
+{/if}

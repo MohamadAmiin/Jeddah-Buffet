@@ -346,6 +346,10 @@ const NON_TEXT_PAIRS: Array<[string, string]> = [
 	['ring', 'bg'],
 	['ring', 'raise'],
 	['rail-line', 'rail'],
+	// The focus ring on every rail-coloured surface (base.css swaps --c-ring for it
+	// under [data-rail]): the accent ring measured 2.37:1 on the dashboard rail and
+	// 1.58:1 on the till bar.
+	['rail-ring', 'rail'],
 	// The SELECTED ROW'S INDICATOR, not its fill. --c-rail-active on --c-rail is
 	// 1.54:1 by design — a quiet wash, because the selection is carried by the left
 	// bar (this pair), by font weight and by aria-current, never by the fill alone.
