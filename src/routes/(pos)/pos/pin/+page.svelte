@@ -33,6 +33,7 @@
 	} from '$lib/pos/store';
 	import { signIn, type SignedInEmployee } from '$lib/pos/employee.svelte';
 	import { readLocalSession } from '$lib/pos/session';
+	import { hasPendingPairing } from '$lib/pos/print-client';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import Keypad, { type KeypadKey } from '$lib/components/pos/Keypad.svelte';
 	import TillBanner from '$lib/components/pos/TillBanner.svelte';
@@ -41,6 +42,12 @@
 	async function handOff(employee: SignedInEmployee) {
 		signIn(employee);
 		signedIn = { displayName: employee.displayName, roleName: employee.roleName };
+		// A pairing link opened before anyone was signed in: the owner finishes it
+		// on the Printer screen, which is the only place that takes it.
+		if (employee.isOwner && hasPendingPairing()) {
+			void goto(resolve('/pos/printer'));
+			return;
+		}
 		let inSession = false;
 		try {
 			const deviceId = await readBoundDeviceId();

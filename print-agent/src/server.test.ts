@@ -1,6 +1,7 @@
 import { request as httpRequest, type Server } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentConfig } from './config.ts';
+import type { PairingClaim } from './pairing.ts';
 import {
 	createAgentServer,
 	listen,
@@ -76,6 +77,8 @@ function harness() {
 	const drawer: DrawerRequest[] = [];
 	let submitAnswer: 'queued' | 'duplicate' = 'queued';
 	let drawerAnswer: 'opened' | 'duplicate' | 'too_late' | 'printer_unreachable' = 'opened';
+	let pairingAnswer: PairingClaim = 'not_open';
+	let claims = 0;
 	const deps: AgentDeps = {
 		submitJob: (job) => {
 			jobs.push(job);
@@ -85,12 +88,18 @@ function harness() {
 			drawer.push(request);
 			return drawerAnswer;
 		},
-		status: async () => status
+		status: async () => status,
+		claimPairing: () => {
+			claims += 1;
+			return pairingAnswer;
+		}
 	};
 	return {
 		deps,
 		jobs,
 		drawer,
+		claims: () => claims,
+		setPairing: (a: PairingClaim) => (pairingAnswer = a),
 		setSubmit: (a: typeof submitAnswer) => (submitAnswer = a),
 		setDrawer: (a: typeof drawerAnswer) => (drawerAnswer = a)
 	};
@@ -221,6 +230,61 @@ describe('binding and the three walls', () => {
 			expect(answer.json).toEqual({ error: 'unauthorized' });
 		}
 		expect(h.jobs).toHaveLength(0);
+	});
+});
+
+describe('POST /pair — the one route before the token wall', () => {
+	const untokened = (port: number) => ({ host: `127.0.0.1:${port}`, origin: ORIGIN });
+
+	it('hands the token to the till while pairing is open, with no Authorization header', async () => {
+		const h = harness();
+		h.setPairing('ok');
+		const { port } = await start(h.deps);
+		const answer = await call(port, { method: 'POST', path: '/pair', headers: untokened(port) });
+		expect(answer.status).toBe(200);
+		expect(answer.json).toEqual({ token: TOKEN });
+		expect(answer.headers['access-control-allow-origin']).toBe(ORIGIN);
+		expect(answer.headers['cache-control']).toBe('no-store');
+		expect(h.claims()).toBe(1);
+	});
+
+	it.each(['claimed', 'not_open'] as const)(
+		'refuses with 403 and the reason when pairing is %s, and sends no token',
+		async (reason) => {
+			const h = harness();
+			h.setPairing(reason);
+			const { port } = await start(h.deps);
+			const answer = await call(port, { method: 'POST', path: '/pair', headers: untokened(port) });
+			expect(answer.status).toBe(403);
+			expect(answer.json).toEqual({ error: 'pairing_closed', reason });
+			expect(JSON.stringify(answer.json)).not.toContain(TOKEN);
+		}
+	);
+
+	it('stands behind the Host and Origin walls, and never spends the claim on a refused caller', async () => {
+		const h = harness();
+		h.setPairing('ok');
+		const { port } = await start(h.deps);
+		const wrong: Record<string, string>[] = [
+			{ host: `evil.example:${port}`, origin: ORIGIN },
+			{ host: `127.0.0.1:${port}`, origin: 'https://evil.example' },
+			{ host: `127.0.0.1:${port}` }
+		];
+		for (const headers of wrong) {
+			const answer = await call(port, { method: 'POST', path: '/pair', headers });
+			expect(answer.status, JSON.stringify(headers)).toBe(403);
+			expect(JSON.stringify(answer.json)).not.toContain(TOKEN);
+		}
+		expect(h.claims()).toBe(0);
+	});
+
+	it('is POST only: a GET /pair meets the token wall like any other request', async () => {
+		const h = harness();
+		h.setPairing('ok');
+		const { port } = await start(h.deps);
+		const answer = await call(port, { method: 'GET', path: '/pair', headers: untokened(port) });
+		expect(answer.status).toBe(401);
+		expect(h.claims()).toBe(0);
 	});
 });
 

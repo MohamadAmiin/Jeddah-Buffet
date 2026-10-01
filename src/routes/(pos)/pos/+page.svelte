@@ -25,6 +25,7 @@
 	import { adoptServerHint } from '$lib/pos/invoice-sequence';
 	import { adoptServerSession } from '$lib/pos/session';
 	import { signOut } from '$lib/pos/employee.svelte';
+	import { hasPendingPairing } from '$lib/pos/print-client';
 	import { KEY } from '$lib/components/pos/keys';
 
 	type DirectoryEntry = {
@@ -211,6 +212,10 @@
 		return () => removeEventListener('online', refreshMenu);
 	});
 
+	// A pairing link was opened with nobody signed in (/pos/printer sent us here):
+	// say what happens next rather than leave the bounce unexplained.
+	const pairingWaiting = hasPendingPairing();
+
 	function choose(id: string) {
 		// An employee id is not a secret — it is already on this list — and the PIN
 		// never appears in a URL.
@@ -227,6 +232,13 @@
 <main class="relative flex min-h-0 flex-1 overflow-y-auto p-3 md:p-4 lg:p-6">
 	<div class="m-auto flex w-full max-w-3xl flex-col gap-4">
 		<h1 class="text-title text-ink">Who is signing in?</h1>
+
+		{#if pairingWaiting}
+			<p class="bg-raise-2 text-ink-2 rounded-control px-3 py-2" data-testid="pairing-waiting">
+				<span aria-hidden="true" class="font-mono">○</span>
+				A printer pairing link is waiting — sign in as the owner to finish pairing.
+			</p>
+		{/if}
 
 		{#if status === 'loading'}
 			<p class="text-ink-2">Loading the staff list…</p>

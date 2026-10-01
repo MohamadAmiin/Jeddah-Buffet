@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -97,6 +97,27 @@ function startAgent(): Promise<ChildProcess> {
 				reject(new Error(`the print agent exited ${code}: ${errors}`));
 		});
 	});
+}
+
+/** The pairing link, from the agent's own `link` command — the line an operator reads. */
+function agentPairingLink(): string {
+	const out = execFileSync(
+		process.execPath,
+		['print-agent/src/main.ts', 'link', '--config', configPath],
+		{ cwd: process.cwd(), encoding: 'utf8' }
+	);
+	const match = /^Pairing link:\s+(\S+)$/m.exec(out);
+	if (!match?.[1]) throw new Error(`the agent printed no pairing link:\n${out}`);
+	return match[1];
+}
+
+/** Run the agent's own `pair` command: opens pairing, prints no secret. */
+function openAgentPairing(): string {
+	return execFileSync(
+		process.execPath,
+		['print-agent/src/main.ts', 'pair', '--config', configPath],
+		{ cwd: process.cwd(), encoding: 'utf8' }
+	);
 }
 
 function stopAgent(): Promise<void> {
@@ -240,17 +261,51 @@ test('receipts, kitchen tickets and the drawer: cash prints, a reprint is COPY, 
 	const tillPage = await till.newPage();
 	await registerDevice(tillPage, OWNER);
 
-	// 4. The owner pairs the till; both printers print the test page.
-	await signInOnTill(tillPage, 'The Owner', OWNER_PIN);
-	const chip = tillPage.getByTestId('printer-chip');
-	await expect(chip).toContainText('Printer not set up');
-	await tillPage.locator('summary').filter({ hasText: 'The Owner' }).click();
-	await tillPage.getByRole('link', { name: 'Printer' }).click();
+	// 4. The pairing link is opened with nobody signed in: the till asks for the
+	//    owner, pairs itself — nothing typed — and both printers print the test page.
+	const link = agentPairingLink();
+	expect(link).toBe(
+		`http://localhost:4173/pos/printer#agent=${encodeURIComponent(`http://127.0.0.1:${agentPort}`)}&token=${TOKEN}`
+	);
+	await tillPage.goto(link);
+	await expect(tillPage).toHaveURL(/\/pos$/);
+	await expect(tillPage.getByTestId('pairing-waiting')).toBeVisible();
+	await pickEmployee(tillPage, 'The Owner');
+	await enterPin(tillPage, OWNER_PIN);
+	// The secret is gone from the address bar.
 	await expect(tillPage).toHaveURL(/\/pos\/printer$/);
-	await tillPage.getByLabel('Agent address').fill(`http://127.0.0.1:${agentPort}`);
-	await tillPage.getByLabel('Pairing token').fill(TOKEN);
-	await tillPage.getByRole('button', { name: 'Save and test print' }).click();
+	await expect(tillPage.getByTestId('paired-agent')).toContainText(`http://127.0.0.1:${agentPort}`);
+	await expect(tillPage.getByLabel('Pairing token')).toHaveCount(0);
+	const chip = tillPage.getByTestId('printer-chip');
 	const results = tillPage.getByTestId('test-results');
+
+	// 4b. "Pair this till". Forget the pairing; with pairing closed on the agent the
+	//     key says what to run, and nothing is paired.
+	await tillPage.getByTestId('forget-pairing').click();
+	await expect(tillPage.getByTestId('pairing-help')).toBeVisible();
+	await expect(tillPage.getByTestId('test-print')).toHaveCount(0);
+	await tillPage.getByTestId('pair-here').click();
+	await expect(results).toContainText('○ Pairing is closed');
+	await expect(tillPage.getByTestId('paired-agent')).toHaveCount(0);
+	//     The operator opens pairing; the command prints no secret; the key now pairs.
+	const opened = openAgentPairing();
+	expect(opened).toContain('Pairing is open until one till pairs');
+	expect(opened).not.toContain(TOKEN);
+	await tillPage.getByTestId('pair-here').click();
+	await expect(results).toContainText('● Paired with the agent');
+	await expect(tillPage.getByTestId('paired-agent')).toBeVisible();
+	//     One claim per opening: a second ask is refused, and says it was used.
+	await tillPage.getByTestId('forget-pairing').click();
+	await tillPage.getByTestId('pair-here').click();
+	await expect(results).toContainText('✕ Pairing was already used');
+
+	// 4c. The link pasted into the tab that already shows the Printer screen: only
+	//     the fragment changes, so the page is not reloaded — it must still pair.
+	await tillPage.goto(link);
+	await expect(results).toContainText('● Paired with the agent');
+	await expect(tillPage).toHaveURL(/\/pos\/printer$/);
+
+	await tillPage.getByTestId('test-print').click();
 	await expect(results).toContainText('● Test page sent to the receipt printer', {
 		timeout: 15_000
 	});

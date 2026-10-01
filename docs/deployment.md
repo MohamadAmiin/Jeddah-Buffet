@@ -180,7 +180,7 @@ Three things on the server side decide whether printing works:
 - **HTTPS is required** (section 1). Chrome lets an `https:` page call
   `http://127.0.0.1` — loopback is a trustworthy origin — and, from Chrome 142, asks
   the owner once for "local network access" on the first call. That prompt appears
-  during **Printer → Save and test print**, not during a sale.
+  when the owner presses **Printer → Pair this till**, not during a sale.
 - **The printers belong on a staff-only network.** A network ESC/POS printer accepts
   anything sent to TCP port 9100: whoever can reach that port can print on it and open
   the drawer without the agent. Guest Wi-Fi must not route to the printers, and they

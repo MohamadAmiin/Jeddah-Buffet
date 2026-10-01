@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig } from './config.ts';
-import { DEFAULT_CONFIG_PATH, DEFAULT_DATA_DIR, parseFlags, runInit } from './main.ts';
+import { DEFAULT_CONFIG_PATH, DEFAULT_DATA_DIR, pairingLink, parseFlags, runInit } from './main.ts';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -125,5 +125,33 @@ describe('runInit', () => {
 	it('the default paths sit beside src/, inside print-agent/', () => {
 		expect(DEFAULT_CONFIG_PATH).toMatch(/print-agent[\\/]config\.json$/);
 		expect(DEFAULT_DATA_DIR).toMatch(/print-agent[\\/]data$/);
+	});
+});
+
+describe('pairingLink', () => {
+	const token = 'ab'.repeat(32);
+
+	it("is the app's Printer screen with the agent address and the secret in the fragment", () => {
+		// The exact shape src/lib/pos/print-client.test.ts parses.
+		expect(pairingLink({ origin: 'https://pos.example.com', token, port: 9471 })).toBe(
+			`https://pos.example.com/pos/printer#agent=http%3A%2F%2F127.0.0.1%3A9471&token=${token}`
+		);
+	});
+
+	it('keeps the secret out of everything a browser sends to a server', () => {
+		const link = new URL(pairingLink({ origin: 'http://localhost:5173', token, port: 9500 }));
+		expect(link.origin).toBe('http://localhost:5173');
+		expect(link.pathname).toBe('/pos/printer');
+		expect(link.search).toBe('');
+		expect(new URLSearchParams(link.hash.slice(1)).get('agent')).toBe('http://127.0.0.1:9500');
+		expect(new URLSearchParams(link.hash.slice(1)).get('token')).toBe(token);
+	});
+
+	it('follows the config init wrote', () => {
+		const path = join(tmp(), 'config.json');
+		const { config } = runInit(parseFlags([...README_INIT, '--config', path]).flags);
+		expect(pairingLink(loadConfig(path))).toBe(
+			`https://pos.example.com/pos/printer#agent=http%3A%2F%2F127.0.0.1%3A9471&token=${config.token}`
+		);
 	});
 });

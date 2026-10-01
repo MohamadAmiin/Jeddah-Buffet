@@ -2,8 +2,17 @@
 //
 //   node print-agent/src/main.ts init --origin <url> --receipt <host[:port]> --width <32|48>
 //        [--kitchen <host[:port]>] [--kitchen-width <32|48>] [--port <n>] [--config <path>] [--force]
+//   node print-agent/src/main.ts pair [--config <path>]
+//   node print-agent/src/main.ts link [--config <path>]
 //   node print-agent/src/main.ts run [--config <path>]
 //   node print-agent/src/main.ts --help
+//
+// NOBODY TYPES THE PAIRING SECRET. `init` and `pair` open pairing (pairing.ts);
+// the owner presses "Pair this till" on the Printer screen and the agent hands
+// that till the secret, once, and pairing closes. `link` is the way that opens
+// nothing: it prints `<origin>/pos/printer#agent=…&token=…`, and opening that on
+// the till pairs it — the secret rides in the FRAGMENT, which a browser never
+// sends to any server, so the app never sees it.
 //
 // Zero dependencies: node: builtins and sibling files with .ts extensions only,
 // run directly by Node 24's type stripping (only erasable syntax — no enum, no
@@ -17,6 +26,7 @@ import {
 	parsePrinterAddress,
 	type AgentConfig
 } from './config.ts';
+import { claimPairing, openPairing } from './pairing.ts';
 import { createDrawer, createQueue } from './queue.ts';
 import { createAgentServer, listen } from './server.ts';
 
@@ -30,12 +40,17 @@ Usage:
   node print-agent/src/main.ts init --origin <url> --receipt <host[:port]> --width <32|48>
        [--kitchen <host[:port]>] [--kitchen-width <32|48>] [--port <n>]
        [--config <path>] [--force]
+  node print-agent/src/main.ts pair [--config <path>]
+  node print-agent/src/main.ts link [--config <path>]
   node print-agent/src/main.ts run [--config <path>]
   node print-agent/src/main.ts --help
 
-init   writes ${DEFAULT_CONFIG_PATH} (or --config) with a fresh pairing token and
-       prints the agent URL and the token ONCE. It refuses to overwrite an
-       existing file without --force.
+init   writes ${DEFAULT_CONFIG_PATH} (or --config) with a fresh pairing secret and
+       opens pairing. It refuses to overwrite an existing file without --force.
+pair   opens pairing: on the till, Printer → "Pair this till". It stays open
+       until one till pairs — the first to ask — and then closes.
+link   prints a pairing link instead — pairs a till without opening pairing.
+       The link carries the secret.
 run    starts the agent on 127.0.0.1:<port> (default ${DEFAULT_AGENT_PORT}).
 
 --origin        the app's https address exactly as the till opens it, e.g. https://pos.example.com
@@ -90,6 +105,41 @@ function width(flags: Flags, name: string, fallback?: 32 | 48): 32 | 48 {
 	throw new Error(`--${name} must be 32 or 48`);
 }
 
+/**
+ * The link that pairs a till: the app's own Printer screen, with the agent's
+ * loopback address and the pairing secret in the FRAGMENT (never sent to a
+ * server). src/lib/pos/print-client.ts parsePairingFragment reads it.
+ */
+export function pairingLink(config: Pick<AgentConfig, 'origin' | 'token' | 'port'>): string {
+	const pairing = new URLSearchParams({
+		agent: `http://127.0.0.1:${config.port}`,
+		token: config.token
+	});
+	return `${config.origin}/pos/printer#${pairing.toString()}`;
+}
+
+function linkLines(config: AgentConfig): string[] {
+	return [
+		`Agent URL:     http://127.0.0.1:${config.port}`,
+		`Pairing link:  ${pairingLink(config)}`,
+		'Open the link once in Chrome on the till. The owner signs in and the till pairs itself.',
+		'The link carries the pairing secret: never paste it into a chat or commit it.',
+		''
+	];
+}
+
+/** Open pairing and say what to press. Prints no secret. */
+function openPairingLines(config: AgentConfig): string[] {
+	openPairing(config.dataDir);
+	return [
+		`Agent URL:     http://127.0.0.1:${config.port}`,
+		'Pairing is open until one till pairs.',
+		'On the till, signed in as the owner: Printer → "Pair this till".',
+		'The first till to ask is paired, and pairing closes. Run `pair` to open it again.',
+		''
+	];
+}
+
 /** The `init` command, as a function so the test can call it without a process. */
 export function runInit(flags: Flags): { path: string; config: AgentConfig } {
 	const origin = text(flags, 'origin');
@@ -123,7 +173,8 @@ async function runServer(config: AgentConfig): Promise<void> {
 	const server = createAgentServer(config, {
 		submitJob: queue.submit,
 		pulseDrawer: drawer.pulse,
-		status: queue.status
+		status: queue.status,
+		claimPairing: () => claimPairing(config.dataDir)
 	});
 	const port = await listen(server, config.port);
 	// The URL, never the token.
@@ -145,16 +196,17 @@ function main(argv: string[]): number {
 	}
 	if (command === 'init') {
 		const { path, config } = runInit(flags);
-		process.stdout.write(
-			[
-				`Wrote ${path}`,
-				`Agent URL:      http://127.0.0.1:${config.port}`,
-				`Pairing token:  ${config.token}`,
-				'Enter this URL and token on the till: Printer → Pair.',
-				'The token is shown ONCE. It is a secret: never paste it into a chat or commit it.',
-				''
-			].join('\n')
-		);
+		process.stdout.write([`Wrote ${path}`, ...openPairingLines(config)].join('\n'));
+		return 0;
+	}
+	if (command === 'pair') {
+		const config = loadConfig(text(flags, 'config') ?? DEFAULT_CONFIG_PATH);
+		process.stdout.write(openPairingLines(config).join('\n'));
+		return 0;
+	}
+	if (command === 'link') {
+		const config = loadConfig(text(flags, 'config') ?? DEFAULT_CONFIG_PATH);
+		process.stdout.write(linkLines(config).join('\n'));
 		return 0;
 	}
 	if (command === 'run') {
