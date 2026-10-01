@@ -9,11 +9,15 @@ import {
 	createItem,
 	createModifierGroup,
 	createModifier,
+	createTaxRate,
 	linkModifierGroup,
+	readMenuSnapshot,
 	updateItem,
+	updateTaxRate,
 	getMenuVersion
 } from '../menu';
 import { seedStaff } from '../db/test/seed';
+import { seedTaxRate } from '../db/test/settings';
 import { closeTestDb, testDb } from '../db/test/db';
 import { restaurants } from '../db/schema/restaurants';
 import { users } from '../db/schema/users';
@@ -21,6 +25,9 @@ import { posSessions } from '../db/schema/pos-sessions';
 import { restaurantSettings } from '../db/schema/restaurant-settings';
 import { validateSale, type SyncContext } from './validate';
 import type { OpEnvelope } from '../../sync-ops';
+import { minor, ROUNDING_RULE } from '../../money';
+import { computeOrderTotals, serializeTotals } from '../../money/order-totals';
+import { changeDue } from '../../money/change';
 
 afterAll(async () => {
 	await closeTestDb();
@@ -38,9 +45,14 @@ type Fixture = {
 	cashierId: string;
 	waiterId: string;
 	menuVersion: number;
+	/** The named default rate ('Tax' 10%, T-13), or null when the fixture has none. */
+	taxRateId: string | null;
 };
 
-async function makeFixture(email = 'validate@example.com'): Promise<Fixture> {
+async function makeFixture(
+	email = 'validate@example.com',
+	opts: { defaultRate?: boolean } = {}
+): Promise<Fixture> {
 	const [r] = await testDb().insert(restaurants).values({ name: 'Cafe Val' }).returning({
 		id: restaurants.id
 	});
@@ -60,19 +72,25 @@ async function makeFixture(email = 'validate@example.com'): Promise<Fixture> {
 		.returning({ id: users.id });
 	const ownerId = owner.id;
 
-	await db.transaction(async (tx) =>
-		updateSettings(
+	// T-13: 'Tax' 10% is the named default unless the test asks for no rate at all.
+	const taxRateId = await db.transaction(async (tx) => {
+		const ctx = { actorUserId: ownerId, ip: null, userAgent: null };
+		const id =
+			opts.defaultRate === false
+				? null
+				: await seedTaxRate(tx, restaurantId, { rateBp: 1000, makeDefault: true }, ctx);
+		await updateSettings(
 			tx,
 			restaurantId,
 			{
 				taxMode: 'exclusive',
-				taxRateBp: 1000,
 				currencyCode: 'USD',
 				posIdleLockSeconds: 120
 			},
-			{ actorUserId: ownerId, ip: null, userAgent: null }
-		)
-	);
+			ctx
+		);
+		return id;
+	});
 
 	const device = await db.transaction((tx) =>
 		registerDevice(tx, { restaurantId, actorUserId: ownerId, label: 'Counter tablet' })
@@ -148,7 +166,8 @@ async function makeFixture(email = 'validate@example.com'): Promise<Fixture> {
 		syrupId,
 		cashierId: cashier.id,
 		waiterId: waiter.id,
-		menuVersion
+		menuVersion,
+		taxRateId
 	};
 }
 
@@ -221,6 +240,63 @@ function envelope(f: Fixture, overrides: Record<string, unknown> = {}): Payload 
 		seq: 1,
 		payload
 	} as Payload;
+}
+
+/**
+ * A one-line cash sale of `item` at `taxRateBp` and `menuVersion`, totalled by the
+ * money module exactly as the till totals it (computeOrderTotals + serializeTotals),
+ * paid with a 100.00 note and the change changeDue computes.
+ */
+function oneLineCash(
+	f: Fixture,
+	item: { id: string; name: string; priceMinor: bigint },
+	taxRateBp: number,
+	menuVersion: number
+): Payload {
+	const totals = serializeTotals(
+		computeOrderTotals(
+			{
+				taxMode: 'exclusive',
+				lines: [
+					{
+						unitPriceMinor: minor(item.priceMinor),
+						quantity: 1n,
+						modifierDeltasMinor: [],
+						taxRateBp,
+						discountMinor: minor(0n)
+					}
+				]
+			},
+			ROUNDING_RULE
+		)
+	);
+	const tendered = 10_000n;
+	return envelope(f, {
+		menuVersion,
+		lines: [
+			{
+				lineId: randomUUID(),
+				lineNo: 1,
+				menuItemId: item.id,
+				itemName: item.name,
+				quantity: 1,
+				unitPriceMinor: item.priceMinor.toString(),
+				taxRateBp,
+				discountMinor: '0',
+				modifiers: []
+			}
+		],
+		totals,
+		payments: [
+			{
+				paymentId: randomUUID(),
+				method: 'cash',
+				amountMinor: totals.totalMinor,
+				tenderedMinor: tendered.toString(),
+				changeMinor: changeDue(minor(tendered), minor(BigInt(totals.totalMinor))).toString()
+			}
+		]
+	});
 }
 
 let fx: Fixture;
@@ -569,5 +645,118 @@ describe('validateSale (T-18)', () => {
 		);
 		expect(result.ok).toBe(true);
 		if (result.ok) expect(result.softFlags).toContain('session_closed');
+	});
+});
+
+describe('validateSale — named tax rates (T-13)', () => {
+	const ctx = (f: Fixture) => ({ actorUserId: f.ownerId, ip: null, userAgent: null });
+	const tea = (f: Fixture) => ({ id: f.teaId, name: 'Tea', priceMinor: 850n });
+
+	async function reducedRate(f: Fixture): Promise<string> {
+		const created = await db.transaction((tx) =>
+			createTaxRate(tx, f.restaurantId, { name: 'Reduced', rateBp: 500 }, ctx(f))
+		);
+		if (!created.ok) throw new Error(`fixture rate was not created: ${created.reason}`);
+		return created.id;
+	}
+
+	// The rule is written twice — readMenuSnapshot (menu/) and validateSale's Step 8
+	// (orders/, which may not import menu/). This pins the two copies together: a
+	// till that charges exactly what the snapshot says is never flagged.
+	it('validator and snapshot agree: every snapshot item at its resolved rate validates clean', async () => {
+		const reducedId = await reducedRate(fx);
+		const water = await db.transaction((tx) =>
+			createItem(tx, fx.restaurantId, { name: 'Water', priceMinor: 100n, taxRateId: reducedId })
+		);
+		if (!water.ok) throw new Error('fixture item was not created');
+
+		const snapshot = await readMenuSnapshot(testDb(), fx.restaurantId);
+		expect(
+			snapshot.items.map((item) => [item.name, item.taxRate?.name, item.taxRate?.rateBp])
+		).toEqual([
+			['Tea', 'Tax', 1000],
+			['Water', 'Reduced', 500]
+		]);
+		for (const item of snapshot.items) {
+			const result = await db.transaction((tx) =>
+				validateSale(
+					tx,
+					ctxFor(fx, fx.cashierId),
+					oneLineCash(fx, item, item.taxRate!.rateBp, snapshot.version)
+				)
+			);
+			expect(result.ok, item.name).toBe(true);
+			if (result.ok) expect(result.softFlags, item.name).toEqual([]);
+		}
+	});
+
+	// Risk 4: a rate edit bumps the version, so the till's older sale at the old
+	// rate is a SOFT stale_menu_price — never a HARD price_tamper left unrecorded.
+	it('a rate edit is stale at the old version, tamper at the new one, clean at the new rate', async () => {
+		const oldVersion = fx.menuVersion;
+		const edited = await db.transaction((tx) =>
+			updateTaxRate(tx, fx.restaurantId, fx.taxRateId!, { rateBp: 1100 }, ctx(fx))
+		);
+		expect(edited).toEqual({ ok: true, changed: true });
+		const newVersion = await getMenuVersion(testDb(), fx.restaurantId);
+		expect(newVersion).toBe(oldVersion + 1);
+
+		const stale = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(fx, fx.cashierId), oneLineCash(fx, tea(fx), 1000, oldVersion))
+		);
+		expect(stale.ok).toBe(true);
+		if (stale.ok) expect(stale.softFlags).toContain('stale_menu_price');
+
+		const tamper = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(fx, fx.cashierId), oneLineCash(fx, tea(fx), 1000, newVersion))
+		);
+		expect(tamper.ok).toBe(false);
+		if (!tamper.ok) {
+			expect(tamper.hard).toBe('price_tamper');
+			expect(tamper.detail.endsWith(':tax_rate')).toBe(true);
+		}
+
+		const clean = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(fx, fx.cashierId), oneLineCash(fx, tea(fx), 1100, newVersion))
+		);
+		expect(clean.ok).toBe(true);
+		if (clean.ok) expect(clean.softFlags).toEqual([]);
+	});
+
+	it('switching the default makes an old-version sale at the old rate stale, not tamper', async () => {
+		const reducedId = await reducedRate(fx);
+		const oldVersion = await getMenuVersion(testDb(), fx.restaurantId);
+		const switched = await db.transaction((tx) =>
+			updateSettings(tx, fx.restaurantId, { defaultTaxRateId: reducedId }, ctx(fx))
+		);
+		expect(switched.ok).toBe(true);
+		expect(await getMenuVersion(testDb(), fx.restaurantId)).toBe(oldVersion + 1);
+
+		const result = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(fx, fx.cashierId), oneLineCash(fx, tea(fx), 1000, oldVersion))
+		);
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.softFlags).toContain('stale_menu_price');
+	});
+
+	// Risk 5: no rate resolves — no default, no rate on the item — and nothing falls
+	// back to a number, so at the SAME version the line's rate is a HARD difference.
+	it('with no default and no item rate, a sale at the same version is HARD price_tamper', async () => {
+		const bare = await makeFixture(`validate-no-rate-${randomUUID()}@example.com`, {
+			defaultRate: false
+		});
+		expect(bare.taxRateId).toBeNull();
+		const snapshot = await readMenuSnapshot(testDb(), bare.restaurantId);
+		expect(snapshot.defaultTaxRate).toBeNull();
+		expect(snapshot.items.every((item) => item.taxRate === null)).toBe(true);
+
+		const result = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(bare, bare.cashierId), envelope(bare))
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.hard).toBe('price_tamper');
+			expect(result.detail.endsWith(':tax_rate')).toBe(true);
+		}
 	});
 });

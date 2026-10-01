@@ -12,6 +12,7 @@ import {
 	createModifierGroup,
 	linkModifierGroup,
 	listMenu,
+	listTaxRates,
 	removeItemImage,
 	setItemAvailability,
 	setItemImage,
@@ -37,7 +38,6 @@ import {
 	formatTaxRate,
 	itemIdSchema,
 	linkSchema,
-	parseOptionalRate,
 	parsePriceInput,
 	renameCategorySchema,
 	updateItemSchema
@@ -80,9 +80,12 @@ async function menuScope(locals: App.Locals) {
 		restaurantId,
 		format,
 		taxMode: restaurant.taxMode,
-		taxRateBp: restaurant.taxRateBp
+		// T-13: the named default rate's id, or null while the owner has not chosen.
+		defaultTaxRateId: restaurant.defaultTaxRateId
 	};
 }
+
+const TAX_RATE_GONE_MESSAGE = 'That tax rate is no longer available.';
 
 /** A duplicate live category name reaches us as the partial unique index's 23505. */
 function isUniqueViolation(thrown: unknown): boolean {
@@ -92,9 +95,19 @@ function isUniqueViolation(thrown: unknown): boolean {
 
 export const load: ServerLoad = async (event) => {
 	requirePermission(event, 'admin.menu');
-	const { restaurantId, format, taxMode, taxRateBp } = await menuScope(event.locals);
+	const { restaurantId, format, taxMode, defaultTaxRateId } = await menuScope(event.locals);
 	const menu = await listMenu(db, restaurantId);
 	const amount = (value: bigint) => (format ? formatAmount(minor(value), format) : null);
+
+	// T-13: each item's RESOLVED named rate — its own, else the restaurant default,
+	// else none — by id over every rate, archived ones included (an item may still
+	// point at one). The same rule as readMenuSnapshot; no number is assumed.
+	const rates = await listTaxRates(db, restaurantId);
+	const byId = new Map(rates.map((rate) => [rate.id, rate]));
+	const rateOf = (item: { taxRateId: string | null }) => {
+		const id = item.taxRateId ?? defaultTaxRateId;
+		return id === null ? null : (byId.get(id) ?? null);
+	};
 
 	// COST AND MARGIN (tasks/inventory-cogs T-34), read-only: the recipe's cost at
 	// the ledger's current averages, from a SEPARATE reader — listMenu and the POS
@@ -106,9 +119,9 @@ export const load: ServerLoad = async (event) => {
 		const cost = costs.get(id);
 		return cost ? { text: amount(cost.costMinor), negative: cost.costMinor < 0n } : null;
 	};
-	const marginOf = (item: { id: string; priceMinor: bigint; taxRateBp: number | null }) => {
+	const marginOf = (item: { id: string; priceMinor: bigint; taxRateId: string | null }) => {
 		const cost = costs.get(item.id);
-		const rate = item.taxRateBp ?? taxRateBp;
+		const rate = rateOf(item)?.rateBp ?? null;
 		if (!cost) return null;
 		if (taxMode === null || rate === null) return { text: null, negative: false, unset: true };
 		const m = dishMargin(
@@ -128,21 +141,25 @@ export const load: ServerLoad = async (event) => {
 			itemCount: menu.items.filter((item) => item.categoryId === category.id).length
 		})),
 		uncategorisedCount: menu.items.filter((item) => item.categoryId === null).length,
-		items: menu.items.map((item) => ({
-			id: item.id,
-			categoryId: item.categoryId,
-			name: item.name,
-			price: amount(item.priceMinor),
-			taxRate: formatTaxRate(item.taxRateBp),
-			taxRateBp: item.taxRateBp,
-			isAvailable: item.isAvailable,
-			imageUrl: item.imageId ? dashboardImageUrl(item.imageId) : null,
-			cost: costOf(item.id),
-			margin: marginOf(item),
-			groupIds: menu.links
-				.filter((link) => link.menuItemId === item.id)
-				.map((link) => link.modifierGroupId)
-		})),
+		items: menu.items.map((item) => {
+			const rate = rateOf(item);
+			return {
+				id: item.id,
+				categoryId: item.categoryId,
+				name: item.name,
+				price: amount(item.priceMinor),
+				// 'Tax 10%', or 'restaurant rate' while nothing resolves.
+				taxRate: rate ? `${rate.name} ${formatTaxRate(rate.rateBp)}` : formatTaxRate(null),
+				taxRateId: item.taxRateId,
+				isAvailable: item.isAvailable,
+				imageUrl: item.imageId ? dashboardImageUrl(item.imageId) : null,
+				cost: costOf(item.id),
+				margin: marginOf(item),
+				groupIds: menu.links
+					.filter((link) => link.menuItemId === item.id)
+					.map((link) => link.modifierGroupId)
+			};
+		}),
 		groups: menu.modifierGroups.map((group) => ({
 			id: group.id,
 			name: group.name,
@@ -196,19 +213,25 @@ export const actions: Actions = {
 		if (!parsed.success) return fail(400, { message: firstMessage(parsed.error) });
 		const price = parsePriceInput(parsed.data.price, format.exponent);
 		if (!price.ok) return fail(400, { message: price.message });
-		const rate = parseOptionalRate(form.get('taxRateBp'));
-		if (!rate.ok) return fail(400, { message: rate.message });
 
+		// T-13: no rate is passed, so a new item takes the restaurant's default rate.
+		// The named-rate choice arrives with T-32.
 		const result = await db.transaction((tx) =>
 			createItem(tx, restaurantId, {
 				// null = no category (the till's "Other" tab).
 				categoryId: parsed.data.categoryId,
 				name: parsed.data.name,
-				priceMinor: toBigInt(price.minor),
-				taxRateBp: rate.value
+				priceMinor: toBigInt(price.minor)
 			})
 		);
-		if (!result.ok) return fail(400, { message: 'That category no longer exists.' });
+		if (!result.ok) {
+			return fail(400, {
+				message:
+					result.reason === 'invalid_tax_rate'
+						? TAX_RATE_GONE_MESSAGE
+						: 'That category no longer exists.'
+			});
+		}
 		// The id lets the panel upload the photo in its own request, after the item exists.
 		return { message: `${parsed.data.name} added.`, itemId: result.id };
 	},
@@ -233,8 +256,6 @@ export const actions: Actions = {
 			if (!price.ok) return fail(400, { message: price.message });
 			priceMinor = toBigInt(price.minor);
 		}
-		const rate = parseOptionalRate(form.get('taxRateBp'));
-		if (!rate.ok) return fail(400, { message: rate.message });
 
 		const { ip, userAgent } = requestContext(event);
 		// The price change and its menu.price_changed audit row commit together.
@@ -243,17 +264,24 @@ export const actions: Actions = {
 				tx,
 				restaurantId,
 				parsed.data.itemId,
-				// categoryId null moves the item to "No category".
+				// categoryId null moves the item to "No category". No rate is passed
+				// (T-13), so an edited item keeps its rate; T-32 adds the choice.
 				{
 					name: parsed.data.name,
 					priceMinor,
-					taxRateBp: rate.value,
 					categoryId: parsed.data.categoryId
 				},
 				{ actorUserId: user.userId, ip, userAgent }
 			)
 		);
-		if (!result.ok) return fail(400, { message: 'That item no longer exists.' });
+		if (!result.ok) {
+			return fail(400, {
+				message:
+					result.reason === 'invalid_tax_rate'
+						? TAX_RATE_GONE_MESSAGE
+						: 'That item no longer exists.'
+			});
+		}
 		return { message: result.changed ? `${parsed.data.name} saved.` : 'No change to save.' };
 	},
 

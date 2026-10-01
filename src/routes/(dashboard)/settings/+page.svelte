@@ -101,13 +101,15 @@
 		</section>
 
 		<!--
-			Tax mode, tax rate and currency (spec 33 open decisions 3 and 4, answered
+			Tax mode and currency (spec 33 open decisions 3 and 4, answered
 			2026-09-15). NOT required: the columns are nullable and the owner may save
 			a rename without answering them. An empty field is "unset", never a default.
 			Tax mode is free text with a datalist, mirroring the time zone, because
-			Field renders an <input> only. There is NO idle-lock control here: it lives
-			on /device, beside the till it protects. Approval limits are still open
-			decision 6 and have no field at all.
+			Field renders an <input> only. The default tax RATE is a named rate since
+			tasks/settings-tax-payments-receipt T-13 and is chosen on /settings/tax
+			(T-28), not here. There is NO idle-lock control here: it lives on /device,
+			beside the till it protects. Approval limits are still open decision 6 and
+			have no field at all.
 		-->
 		<section aria-labelledby="s-tax" class={SECTION}>
 			<div class="flex flex-col gap-1">
@@ -130,15 +132,6 @@
 						<option value={mode}></option>
 					{/each}
 				</datalist>
-				<Field
-					id="taxRateBp"
-					name="taxRateBp"
-					label="Tax rate (basis points)"
-					inputmode="numeric"
-					numeric
-					value={data.taxRateBp === null ? '' : String(data.taxRateBp)}
-					hint="825 means 8.25%. Whole basis points only."
-				/>
 			</div>
 		</section>
 

@@ -24,15 +24,29 @@ import { MENU_CACHE_HEADERS, ifNoneMatchMatches, menuEtag } from './etag';
 // 2^53 silently loses precision and hands the till one multiplication away from a
 // float). The till keeps the string and applies BigInt() in one read accessor.
 //
-// TAX RATES: each item carries its own taxRateBp, and null there means "inherit
-// the restaurant rate" — the top-level taxRateBp beside it, which is why that is in
-// the payload at all. Both may be null while the owner has not chosen; the server
-// never pre-resolves the fallback onto the item. The till shows prices and totals
-// nothing in this plan; the rates travel now so the sales plan can snapshot a
-// line's rate at the moment of sale (invariant 7) without a second round trip.
+// TAX RATES ARE NAMED AND RESOLVED (tasks/settings-tax-payments-receipt T-13).
+// `format: 2` marks this shape. `defaultTaxRate` is the restaurant's named default
+// `{ id, name, rateBp }`, or null while the owner has not picked one; each item's
+// `taxRate` is the rate the till must charge for it — the item's own named rate,
+// else the default, else null — resolved by readMenuSnapshot, archived rates
+// included (spec 6). A line snapshots the rate's number, id and name at the moment
+// of sale (invariant 7).
+//
+// The LEGACY keys stay for tills still running an older shell: the top-level
+// `taxRateBp` is the default's number (`defaultTaxRate?.rateBp ?? null`) and each
+// item's `taxRateBp` is its RESOLVED number (`taxRate?.rateBp ?? null`). An old
+// till treats a non-null item number as the item's own rate, which is exactly the
+// resolved rate, so it charges what the server will validate. A till that knows
+// format 2 (MENU_FORMAT in src/lib/pos/menu-snapshot.ts, T-18) replaces a copy in
+// an older format even at an equal version (risk 4). Nothing here falls back to a
+// number when no rate resolves: null stays null (risk 5).
 //
 // PHOTOS: a photo travels as its id (imageId, or null); the till fetches the
 // bytes from /api/menu/images/[id]. The snapshot never carries bytes.
+
+// Must equal MENU_FORMAT in src/lib/pos/menu-snapshot.ts (T-18); a till holding an
+// older format replaces its copy even at an equal version (risk 4).
+const MENU_FORMAT = 2;
 
 export const GET: RequestHandler = async (event) => {
 	// FIRST: 403 for a missing, unknown or revoked device — before any read.
@@ -64,6 +78,7 @@ export const GET: RequestHandler = async (event) => {
 	return json(
 		{
 			version: snapshot.version,
+			format: MENU_FORMAT,
 			// The till binds its copy to this: a tablet moved to another restaurant
 			// replaces its menu even when the two version numbers happen to agree.
 			restaurantId: device.restaurantId,
@@ -71,7 +86,9 @@ export const GET: RequestHandler = async (event) => {
 			currency: snapshot.currencyCode,
 			currencyExponent,
 			taxMode: snapshot.taxMode,
-			taxRateBp: snapshot.taxRateBp,
+			defaultTaxRate: snapshot.defaultTaxRate,
+			// Legacy (pre-format-2 tills): the default's number, or null.
+			taxRateBp: snapshot.defaultTaxRate?.rateBp ?? null,
 			categories: snapshot.categories.map((category) => ({
 				id: category.id,
 				name: category.name,
@@ -83,7 +100,9 @@ export const GET: RequestHandler = async (event) => {
 				imageId: item.imageId,
 				name: item.name,
 				priceMinor: item.priceMinor.toString(),
-				taxRateBp: item.taxRateBp,
+				taxRate: item.taxRate,
+				// Legacy (pre-format-2 tills): the RESOLVED number, or null.
+				taxRateBp: item.taxRate?.rateBp ?? null,
 				isAvailable: item.isAvailable,
 				sortOrder: item.sortOrder,
 				modifierGroupIds: snapshot.links

@@ -11,6 +11,7 @@ import { restaurantSettings } from '$lib/server/db/schema/restaurant-settings';
 import { registerDevice } from '$lib/server/auth/pos-device';
 import { createCategory, createItem, getMenuVersion } from '$lib/server/menu';
 import { seedStaff } from '$lib/server/db/test/seed';
+import { seedTaxRate } from '$lib/server/db/test/settings';
 import { POST } from './+server';
 import type { RequestEvent } from '@sveltejs/kit';
 import type { OpEnvelope, OpKind } from '$lib/sync-ops';
@@ -57,19 +58,20 @@ async function makeFixture(email: string): Promise<Fixture> {
 			passwordHash: 'not-a-real-hash'
 		})
 		.returning();
-	await db.transaction((tx) =>
-		updateSettings(
+	await db.transaction(async (tx) => {
+		const ctx = { actorUserId: owner.id, ip: null, userAgent: null };
+		await seedTaxRate(tx, restaurant.id, { rateBp: 825, makeDefault: true }, ctx);
+		return updateSettings(
 			tx,
 			restaurant.id,
 			{
 				taxMode: 'exclusive',
-				taxRateBp: 825,
 				currencyCode: 'USD',
 				posIdleLockSeconds: 120
 			},
-			{ actorUserId: owner.id, ip: null, userAgent: null }
-		)
-	);
+			ctx
+		);
+	});
 	await db
 		.update(restaurantSettings)
 		.set({ acceptsCard: true })

@@ -14,6 +14,8 @@ import { writeAudit } from '../audit';
 import { IMAGE_MAX_BYTES, type ImageContentType } from '../../menu-images';
 import { sniffImageType } from './images';
 import { withMenuVersionBump } from './version';
+import { assertLiveTaxRate } from './tax-rates';
+import { taxRates } from '../db/schema/tax-rates';
 
 export * from './tax-rates';
 
@@ -66,6 +68,10 @@ export type NotEmpty = { ok: false; reason: 'not_empty' };
 export type InvalidSelectRange = { ok: false; reason: 'invalid_select_range' };
 export type Created = { ok: true; id: string };
 export type Changed = { ok: true; changed: boolean };
+/** A tax rate that is missing, another restaurant's, archived or malformed (T-13). */
+export type InvalidTaxRate = { ok: false; reason: 'invalid_tax_rate' };
+
+const INVALID_TAX_RATE: InvalidTaxRate = { ok: false, reason: 'invalid_tax_rate' };
 
 const NOT_FOUND: NotFound = { ok: false, reason: 'not_found' };
 const UNCHANGED: Changed = { ok: true, changed: false };
@@ -225,8 +231,11 @@ export type ItemInput = {
 	categoryId?: string | null;
 	name: string;
 	priceMinor: bigint;
-	/** Integer basis points (825 = 8.25%), or null — "inherit the restaurant rate". */
-	taxRateBp?: number | null;
+	/**
+	 * A LIVE named tax rate of this restaurant (T-13), or absent / null — "use the
+	 * restaurant's default rate".
+	 */
+	taxRateId?: string | null;
 	isAvailable?: boolean;
 	sortOrder?: number;
 };
@@ -235,7 +244,7 @@ export async function createItem(
 	tx: DbTx,
 	restaurantId: string,
 	input: ItemInput
-): Promise<Created | NotFound> {
+): Promise<Created | NotFound | InvalidTaxRate> {
 	assertMinor(input.priceMinor, 'priceMinor');
 	// FOR UPDATE: serialises this create against a concurrent archiveCategory of
 	// the same category, so the item cannot land in a category that is going away.
@@ -244,6 +253,15 @@ export async function createItem(
 		!(await liveCategory(tx, restaurantId, input.categoryId, true))
 	) {
 		return NOT_FOUND;
+	}
+	// T-13: a named rate must be live and this restaurant's, locked FOR SHARE so a
+	// concurrent archiveTaxRate waits for this transaction and then counts the item
+	// (risk 8). Absent or null skips the check: the item uses the default.
+	if (
+		typeof input.taxRateId === 'string' &&
+		!(await assertLiveTaxRate(tx, restaurantId, input.taxRateId))
+	) {
+		return INVALID_TAX_RATE;
 	}
 
 	return withMenuVersionBump(tx, restaurantId, async (write) => {
@@ -254,8 +272,10 @@ export async function createItem(
 				categoryId: input.categoryId ?? null,
 				name: input.name,
 				priceMinor: input.priceMinor,
-				// Not given = inherit the restaurant's rate, which is what null means.
-				taxRateBp: input.taxRateBp ?? null,
+				// Not given = the restaurant's default rate, which is what null means.
+				// The retired number column menu_items.tax_rate_bp is never written:
+				// it stays NULL on every new row until T-33 drops it.
+				taxRateId: input.taxRateId ?? null,
 				isAvailable: input.isAvailable ?? true,
 				sortOrder: input.sortOrder ?? 0
 			})
@@ -267,8 +287,8 @@ export async function createItem(
 export type ItemChanges = {
 	name?: string;
 	priceMinor?: bigint;
-	/** null sets the item back to inheriting the restaurant's rate. */
-	taxRateBp?: number | null;
+	/** A live named rate (T-13); null sets the item back to the restaurant's default. */
+	taxRateId?: string | null;
 	/** null moves the item to no category. */
 	categoryId?: string | null;
 	sortOrder?: number;
@@ -276,7 +296,8 @@ export type ItemChanges = {
 
 /**
  * Update an item's submitted fields. A price change writes ONE menu.price_changed
- * row in the same transaction; an unchanged form writes nothing and does not bump.
+ * row and a tax-rate change ONE menu.item_tax_rate_changed row, in the same
+ * transaction; an unchanged form writes nothing and does not bump.
  */
 export async function updateItem(
 	tx: DbTx,
@@ -284,18 +305,26 @@ export async function updateItem(
 	itemId: string,
 	changes: ItemChanges,
 	ctx: MenuWriteContext
-): Promise<Changed | NotFound> {
+): Promise<Changed | NotFound | InvalidTaxRate> {
 	const current = await liveItem(tx, restaurantId, itemId, true);
 	if (!current) return NOT_FOUND;
 
-	const set: Omit<ItemChanges, 'taxRateBp'> & { taxRateBp?: number | null } = {};
+	const set: ItemChanges = {};
 	if (changes.name !== undefined && changes.name !== current.name) set.name = changes.name;
 	if (changes.priceMinor !== undefined) {
 		assertMinor(changes.priceMinor, 'priceMinor');
 		if (changes.priceMinor !== current.priceMinor) set.priceMinor = changes.priceMinor;
 	}
-	if (changes.taxRateBp !== undefined && changes.taxRateBp !== current.taxRateBp) {
-		set.taxRateBp = changes.taxRateBp;
+	if (changes.taxRateId !== undefined && changes.taxRateId !== current.taxRateId) {
+		// T-13: null (back to the default) is always allowed; a string must be a live
+		// rate of this restaurant, locked FOR SHARE against a concurrent archive.
+		if (
+			changes.taxRateId !== null &&
+			!(await assertLiveTaxRate(tx, restaurantId, changes.taxRateId))
+		) {
+			return INVALID_TAX_RATE;
+		}
+		set.taxRateId = changes.taxRateId;
 	}
 	if (changes.sortOrder !== undefined && changes.sortOrder !== current.sortOrder) {
 		set.sortOrder = changes.sortOrder;
@@ -330,6 +359,24 @@ export async function updateItem(
 					name: set.name ?? current.name,
 					oldPriceMinor: current.priceMinor.toString(),
 					newPriceMinor: set.priceMinor.toString()
+				},
+				ip: ctx.ip,
+				userAgent: ctx.userAgent
+			});
+		}
+		// T-13: the item's rate decides the tax on every later sale of it, so a
+		// change is audited like a price change, in the same transaction.
+		if (set.taxRateId !== undefined) {
+			await writeAudit(write, {
+				restaurantId,
+				actorUserId: ctx.actorUserId,
+				subjectUserId: null,
+				event: 'menu.item_tax_rate_changed',
+				details: {
+					itemId,
+					name: set.name ?? current.name,
+					oldTaxRateId: current.taxRateId,
+					newTaxRateId: set.taxRateId
 				},
 				ip: ctx.ip,
 				userAgent: ctx.userAgent
@@ -758,7 +805,7 @@ export async function listMenu(database: Executor, restaurantId: string) {
 			categoryId: menuItems.categoryId,
 			name: menuItems.name,
 			priceMinor: menuItems.priceMinor,
-			taxRateBp: menuItems.taxRateBp,
+			taxRateId: menuItems.taxRateId,
 			isAvailable: menuItems.isAvailable,
 			sortOrder: menuItems.sortOrder,
 			imageId: menuItems.imageId
@@ -810,6 +857,9 @@ export async function listMenu(database: Executor, restaurantId: string) {
 	return { categories, items, modifierGroups: groups, modifiers: modifierRows, links };
 }
 
+/** A named tax rate as the till's snapshot carries it (T-13). */
+type ResolvedTaxRate = { id: string; name: string; rateBp: number };
+
 /**
  * The till's FULL snapshot (spec 5 — no change-only sync). The CALLER runs this in
  * ONE repeatable-read, read-only transaction, so the version and every row come
@@ -818,10 +868,24 @@ export async function listMenu(database: Executor, restaurantId: string) {
  * and the device would believe it was current while holding a menu that is not.
  *
  * Live rows only; an unavailable item IS included, because the till greys a
- * sold-out item out rather than forgetting it exists. The currency code, the tax
- * mode and the restaurant's tax rate come back AS STORED — null while unchosen —
- * and the currency is not looked up here: this module imports nothing from
- * src/lib/money. Prices stay bigint; the route decides how they cross JSON.
+ * sold-out item out rather than forgetting it exists. The currency code and the
+ * tax mode come back AS STORED — null while unchosen — and the currency is not
+ * looked up here: this module imports nothing from src/lib/money. Prices stay
+ * bigint; the route decides how they cross JSON.
+ *
+ * TAX RATES COME BACK RESOLVED (tasks/settings-tax-payments-receipt T-13).
+ * `defaultTaxRate` is the restaurant's named default, or null while the owner has
+ * not picked one. Each item's `taxRate` is the item's OWN rate, else the default,
+ * else null — `coalesce(menu_items.tax_rate_id, restaurant_settings.
+ * default_tax_rate_id)` joined to tax_rates. There is NO archived filter on
+ * tax_rates: an archived rate that is still an item's rate is still the rate the
+ * till must charge (spec 6), and a sale at it must validate. Nothing here falls
+ * back to a number: no rate is ever assumed (risk 5).
+ *
+ * THE SAME RULE is written a second time in validateSale's Step 8
+ * (src/lib/server/orders/validate.ts), because orders/ may not import menu/. The
+ * test "validator and snapshot agree" in validate.integration.test.ts pins the
+ * two together: change one and it fails.
  */
 export async function readMenuSnapshot(database: Executor, restaurantId: string) {
 	const [settings] = await database
@@ -829,11 +893,59 @@ export async function readMenuSnapshot(database: Executor, restaurantId: string)
 			version: restaurantSettings.menuVersion,
 			currencyCode: restaurantSettings.currencyCode,
 			taxMode: restaurantSettings.taxMode,
-			taxRateBp: restaurantSettings.taxRateBp
+			defaultTaxRateId: restaurantSettings.defaultTaxRateId
 		})
 		.from(restaurantSettings)
 		.where(eq(restaurantSettings.restaurantId, restaurantId))
 		.limit(1);
 	if (!settings) throw new Error(`No settings row for restaurant ${restaurantId}`);
-	return { ...settings, ...(await listMenu(database, restaurantId)) };
+
+	let defaultTaxRate: ResolvedTaxRate | null = null;
+	if (settings.defaultTaxRateId !== null) {
+		const [row] = await database
+			.select({ id: taxRates.id, name: taxRates.name, rateBp: taxRates.rateBp })
+			.from(taxRates)
+			.where(
+				and(eq(taxRates.id, settings.defaultTaxRateId), eq(taxRates.restaurantId, restaurantId))
+			)
+			.limit(1);
+		defaultTaxRate = row ?? null;
+	}
+
+	// ONE query resolves every live item's rate. An item absent from the result
+	// (no rate of its own and no default) has taxRate null.
+	const resolved = await database
+		.select({
+			itemId: menuItems.id,
+			id: taxRates.id,
+			name: taxRates.name,
+			rateBp: taxRates.rateBp
+		})
+		.from(menuItems)
+		.innerJoin(restaurantSettings, eq(restaurantSettings.restaurantId, menuItems.restaurantId))
+		.innerJoin(
+			taxRates,
+			and(
+				eq(taxRates.restaurantId, menuItems.restaurantId),
+				eq(
+					taxRates.id,
+					sql`coalesce(${menuItems.taxRateId}, ${restaurantSettings.defaultTaxRateId})`
+				)
+			)
+		)
+		.where(and(eq(menuItems.restaurantId, restaurantId), isNull(menuItems.archivedAt)));
+	const rateByItem = new Map<string, ResolvedTaxRate>(
+		resolved.map((row) => [row.itemId, { id: row.id, name: row.name, rateBp: row.rateBp }])
+	);
+
+	const { version, currencyCode, taxMode } = settings;
+	const menu = await listMenu(database, restaurantId);
+	return {
+		version,
+		currencyCode,
+		taxMode,
+		defaultTaxRate,
+		...menu,
+		items: menu.items.map((item) => ({ ...item, taxRate: rateByItem.get(item.id) ?? null }))
+	};
 }

@@ -3,6 +3,7 @@ import type { RequestEvent } from '@sveltejs/kit';
 import { eq } from 'drizzle-orm';
 import { testDb, closeTestDb } from '$lib/server/db/test/db';
 import { seedStaff } from '$lib/server/db/test/seed';
+import { seedTaxRate } from '$lib/server/db/test/settings';
 import { restaurants } from '$lib/server/db/schema/restaurants';
 import { users } from '$lib/server/db/schema/users';
 import { menuCategories, menuImages, menuItems } from '$lib/server/db/schema/menu';
@@ -136,7 +137,8 @@ describe('the /menu page', () => {
 		expect(typeof (result as { itemId?: unknown }).itemId).toBe('string');
 		const [row] = await db.select().from(menuItems).where(eq(menuItems.name, 'Tea'));
 		expect(row.priceMinor).toBe(850n);
-		expect(row.taxRateBp).toBeNull();
+		// T-13: no rate chosen on the item = NULL = the restaurant's default rate.
+		expect(row.taxRateId).toBeNull();
 	});
 
 	it('refuses a price with more decimals than the currency has, and stores nothing', async () => {
@@ -191,9 +193,10 @@ describe('the /menu page', () => {
 		const r = await makeRestaurant({ currency: true });
 		const asOwner = principal(r.ownerId, r.restaurantId, 'owner');
 		const ctx = { actorUserId: r.ownerId, ip: null, userAgent: null };
-		await db.transaction((tx) =>
-			updateSettings(tx, r.restaurantId, { taxMode: 'exclusive', taxRateBp: 1000 }, ctx)
-		);
+		await db.transaction(async (tx) => {
+			await seedTaxRate(tx, r.restaurantId, { rateBp: 1000, makeDefault: true }, ctx);
+			await updateSettings(tx, r.restaurantId, { taxMode: 'exclusive' }, ctx);
+		});
 		await act(
 			'createItem',
 			makeEvent(asOwner, { categoryId: r.categoryId, name: 'Burger', price: '8.00', taxRateBp: '' })

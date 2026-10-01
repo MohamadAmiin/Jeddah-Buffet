@@ -29,7 +29,6 @@ export const load: ServerLoad = async (event) => {
 		timeZones: timeZoneSuggestions(),
 		// Null until the owner chooses — rendered as an empty field, never a default.
 		taxMode: restaurant.taxMode,
-		taxRateBp: restaurant.taxRateBp,
 		currencyCode: restaurant.currencyCode,
 		acceptsCard: restaurant.acceptsCard,
 		acceptsMobile: restaurant.acceptsMobile,
@@ -44,21 +43,16 @@ export const load: ServerLoad = async (event) => {
 };
 
 const TAX_MODE_MESSAGE = 'Choose a tax mode of exclusive or inclusive.';
-const TAX_RATE_MESSAGE = 'The tax rate is whole basis points — 825 means 8.25%.';
 const CURRENCY_MESSAGE = 'That currency code is not one this system can format.';
 
 const settingsSchema = z.object({
 	name: z.string().trim().min(1, 'Enter the restaurant name').max(200),
 	timeZone: z.string().trim().min(1, 'Choose a time zone').max(100),
-	// OPTIONAL, all three: a blank field means "not submitted, leave it alone",
+	// OPTIONAL, both: a blank field means "not submitted, leave it alone",
 	// never "clear it" (optionalField below). updateSettings validates each again.
+	// The default TAX RATE is no longer a field here: it is a named rate, chosen on
+	// /settings/tax (tasks/settings-tax-payments-receipt T-13, T-28).
 	taxMode: z.enum(TAX_MODES, { error: TAX_MODE_MESSAGE }).optional(),
-	taxRateBp: z.coerce
-		.number({ error: TAX_RATE_MESSAGE })
-		.int(TAX_RATE_MESSAGE)
-		.min(0, TAX_RATE_MESSAGE)
-		.max(10000, TAX_RATE_MESSAGE)
-		.optional(),
 	currencyCode: z
 		.string()
 		.trim()
@@ -107,7 +101,6 @@ export const actions: Actions = {
 			name: form.get('name'),
 			timeZone: form.get('timeZone'),
 			taxMode: optionalField(form.get('taxMode')),
-			taxRateBp: optionalField(form.get('taxRateBp')),
 			currencyCode: optionalField(form.get('currencyCode')),
 			acceptsCard: optionalField(form.get('acceptsCard')),
 			acceptsMobile: optionalField(form.get('acceptsMobile')),
@@ -133,7 +126,6 @@ export const actions: Actions = {
 					name: parsed.data.name,
 					timeZone: parsed.data.timeZone,
 					taxMode: parsed.data.taxMode,
-					taxRateBp: parsed.data.taxRateBp,
 					currencyCode: parsed.data.currencyCode,
 					acceptsCard: tender(parsed.data.acceptsCard),
 					acceptsMobile: tender(parsed.data.acceptsMobile),
@@ -150,7 +142,6 @@ export const actions: Actions = {
 			const messages: Partial<Record<typeof result.reason, string>> = {
 				invalid_time_zone: 'That time zone is not recognised.',
 				invalid_tax_mode: TAX_MODE_MESSAGE,
-				invalid_tax_rate: TAX_RATE_MESSAGE,
 				invalid_currency: CURRENCY_MESSAGE,
 				invalid_tender: 'Choose Accepted or Not accepted for each payment method.',
 				invalid_receipt_field:

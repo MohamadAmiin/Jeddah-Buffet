@@ -214,6 +214,17 @@ export type AuditEvent =
 			details: { changes: Record<string, { old: unknown; new: unknown }> };
 	  }
 	| { event: 'tax_rate.archived'; details: { name: string; rateBp: number } }
+	// tasks/settings-tax-payments-receipt (T-13): an item's named rate changed. A
+	// null id means "the restaurant's default rate".
+	| {
+			event: 'menu.item_tax_rate_changed';
+			details: {
+				itemId: string;
+				name: string;
+				oldTaxRateId: string | null;
+				newTaxRateId: string | null;
+			};
+	  }
 	// tasks/settings-tax-payments-receipt (T-11)
 	| {
 			event: 'payment_method.created';
@@ -288,6 +299,7 @@ export const AUDIT_EVENT_NAMES = [
 	'tax_rate.created',
 	'tax_rate.updated',
 	'tax_rate.archived',
+	'menu.item_tax_rate_changed',
 	'payment_method.created',
 	'payment_method.updated',
 	'payment_method.archived',

@@ -470,14 +470,6 @@
 							value={editing?.categoryId ?? ''}
 							options={categoryOptions}
 						/>
-						<Field
-							id="panel-rate"
-							name="taxRateBp"
-							label="Item tax rate (basis points)"
-							inputmode="numeric"
-							value={editing?.taxRateBp == null ? '' : String(editing.taxRateBp)}
-							hint="Leave blank to use the restaurant rate. 825 means 8.25%."
-						/>
 						<div class="flex flex-col gap-1">
 							<label class="text-ink-2 text-sm font-medium" for="panel-photo">Photo</label>
 							{#if previewUrl}

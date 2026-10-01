@@ -5,6 +5,7 @@ import { db } from '../db/client';
 import { onRestaurantCreated, updateSettings } from '../restaurants';
 import { registerDevice } from '../auth/pos-device';
 import { seedStaff } from '../db/test/seed';
+import { seedTaxRate } from '../db/test/settings';
 import { closeTestDb, testDb } from '../db/test/db';
 import { restaurants } from '../db/schema/restaurants';
 import { users } from '../db/schema/users';
@@ -54,19 +55,20 @@ async function makeFixture(email: string): Promise<Fixture> {
 			passwordHash: 'not-a-real-hash'
 		})
 		.returning({ id: users.id });
-	await db.transaction((tx) =>
-		updateSettings(
+	await db.transaction(async (tx) => {
+		const ctx = { actorUserId: owner.id, ip: null, userAgent: null };
+		await seedTaxRate(tx, restaurantId, { rateBp: 1000, makeDefault: true }, ctx);
+		return updateSettings(
 			tx,
 			restaurantId,
 			{
 				taxMode: 'exclusive',
-				taxRateBp: 1000,
 				currencyCode: 'USD',
 				posIdleLockSeconds: 120
 			},
-			{ actorUserId: owner.id, ip: null, userAgent: null }
-		)
-	);
+			ctx
+		);
+	});
 	const device = await db.transaction((tx) =>
 		registerDevice(tx, { restaurantId, actorUserId: owner.id, label: 'Counter' })
 	);

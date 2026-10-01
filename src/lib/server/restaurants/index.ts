@@ -1,8 +1,9 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { Executor } from '../auth/session';
 import type { DbTx } from '../db/client';
 import { restaurants } from '../db/schema/restaurants';
 import { restaurantSettings } from '../db/schema/restaurant-settings';
+import { taxRates } from '../db/schema/tax-rates';
 import { roles, rolePermissions } from '../db/schema/roles';
 import { writeAudit } from '../audit';
 import { ensureChart } from '../accounting/chart';
@@ -47,8 +48,12 @@ export type RestaurantWithSettings = {
 	posIdleLockSeconds: number | null;
 	/** Spec 33 open decision 3: null until the owner chooses, and never defaulted. */
 	taxMode: TaxMode | null;
-	/** ONE rate per restaurant, in integer basis points (825 = 8.25%), or null. */
-	taxRateBp: number | null;
+	/**
+	 * The named default rate (restaurant_settings.default_tax_rate_id, a tax_rates
+	 * row of this restaurant); null until the owner picks one, never defaulted
+	 * (tasks/settings-tax-payments-receipt T-13, risk 5).
+	 */
+	defaultTaxRateId: string | null;
 	/** An ISO 4217 code the money formatter supports, or null. */
 	currencyCode: string | null;
 	/** null until the owner chooses on /settings; no default anywhere. */
@@ -89,7 +94,7 @@ export async function getRestaurantWithSettings(
 			timeZone: restaurantSettings.timeZone,
 			posIdleLockSeconds: restaurantSettings.posIdleLockSeconds,
 			taxMode: restaurantSettings.taxMode,
-			taxRateBp: restaurantSettings.taxRateBp,
+			defaultTaxRateId: restaurantSettings.defaultTaxRateId,
 			currencyCode: restaurantSettings.currencyCode,
 			acceptsCard: restaurantSettings.acceptsCard,
 			acceptsMobile: restaurantSettings.acceptsMobile,
@@ -127,7 +132,9 @@ export type SettingsChanges = {
 	// Typed loosely ON PURPOSE: each is validated inside updateSettings, whoever
 	// the caller is.
 	taxMode?: string;
-	taxRateBp?: number;
+	// T-13: the id of a LIVE tax_rates row of this restaurant. There is no way back
+	// to null: once chosen, the default can be replaced but not unset.
+	defaultTaxRateId?: string;
 	currencyCode?: string;
 	acceptsCard?: boolean;
 	acceptsMobile?: boolean;
@@ -171,6 +178,9 @@ export type UpdateSettingsResult =
 // counting change; over 30 minutes it is not a lock.
 const POS_IDLE_LOCK_MIN_SECONDS = 30;
 const POS_IDLE_LOCK_MAX_SECONDS = 1800;
+
+/** Copied from src/lib/server/menu/images.ts: an id is shape-checked before any SQL. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Receipt header text (menu-and-printing T-21): the column bounds, repeated
 // here so a value is refused BEFORE the database would (the CHECKs in
@@ -260,15 +270,41 @@ export async function updateSettings(
 		}
 	}
 
-	if (changes.taxRateBp !== undefined) {
-		// Postgres would silently ROUND a decimal into the integer column; this guard
-		// and the form's zod .int() are the real defences.
-		const bp = changes.taxRateBp;
-		if (!Number.isSafeInteger(bp) || bp < 0 || bp > 10_000) {
+	// T-13 (tasks/settings-tax-payments-receipt): the restaurant's DEFAULT tax rate is
+	// a pointer at a named tax_rates row, never a number. The id is shape-checked
+	// before any SQL (a malformed one would raise 22P02 and abort the caller's
+	// transaction), then the row is read DIRECTLY from the table and locked FOR
+	// SHARE — restaurants/ may not import menu/, so this is not assertLiveTaxRate,
+	// but it is the same lock: archiveTaxRate takes the rate FOR UPDATE first, so a
+	// rate being archived cannot become the default, and a rate being made the
+	// default cannot be archived (risk 8).
+	//
+	// There is NO way back to null. A rate, once chosen, can be replaced by another
+	// but never unset, and the chosen rate cannot be archived (archiveTaxRate's
+	// is_default refusal) — so a restaurant that has answered "which rate" can never
+	// silently fall back to selling at no rate (risk 5).
+	let defaultTaxRateId: string | undefined;
+	if (changes.defaultTaxRateId !== undefined) {
+		const taxRateId: unknown = changes.defaultTaxRateId;
+		if (typeof taxRateId !== 'string' || !UUID.test(taxRateId)) {
 			return { ok: false, reason: 'invalid_tax_rate' };
 		}
-		if (bp !== current.taxRateBp) {
-			diff.taxRateBp = { old: current.taxRateBp, new: bp };
+		const [rate] = await tx
+			.select({ id: taxRates.id })
+			.from(taxRates)
+			.where(
+				and(
+					eq(taxRates.id, taxRateId),
+					eq(taxRates.restaurantId, restaurantId),
+					isNull(taxRates.archivedAt)
+				)
+			)
+			.for('share')
+			.limit(1);
+		if (!rate) return { ok: false, reason: 'invalid_tax_rate' };
+		if (rate.id !== current.defaultTaxRateId) {
+			defaultTaxRateId = rate.id;
+			diff.defaultTaxRateId = { old: current.defaultTaxRateId, new: rate.id };
 		}
 	}
 
@@ -373,12 +409,18 @@ export async function updateSettings(
 	// The receipt switches and the payment-numbers heading (T-12) are NOT in the
 	// bump: like the receipt header text, they reach the till in the settings
 	// bundle of GET /api/pos/employees, not in the menu snapshot.
-	const bumpMenuVersion = Boolean(diff.taxMode || diff.taxRateBp || diff.currencyCode);
+	//
+	// The DEFAULT tax rate (T-13) IS in the bump: it reaches the till inside the
+	// menu snapshot (readMenuSnapshot resolves every item's rate through it), so a
+	// change must make every till re-download it — otherwise every later sale
+	// arrives at the SAME version with a different rate, a HARD price_tamper
+	// instead of a soft stale_menu_price (risk 4).
+	const bumpMenuVersion = Boolean(diff.taxMode || diff.defaultTaxRateId || diff.currencyCode);
 	if (
 		diff.timeZone ||
 		diff.posIdleLockSeconds ||
 		diff.taxMode ||
-		diff.taxRateBp ||
+		diff.defaultTaxRateId ||
 		diff.currencyCode ||
 		diff.acceptsCard ||
 		diff.acceptsMobile ||
@@ -395,7 +437,7 @@ export async function updateSettings(
 				...(diff.timeZone ? { timeZone: canonical! } : {}),
 				...(diff.posIdleLockSeconds ? { posIdleLockSeconds: changes.posIdleLockSeconds! } : {}),
 				...(diff.taxMode ? { taxMode: changes.taxMode! } : {}),
-				...(diff.taxRateBp ? { taxRateBp: changes.taxRateBp! } : {}),
+				...(diff.defaultTaxRateId ? { defaultTaxRateId: defaultTaxRateId! } : {}),
 				...(diff.currencyCode ? { currencyCode: changes.currencyCode! } : {}),
 				...(diff.acceptsCard ? { acceptsCard: changes.acceptsCard! } : {}),
 				...(diff.acceptsMobile ? { acceptsMobile: changes.acceptsMobile! } : {}),
@@ -412,11 +454,13 @@ export async function updateSettings(
 				...(diff.receiptPaymentNumbersHeading
 					? { receiptPaymentNumbersHeading: receipt.receiptPaymentNumbersHeading ?? null }
 					: {}),
-				// T-29: the ONE menu-version bump on the server side. Inline SQL so
+				// T-29: the ONE menu-version bump in this module. Inline SQL so
 				// two concurrent saves cannot both read 7 and both write 8. The
 				// convention amendment (CLAUDE.md, 2026-09-28, T-02): restaurants/
 				// may bump menu_version by an inline SQL increment rather than
-				// calling menu/, which it may not import.
+				// calling menu/, which it may not import. The tax mode, the default
+				// rate (T-13) and the currency are all in the till's snapshot, so a
+				// change to any of them makes every till re-download it.
 				...(bumpMenuVersion ? { menuVersion: sql`${restaurantSettings.menuVersion} + 1` } : {}),
 				updatedAt: now
 			})
@@ -465,7 +509,9 @@ export async function settingsComplete(
 	if (current.posIdleLockSeconds === null) missing.push('POS idle lock');
 	// AFTER the idle lock, in this order: tests deep-equal the array.
 	if (current.taxMode === null) missing.push('tax mode');
-	if (current.taxRateBp === null) missing.push('tax rate');
+	// T-13: the named DEFAULT rate, in the same position the retired number held.
+	// A rate that exists but is not the default does not count (risk 5).
+	if (current.defaultTaxRateId === null) missing.push('tax rate');
 	if (current.currencyCode === null) missing.push('currency');
 
 	return { complete: missing.length === 0, missing };

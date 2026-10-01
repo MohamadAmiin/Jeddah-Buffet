@@ -22,6 +22,7 @@ import {
 	linkModifierGroup
 } from '../../menu';
 import { seedStaff } from './seed';
+import { seedTaxRate } from './settings';
 import { openSession, closeSession, type SessionContext } from '../../pos-sessions';
 import { validateSale, type SyncContext } from '../../orders/validate';
 import { recordSale } from '../../orders/pay';
@@ -48,6 +49,7 @@ export type SalesFixture = {
 	deviceToken: string;
 	menuVersion: number;
 	taxMode: TaxMode;
+	/** The default rate's number — what the line builder below charges (T-13). */
 	taxRateBp: number;
 	currencyCode: 'USD';
 	items: { burger: string; tea: string; special: string };
@@ -89,12 +91,13 @@ export async function seedSalesRestaurant(
 		await onRestaurantCreated(tx, restaurantId, { restaurantName, timeZone });
 
 		const ctx: UpdateSettingsContext = { actorUserId: null, ip: null, userAgent: null };
+		// T-13: the rate is a named default ('Tax'); every item below inherits it.
+		await seedTaxRate(tx, restaurantId, { rateBp: taxRateBp, makeDefault: true }, ctx);
 		const settingsResult = await updateSettings(
 			tx,
 			restaurantId,
 			{
 				taxMode,
-				taxRateBp,
 				currencyCode: 'USD',
 				posIdleLockSeconds: 120,
 				acceptsCard: true,

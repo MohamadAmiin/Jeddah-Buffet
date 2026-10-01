@@ -1,13 +1,16 @@
 import { describe, it, expect, afterAll } from 'vitest';
+import pg from 'pg';
 import { and, eq } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { testDb, closeTestDb } from '../db/test/db';
+import type { DbTx } from '../db/client';
 import { restaurants } from '../db/schema/restaurants';
 import { users } from '../db/schema/users';
 import { auditLog } from '../db/schema/audit';
 import { menuItems } from '../db/schema/menu';
 import { restaurantSettings } from '../db/schema/restaurant-settings';
 import { taxRates } from '../db/schema/tax-rates';
-import { onRestaurantCreated } from '../restaurants';
+import { onRestaurantCreated, updateSettings } from '../restaurants';
 import {
 	archiveItem,
 	archiveTaxRate,
@@ -16,6 +19,7 @@ import {
 	createTaxRate,
 	getMenuVersion,
 	listTaxRates,
+	updateItem,
 	updateTaxRate
 } from './index';
 
@@ -458,5 +462,228 @@ describe('the module surface', () => {
 
 	it('does not re-export the version helper from index.ts', async () => {
 		expect(Object.keys(await import('./index'))).not.toContain('withMenuVersionBump');
+	});
+});
+
+describe('item rates, the default and the locks (T-13)', () => {
+	const itemRows = (restaurantId: string) =>
+		db.select().from(menuItems).where(eq(menuItems.restaurantId, restaurantId));
+
+	it('createItem stores a live rate; an archived, foreign or malformed one is invalid_tax_rate', async () => {
+		const a = await makeRestaurant('A');
+		const b = await makeRestaurant('B');
+		const reduced = await createdId(a, { name: 'Reduced', rateBp: 500 });
+		const old = await createdId(a, { name: 'Old', rateBp: 100 });
+		expect(await archive(a, old)).toEqual({ ok: true });
+		const foreign = await createdId(b, { name: 'B rate', rateBp: 900 });
+
+		const created = await db.transaction((tx) =>
+			createItem(tx, a.restaurantId, { name: 'Wine', priceMinor: 900n, taxRateId: reduced })
+		);
+		expect(created.ok).toBe(true);
+		const [wine] = await itemRows(a.restaurantId);
+		expect(wine.taxRateId).toBe(reduced);
+		// The retired number column is never written (T-33 drops it).
+		expect(wine.taxRateBp).toBeNull();
+
+		const before = await version(a.restaurantId);
+		await db.transaction(async (tx) => {
+			for (const taxRateId of [old, foreign, 'x']) {
+				expect(
+					await createItem(tx, a.restaurantId, { name: 'Bad', priceMinor: 100n, taxRateId }),
+					taxRateId
+				).toEqual({ ok: false, reason: 'invalid_tax_rate' });
+			}
+			// The malformed id ran no query: the transaction is still usable.
+			expect(await getMenuVersion(tx, a.restaurantId)).toBe(before);
+		});
+		expect(await version(a.restaurantId)).toBe(before);
+		expect((await itemRows(a.restaurantId)).map((row) => row.name)).toEqual(['Wine']);
+	});
+
+	it('updateItem changes a rate with ONE bump and ONE audit row; null is the default again', async () => {
+		const r = await makeRestaurant();
+		const vat = await createdId(r, { name: 'VAT', rateBp: 500 });
+		const made = await db.transaction((tx) =>
+			updateSettings(tx, r.restaurantId, { defaultTaxRateId: vat }, r.ctx)
+		);
+		expect(made.ok).toBe(true);
+		const reduced = await createdId(r, { name: 'Reduced', rateBp: 250 });
+		const itemId = await makeItem(r, 'Tea');
+		const before = await version(r.restaurantId);
+
+		const toReduced = await db.transaction((tx) =>
+			updateItem(tx, r.restaurantId, itemId, { taxRateId: reduced }, r.ctx)
+		);
+		expect(toReduced).toEqual({ ok: true, changed: true });
+		expect(await version(r.restaurantId)).toBe(before + 1);
+		let audits = await auditRows('menu.item_tax_rate_changed');
+		expect(audits).toHaveLength(1);
+		expect(audits[0].details).toEqual({
+			itemId,
+			name: 'Tea',
+			oldTaxRateId: null,
+			newTaxRateId: reduced
+		});
+		expect(audits[0].restaurantId).toBe(r.restaurantId);
+		expect(audits[0].actorUserId).toBe(r.ownerId);
+
+		const backToDefault = await db.transaction((tx) =>
+			updateItem(tx, r.restaurantId, itemId, { taxRateId: null }, r.ctx)
+		);
+		expect(backToDefault).toEqual({ ok: true, changed: true });
+		expect(await version(r.restaurantId)).toBe(before + 2);
+		audits = await auditRows('menu.item_tax_rate_changed');
+		expect(audits).toHaveLength(2);
+		expect(audits.map((row) => row.details)).toContainEqual({
+			itemId,
+			name: 'Tea',
+			oldTaxRateId: reduced,
+			newTaxRateId: null
+		});
+
+		const same = await db.transaction((tx) =>
+			updateItem(tx, r.restaurantId, itemId, { taxRateId: null }, r.ctx)
+		);
+		expect(same).toEqual({ ok: true, changed: false });
+		expect(await version(r.restaurantId)).toBe(before + 2);
+		expect(await auditRows('menu.item_tax_rate_changed')).toHaveLength(2);
+	});
+
+	it('updateItem refuses an archived, foreign or malformed rate and writes nothing', async () => {
+		const a = await makeRestaurant('A');
+		const b = await makeRestaurant('B');
+		const old = await createdId(a, { name: 'Old', rateBp: 100 });
+		expect(await archive(a, old)).toEqual({ ok: true });
+		const foreign = await createdId(b, { name: 'B rate', rateBp: 900 });
+		const itemId = await makeItem(a, 'Tea');
+		const before = await version(a.restaurantId);
+
+		await db.transaction(async (tx) => {
+			for (const taxRateId of [old, foreign, 'x']) {
+				expect(
+					await updateItem(tx, a.restaurantId, itemId, { taxRateId, name: 'Renamed' }, a.ctx),
+					taxRateId
+				).toEqual({ ok: false, reason: 'invalid_tax_rate' });
+			}
+		});
+		expect(await version(a.restaurantId)).toBe(before);
+		const [tea] = await itemRows(a.restaurantId);
+		expect([tea.name, tea.taxRateId]).toEqual(['Tea', null]);
+		expect(await auditRows('menu.item_tax_rate_changed')).toHaveLength(0);
+	});
+
+	// Risk 8: the rate row is the lock. archiveTaxRate takes it FOR UPDATE;
+	// updateSettings and the item writers take it FOR SHARE. Two real connections
+	// (the roles.integration.test.ts 'role locking concurrency' pattern).
+	describe('locks', () => {
+		const concurrencyPool = new pg.Pool({
+			connectionString: process.env.TEST_DATABASE_URL,
+			options: '-c timezone=UTC'
+		});
+
+		afterAll(async () => {
+			await concurrencyPool.end();
+		});
+
+		const PENDING_MS = 100;
+		const stateOf = (promise: Promise<unknown>) =>
+			Promise.race([
+				promise.then(() => 'resolved' as const),
+				new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), PENDING_MS))
+			]);
+
+		async function twoClients<T>(run: (a: pg.PoolClient, b: pg.PoolClient) => Promise<T>) {
+			const clientA = await concurrencyPool.connect();
+			const clientB = await concurrencyPool.connect();
+			try {
+				return await run(clientA, clientB);
+			} finally {
+				await clientA.query('ROLLBACK').catch(() => undefined);
+				await clientB.query('ROLLBACK').catch(() => undefined);
+				clientA.release();
+				clientB.release();
+			}
+		}
+
+		it('archive first: a pending default waits, then sees the archived rate (invalid_tax_rate)', async () => {
+			const r = await makeRestaurant();
+			const vat = await createdId(r, { name: 'VAT', rateBp: 500 });
+
+			await twoClients(async (clientA, clientB) => {
+				await clientA.query('BEGIN');
+				const dbA = drizzle(clientA) as unknown as DbTx;
+				expect(await archiveTaxRate(dbA, r.restaurantId, vat, r.ctx)).toEqual({ ok: true });
+
+				await clientB.query('BEGIN');
+				const dbB = drizzle(clientB) as unknown as DbTx;
+				const pending = updateSettings(dbB, r.restaurantId, { defaultTaxRateId: vat }, r.ctx);
+				expect(await stateOf(pending)).toBe('pending');
+
+				await clientA.query('COMMIT');
+				await expect(pending).resolves.toEqual({ ok: false, reason: 'invalid_tax_rate' });
+				await clientB.query('COMMIT');
+			});
+
+			const [settings] = await db
+				.select({ defaultTaxRateId: restaurantSettings.defaultTaxRateId })
+				.from(restaurantSettings)
+				.where(eq(restaurantSettings.restaurantId, r.restaurantId));
+			expect(settings.defaultTaxRateId).toBeNull();
+		});
+
+		it('default first: a pending archive waits, then refuses the new default (is_default)', async () => {
+			const r = await makeRestaurant();
+			const vat = await createdId(r, { name: 'VAT', rateBp: 500 });
+
+			await twoClients(async (clientA, clientB) => {
+				await clientB.query('BEGIN');
+				const dbB = drizzle(clientB) as unknown as DbTx;
+				const made = await updateSettings(dbB, r.restaurantId, { defaultTaxRateId: vat }, r.ctx);
+				expect(made.ok).toBe(true);
+
+				await clientA.query('BEGIN');
+				const dbA = drizzle(clientA) as unknown as DbTx;
+				const archiving = archiveTaxRate(dbA, r.restaurantId, vat, r.ctx);
+				expect(await stateOf(archiving)).toBe('pending');
+
+				await clientB.query('COMMIT');
+				await expect(archiving).resolves.toEqual({ ok: false, reason: 'is_default' });
+				await clientA.query('COMMIT');
+			});
+
+			const [row] = await listTaxRates(db, r.restaurantId);
+			expect(row).toMatchObject({ id: vat, isDefault: true, archivedAt: null });
+		});
+
+		it('item first: a pending archive waits, then counts the item (in_use)', async () => {
+			const r = await makeRestaurant();
+			const special = await createdId(r, { name: 'Special', rateBp: 1500 });
+			const itemId = await makeItem(r, 'Wine');
+
+			await twoClients(async (clientA, clientB) => {
+				await clientB.query('BEGIN');
+				const dbB = drizzle(clientB) as unknown as DbTx;
+				expect(
+					await updateItem(dbB, r.restaurantId, itemId, { taxRateId: special }, r.ctx)
+				).toEqual({ ok: true, changed: true });
+
+				await clientA.query('BEGIN');
+				const dbA = drizzle(clientA) as unknown as DbTx;
+				const archiving = archiveTaxRate(dbA, r.restaurantId, special, r.ctx);
+				expect(await stateOf(archiving)).toBe('pending');
+
+				await clientB.query('COMMIT');
+				await expect(archiving).resolves.toEqual({
+					ok: false,
+					reason: 'in_use',
+					liveItemCount: 1
+				});
+				await clientA.query('COMMIT');
+			});
+
+			const [row] = await listTaxRates(db, r.restaurantId);
+			expect(row).toMatchObject({ id: special, archivedAt: null, liveItemCount: 1 });
+		});
 	});
 });

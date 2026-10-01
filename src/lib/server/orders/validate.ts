@@ -19,6 +19,7 @@ import { orders as _orders } from '../db/schema/orders';
 import { posSessions } from '../db/schema/pos-sessions';
 import { restaurantSettings } from '../db/schema/restaurant-settings';
 import { menuItems, modifiers as modifiersTable, menuItemModifierGroups } from '../db/schema/menu';
+import { taxRates } from '../db/schema/tax-rates';
 import {
 	SOFT_FLAGS,
 	HARD_FLAGS,
@@ -273,7 +274,7 @@ export async function validateSale(
 	const [settings] = await tx
 		.select({
 			taxMode: restaurantSettings.taxMode,
-			taxRateBp: restaurantSettings.taxRateBp,
+			defaultTaxRateId: restaurantSettings.defaultTaxRateId,
 			currencyCode: restaurantSettings.currencyCode,
 			menuVersion: restaurantSettings.menuVersion,
 			acceptsCard: restaurantSettings.acceptsCard,
@@ -292,7 +293,7 @@ export async function validateSale(
 		.select({
 			id: menuItems.id,
 			priceMinor: menuItems.priceMinor,
-			taxRateBp: menuItems.taxRateBp
+			taxRateId: menuItems.taxRateId
 		})
 		.from(menuItems)
 		.where(and(eq(menuItems.restaurantId, ctx.restaurantId), inArray(menuItems.id, itemIds)));
@@ -302,6 +303,26 @@ export async function validateSale(
 			return { ok: false, hard: 'unknown_item', detail: id };
 		}
 	}
+
+	// Rate lookup (tasks/settings-tax-payments-receipt T-13). Each item's rate is
+	// RESOLVED the way readMenuSnapshot (src/lib/server/menu/index.ts) resolves it
+	// for the till: the item's own named rate, else the restaurant's default, else
+	// none. NO archived filter — an archived rate still on an item is still the
+	// rate a stale till charged (spec 6). orders/ may not import menu/, so the rule
+	// is written here a second time; the test "validator and snapshot agree" in
+	// validate.integration.test.ts keeps the two equal.
+	const rateIds = Array.from(
+		new Set(
+			itemRows
+				.map((item) => item.taxRateId ?? settings.defaultTaxRateId)
+				.filter((id): id is string => id !== null)
+		)
+	);
+	const rateRows = await tx
+		.select({ id: taxRates.id, rateBp: taxRates.rateBp })
+		.from(taxRates)
+		.where(and(eq(taxRates.restaurantId, ctx.restaurantId), inArray(taxRates.id, rateIds)));
+	const rateById = new Map(rateRows.map((r) => [r.id, r]));
 
 	// Step 6 — modifiers: every (menuItemId, modifierId) pair must belong to a
 	// group linked to that item.
@@ -377,8 +398,12 @@ export async function validateSale(
 			}
 		}
 		if (firstDiff) break;
-		const resolvedRate = item.taxRateBp ?? settings.taxRateBp;
-		if (resolvedRate === null || line.taxRateBp !== resolvedRate) {
+		// T-13: the resolved named rate (see the rate lookup above). No rate resolves
+		// while the restaurant has no default and the item no rate of its own — a
+		// difference like any other, never a fallback number (risk 5).
+		const rateId = item.taxRateId ?? settings.defaultTaxRateId;
+		const resolved = rateId === null ? null : (rateById.get(rateId) ?? null);
+		if (resolved === null || line.taxRateBp !== resolved.rateBp) {
 			firstDiff = `line:${line.lineId}:tax_rate`;
 			break;
 		}

@@ -4,8 +4,9 @@ import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { onRestaurantCreated, updateSettings } from '../restaurants';
 import { registerDevice } from '../auth/pos-device';
-import { createCategory, createItem, getMenuVersion } from '../menu';
+import { createCategory, createItem, getMenuVersion, updateTaxRate } from '../menu';
 import { seedStaff } from '../db/test/seed';
+import { seedTaxRate } from '../db/test/settings';
 import { closeTestDb, testDb } from '../db/test/db';
 import { restaurants } from '../db/schema/restaurants';
 import { users } from '../db/schema/users';
@@ -33,6 +34,8 @@ type Fixture = {
 	cashierId: string;
 	waiterId: string;
 	menuVersion: number;
+	/** The restaurant's named default rate ('Tax' 10%), seeded by T-13's fixture. */
+	taxRateId: string;
 };
 
 async function requireId<T>(p: Promise<T | { ok: false }>): Promise<string> {
@@ -60,19 +63,21 @@ async function makeFixture(email: string): Promise<Fixture> {
 		})
 		.returning({ id: users.id });
 	const ownerId = owner.id;
-	await db.transaction((tx) =>
-		updateSettings(
+	const taxRateId = await db.transaction(async (tx) => {
+		const ctx = { actorUserId: ownerId, ip: null, userAgent: null };
+		const id = await seedTaxRate(tx, restaurantId, { rateBp: 1000, makeDefault: true }, ctx);
+		await updateSettings(
 			tx,
 			restaurantId,
 			{
 				taxMode: 'exclusive',
-				taxRateBp: 1000,
 				currencyCode: 'USD',
 				posIdleLockSeconds: 120
 			},
-			{ actorUserId: ownerId, ip: null, userAgent: null }
-		)
-	);
+			ctx
+		);
+		return id;
+	});
 	// Both card and mobile enabled directly, so the same fixture serves all three
 	// tenders without a separate updateSettings call per test.
 	await testDb()
@@ -116,7 +121,8 @@ async function makeFixture(email: string): Promise<Fixture> {
 		coffeeId,
 		cashierId: cashier.id,
 		waiterId: waiter.id,
-		menuVersion
+		menuVersion,
+		taxRateId
 	};
 }
 
@@ -435,11 +441,21 @@ describe('recordSale (T-19) — soft flags and rollback', () => {
 			restaurantId,
 			timeZone: 'UTC',
 			taxMode: 'exclusive',
-			taxRateBp: 1000,
 			currencyCode: 'USD',
 			acceptsCard: false,
 			acceptsMobile: false
 		});
+		// T-13: the named default rate, through the real writers. Neither touches
+		// accounts, so the missing chart stays the ONLY failure left. Before
+		// createItem and before getMenuVersion below: seedTaxRate bumps the version.
+		const taxRateId = await db.transaction((tx) =>
+			seedTaxRate(
+				tx,
+				restaurantId,
+				{ rateBp: 1000, makeDefault: true },
+				{ actorUserId: null, ip: null, userAgent: null }
+			)
+		);
 		const [owner] = await testDb()
 			.insert(users)
 			.values({
@@ -484,7 +500,8 @@ describe('recordSale (T-19) — soft flags and rollback', () => {
 			coffeeId: teaId,
 			cashierId: cashier.id,
 			waiterId: cashier.id,
-			menuVersion
+			menuVersion,
+			taxRateId
 		};
 
 		const env: Payload = {
@@ -536,7 +553,9 @@ describe('recordSale (T-19) — soft flags and rollback', () => {
 			}
 		};
 
-		await expect(recordThrough(noChartFx, env, cashier.id)).rejects.toThrow();
+		// The SPECIFIC error: accountIdByCode's "…; run ensureChart". A bare
+		// toThrow() would also pass on a price_tamper, never reaching the chart.
+		await expect(recordThrough(noChartFx, env, cashier.id)).rejects.toThrow(/run ensureChart/);
 
 		const orderCount = await testDb()
 			.select({ id: orders.id })
@@ -592,15 +611,16 @@ describe('recordSale (T-19) — 0% and inclusive-20% coverage', () => {
 				changeMinor: '400'
 			}
 		];
-		// The line's taxRateBp of 0 differs from the restaurant's 1000, so the plan
-		// treats this as a soft stale_menu_price at a stale version; keep the same
-		// menuVersion so validateSale doesn't refuse it. We flip the item's rate
-		// override to 0 to keep the check happy.
+		// The line's taxRateBp of 0 differs from the default rate's 1000, so re-rate
+		// the default to 0% (T-13: a named rate, edited with updateTaxRate) and send
+		// the sale at the version that edit produced, so validateSale sees no
+		// difference at all.
 		await db.transaction((tx) =>
-			updateSettings(
+			updateTaxRate(
 				tx,
 				fx.restaurantId,
-				{ taxRateBp: 0 },
+				fx.taxRateId,
+				{ rateBp: 0 },
 				{ actorUserId: fx.ownerId, ip: null, userAgent: null }
 			)
 		);
@@ -616,14 +636,11 @@ describe('recordSale (T-19) — 0% and inclusive-20% coverage', () => {
 	});
 
 	it('inclusive 20% on a 999 line balances at COMMIT', async () => {
-		await db.transaction((tx) =>
-			updateSettings(
-				tx,
-				fx.restaurantId,
-				{ taxMode: 'inclusive', taxRateBp: 2000 },
-				{ actorUserId: fx.ownerId, ip: null, userAgent: null }
-			)
-		);
+		await db.transaction(async (tx) => {
+			const ctx = { actorUserId: fx.ownerId, ip: null, userAgent: null };
+			await updateSettings(tx, fx.restaurantId, { taxMode: 'inclusive' }, ctx);
+			await updateTaxRate(tx, fx.restaurantId, fx.taxRateId, { rateBp: 2000 }, ctx);
+		});
 		const freshMv = await getMenuVersion(testDb(), fx.restaurantId);
 		const env: Payload = {
 			kind: 'sale.complete',
