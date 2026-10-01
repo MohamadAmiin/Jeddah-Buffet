@@ -1,6 +1,16 @@
 import { sql } from 'drizzle-orm';
-import { pgTable, uuid, text, integer, boolean, timestamp, check } from 'drizzle-orm/pg-core';
+import {
+	pgTable,
+	uuid,
+	text,
+	integer,
+	boolean,
+	timestamp,
+	check,
+	foreignKey
+} from 'drizzle-orm/pg-core';
 import { restaurants } from './restaurants';
+import { taxRates } from './tax-rates';
 
 // One settings row per restaurant, so the foreign key IS the primary key.
 //
@@ -16,10 +26,18 @@ import { restaurants } from './restaurants';
 // visited the settings page would open their first session with a tax mode nobody
 // chose.
 //
-// tax_mode, tax_rate_bp and currency_code HAVE LANDED, exactly that way (T-36,
-// once T-03 recorded spec 33 open decisions 3 and 4 on 2026-09-15): nullable, no
-// DEFAULT, and each CHECK below lets a NULL through, because unset is legitimate
-// until the owner chooses.
+// tax_mode, default_tax_rate_id and currency_code HAVE LANDED, exactly that way:
+// nullable, no DEFAULT, no fallback in code, and each CHECK below lets a NULL
+// through, because unset is legitimate until the owner chooses. tax_mode and
+// currency_code landed with T-36 once T-03 recorded spec 33 open decisions 3 and
+// 4 on 2026-09-15; default_tax_rate_id lands exactly like tax_mode
+// (tasks/settings-tax-payments-receipt T-03): it points at the owner's DEFAULT
+// named rate in tax_rates, NULL means the owner has not chosen, and from T-13
+// settingsComplete() reports 'tax rate' until a default is set.
+//
+// tax_rate_bp is RETIRED (tasks/settings-tax-payments-receipt): migration 0017
+// copies an existing value into the default named rate "Tax", and T-33 drops the
+// column in migration 0018.
 //
 // pos_idle_lock_seconds HAS LANDED, exactly that way (T-08, per the decision
 // recorded on 2026-09-15): NULLABLE, with NO column DEFAULT and no fallback number
@@ -68,11 +86,12 @@ export const restaurantSettings = pgTable(
 		// Spec 17 and spec 33 open decision 3: the owner picks 'exclusive' or
 		// 'inclusive'; nothing hardcodes one.
 		taxMode: text('tax_mode'),
-		// ONE rate per restaurant, in integer BASIS POINTS (825 = 8.25%). A rate, not
-		// money, so integer — not a _minor bigint. Postgres silently rounds a decimal
-		// into an integer column, so the real guards are the settings form's zod
-		// .int() and updateSettings' Number.isSafeInteger check.
+		// RETIRED: the old single rate in integer basis points. 0017 copies an
+		// existing value into the default named rate "Tax"; T-33 drops the column.
 		taxRateBp: integer('tax_rate_bp'),
+		// The owner's DEFAULT named rate (tax_rates). NULL = not chosen yet — no
+		// DEFAULT and no fallback, like tax_mode; see the note above this table.
+		defaultTaxRateId: uuid('default_tax_rate_id'),
 		// Spec 33 open decision 4: an ISO 4217 code the money formatter can render.
 		currencyCode: text('currency_code'),
 		// Spec 33 open decision 4 (payment methods at launch), the part ASSUMED on
@@ -95,6 +114,11 @@ export const restaurantSettings = pgTable(
 		updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
 	},
 	(table) => [
+		foreignKey({
+			columns: [table.restaurantId, table.defaultTaxRateId],
+			foreignColumns: [taxRates.restaurantId, taxRates.id],
+			name: 'restaurant_settings_default_tax_rate_fk'
+		}).onDelete('restrict'),
 		// The two literals are TAX_MODES in src/lib/money/tax.ts, spelled identically.
 		// Not imported: drizzle-kit loads this file outside Vite and cannot resolve
 		// $lib. constraints.integration.test.ts pins the two lists together.

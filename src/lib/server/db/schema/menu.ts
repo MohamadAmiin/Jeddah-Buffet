@@ -16,6 +16,7 @@ import {
 	customType
 } from 'drizzle-orm/pg-core';
 import { restaurants } from './restaurants';
+import { taxRates } from './tax-rates';
 
 // THE MENU (spec 3, 5, 15, 17): categories, items, modifier groups, the item ↔
 // group links, and modifiers. The POS downloads all of it as one snapshot,
@@ -28,9 +29,16 @@ import { restaurants } from './restaurants';
 // mode 'number' would hand money to the one type invariant 1 forbids. A negative
 // price_delta_minor is legitimate ("No cheese −$0.50"); a negative price is not.
 //
-// TAX: menu_items.tax_rate_bp is NULLABLE and null means "inherit the restaurant
-// rate" (CLAUDE.md, "Decisions already made": one rate per restaurant in integer
-// basis points, plus this per-item override). 825 is 8.25%, never a fraction.
+// TAX: an item's rate is menu_items.tax_rate_id, a NAMED rate in tax_rates
+// (tasks/settings-tax-payments-receipt). It is NULLABLE, and NULL means "the
+// restaurant default" (restaurant_settings.default_tax_rate_id). The composite
+// (restaurant_id, tax_rate_id) FK keeps a non-NULL id inside the same
+// restaurant; PostgreSQL's default MATCH SIMPLE skips the check when the id is
+// NULL.
+// menu_items.tax_rate_bp — the old per-item override in integer basis points,
+// NULL = inherit — is being REPLACED: the menu module still writes it until T-13
+// switches items to tax_rate_id, migration 0017 copies its values into named
+// rates, and T-33 drops it in migration 0018. No new code may read tax_rate_bp.
 //
 // ARCHIVE, NEVER DELETE (invariant 2). archived_at exists so that the sales
 // plan's order lines, which reference menu_items.id and modifiers.id, never
@@ -154,6 +162,8 @@ export const menuItems = pgTable(
 		priceMinor: bigint('price_minor', { mode: 'bigint' }).notNull(),
 		// NULL = inherit the restaurant's rate.
 		taxRateBp: integer('tax_rate_bp'),
+		// NULL = the restaurant default (restaurant_settings.default_tax_rate_id).
+		taxRateId: uuid('tax_rate_id'),
 		isAvailable: boolean('is_available').notNull().default(true),
 		sortOrder: integer('sort_order').notNull().default(0),
 		// NULL = no photo. A photo row is never edited; a new photo is a new id.
@@ -177,6 +187,12 @@ export const menuItems = pgTable(
 			name: 'menu_items_image_fk'
 		}).onDelete('restrict'),
 		index('menu_items_image_idx').on(table.imageId),
+		foreignKey({
+			columns: [table.restaurantId, table.taxRateId],
+			foreignColumns: [taxRates.restaurantId, taxRates.id],
+			name: 'menu_items_tax_rate_fk'
+		}).onDelete('restrict'),
+		index('menu_items_tax_rate_idx').on(table.taxRateId),
 		// A menu price is never negative; a discount is its own concept with its own
 		// approval rule (spec 14).
 		check('menu_items_price_minor_non_negative', sql`${table.priceMinor} >= 0`),

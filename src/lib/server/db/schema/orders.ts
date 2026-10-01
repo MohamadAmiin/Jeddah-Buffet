@@ -16,6 +16,7 @@ import { posDevices } from './pos-devices';
 import { users } from './users';
 import { posSessions } from './pos-sessions';
 import { menuItems, modifiers } from './menu';
+import { taxRates } from './tax-rates';
 
 // SPEC 13: order and item statuses.
 //   orders.status  ∈ ('open','billed','paid','voided','refunded')
@@ -34,7 +35,10 @@ import { menuItems, modifiers } from './menu';
 // device, NOT NULL — never "inherit"); the order snapshots tax_mode,
 // currency_code, menu_version and the device's rounded subtotal_minor,
 // discount_minor, tax_minor, total_minor. A later menu, rate or mode change
-// therefore cannot alter a past sale, and the report never recomputes.
+// therefore cannot alter a past sale, and the report never recomputes. Each
+// line ALSO snapshots the named rate's id and name (tax_rate_id,
+// tax_rate_name — tasks/settings-tax-payments-receipt), both nullable and never
+// backfilled, because paid lines are permanent (invariant 2).
 //
 // INVARIANT 5 — invoice numbers are the DEVICE's gap-free sequence
 // (POS1-000001), unique per (device_id, invoice_number) AND per
@@ -153,6 +157,11 @@ export const orderLines = pgTable(
 		unitPriceMinor: bigint('unit_price_minor', { mode: 'bigint' }).notNull(),
 		// RESOLVED on the device: the item's own rate or the restaurant's. Never null.
 		taxRateBp: integer('tax_rate_bp').notNull(),
+		// Snapshots of the named rate the device used (tasks/settings-tax-payments-receipt).
+		// NULL on lines recorded before that plan, or sent by a till that did not know the id.
+		// tax_rate_bp above stays the number that was TAXED; the rate row may be edited later.
+		taxRateId: uuid('tax_rate_id'),
+		taxRateName: text('tax_rate_name'),
 		discountMinor: bigint('discount_minor', { mode: 'bigint' })
 			.notNull()
 			.default(sql`0`),
@@ -175,6 +184,15 @@ export const orderLines = pgTable(
 			name: 'order_lines_menu_item_fk'
 		}).onDelete('restrict'),
 		index('order_lines_menu_item_idx').on(t.menuItemId),
+		foreignKey({
+			columns: [t.restaurantId, t.taxRateId],
+			foreignColumns: [taxRates.restaurantId, taxRates.id],
+			name: 'order_lines_tax_rate_fk'
+		}).onDelete('restrict'),
+		check(
+			'order_lines_tax_rate_name_length',
+			sql`${t.taxRateName} is null or char_length(${t.taxRateName}) between 1 and 40`
+		),
 		check('order_lines_quantity_positive', sql`${t.quantity} >= 1`),
 		check('order_lines_unit_price_minor_non_negative', sql`${t.unitPriceMinor} >= 0`),
 		check('order_lines_tax_rate_bp_range', sql`${t.taxRateBp} >= 0 and ${t.taxRateBp} <= 10000`),
