@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { formatTaxRate as moneyFormatTaxRate } from '../money/tax';
 import type { LocalMenu } from './store';
 import { formatTaxRate, itemsByCategory, modifierGroupsFor, resolveTaxRate } from './menu-view';
 
@@ -120,6 +121,10 @@ describe('formatTaxRate', () => {
 		expect(formatTaxRate(1050)).toBe('10.50%');
 		expect(() => formatTaxRate(8.25)).toThrow();
 		expect(() => formatTaxRate(-1)).toThrow();
+	});
+
+	it("is the money module's function, re-exported — not a copy", () => {
+		expect(formatTaxRate).toBe(moneyFormatTaxRate);
 	});
 });
 

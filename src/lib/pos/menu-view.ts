@@ -53,12 +53,6 @@ export function modifierGroupsFor(item: MenuItem, menu: LocalMenu): MenuGroup[] 
 	});
 }
 
-/** Basis points to "x.xx%": 825 → "8.25%". A rate is not money. */
-export function formatTaxRate(rateBp: number): string {
-	if (!Number.isInteger(rateBp) || rateBp < 0 || rateBp > 10_000) {
-		throw new TypeError('tax rate must be an integer number of basis points from 0 to 10000');
-	}
-	const whole = Math.trunc(rateBp / 100);
-	const fraction = String(rateBp % 100).padStart(2, '0');
-	return `${whole}.${fraction}%`;
-}
+// formatTaxRate lives in src/lib/money/tax.ts (settings-tax-payments-receipt T-08);
+// re-exported so the till's existing imports keep working. Not a copy.
+export { formatTaxRate } from '../money/tax';
