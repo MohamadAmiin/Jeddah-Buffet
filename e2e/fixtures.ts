@@ -285,7 +285,8 @@ export async function chooseOrderType(
 	).toBeVisible();
 }
 
-export async function payCash(tillPage: Page, tenderedMinor: bigint): Promise<void> {
+/** Pay the open check in cash. With no amount, nothing is keyed: Pay takes the exact total. */
+export async function payCash(tillPage: Page, tenderedMinor?: bigint): Promise<void> {
 	await tillPage.getByRole('link', { name: /^Pay\b/ }).click();
 	await expect(tillPage).toHaveURL(/\/pos\/pay$/);
 	await expect(tillPage.getByRole('heading', { name: 'Amount due' })).toBeVisible();
@@ -293,7 +294,11 @@ export async function payCash(tillPage: Page, tenderedMinor: bigint): Promise<vo
 		.getByRole('radiogroup', { name: 'Tender' })
 		.getByRole('radio', { name: 'Cash', exact: true })
 		.click();
-	await typeMinor(tillPage, tenderedMinor);
+	if (tenderedMinor === undefined) {
+		await expect(tillPage.getByTestId('exact-hint')).toBeVisible();
+	} else {
+		await typeMinor(tillPage, tenderedMinor);
+	}
 	await expect(tillPage.getByText('Change due')).toBeVisible();
 	await tillPage.getByRole('button', { name: /^Pay · Cash/ }).click();
 	await expect(tillPage.getByText('● Paid', { exact: true })).toBeVisible();
