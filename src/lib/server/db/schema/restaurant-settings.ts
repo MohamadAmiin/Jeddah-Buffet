@@ -61,15 +61,35 @@ import { taxRates } from './tax-rates';
 // settings.updated audit event.
 //
 // RECEIPT HEADER TEXT (tasks/menu-and-printing T-20): receipt_address,
-// receipt_phone, tax_registration_number and receipt_footer are OPTIONAL text
-// the owner may print on every receipt. They are not decisions, so
+// receipt_phone and tax_registration_number are OPTIONAL text the owner may
+// print on every receipt, and they STAY. They are not decisions, so
 // settingsComplete() does not report them; spec 33 open decision 3 (what a
-// receipt must legally show) is STILL OPEN, and these four are the default
-// layout's fields pending a local accountant — a legal requirement changes
+// receipt must legally show) is STILL OPEN, and they are the default layout's
+// fields pending a local accountant — a legal requirement changes
 // src/lib/pos/receipt.ts and these settings, not the ledger. Nullable, no
 // DEFAULT, bounded by the CHECKs below; written only by updateSettings.
 // tax_registration_number is an identifier, not money: schema.test.ts
-// exempts it from the money-name rule by name.
+// exempts it from the money-name rule by name. receipt_footer is RETIRED
+// (tasks/settings-tax-payments-receipt): it is REPLACED by footer line 1 in
+// receipt_lines (schema/receipt.ts) — migration 0017 copies it there and T-33
+// drops the column in migration 0018.
+//
+// RECEIPT SWITCHES (tasks/settings-tax-payments-receipt): the nine receipt_*
+// booleans say which optional fields the receipt prints (gate decision 4). They
+// are NOT NULL DEFAULT true — the ONE place in that plan where a setting column
+// is given a DEFAULT, for the reason menu_version gives above: a display switch
+// answers no open decision, and true reproduces exactly the receipt printed
+// today for every restaurant already registered. Spec 33 open decision 3 (what
+// a receipt must legally show) is STILL OPEN. The fields that can never be
+// hidden have NO column: the restaurant name, the invoice number, the date and
+// time, the items, subtotal/discount/tax/total, the payment, the COPY marks, and
+// the tax registration number when one is set — the receipt formatter (T-23)
+// enforces that, not the database. receipt_tax_breakdown false means one tax
+// line instead of one per rate. receipt_payment_numbers_heading, the optional
+// heading above the payment-numbers block, is nullable with NO DEFAULT (NULL =
+// no heading) and, like all receipt text, refuses control characters
+// (!~ '[[:cntrl:]]') so an ESC can never start the drawer pulse ESC p
+// (invariant 9).
 //
 // onDelete: 'restrict' throughout this plan: a restaurant with any history must
 // not be deletable, because audit rows reference it and those are append-only.
@@ -107,6 +127,19 @@ export const restaurantSettings = pgTable(
 		receiptPhone: text('receipt_phone'),
 		taxRegistrationNumber: text('tax_registration_number'),
 		receiptFooter: text('receipt_footer'),
+		// Receipt display switches (tasks/settings-tax-payments-receipt, gate decision 4) — see
+		// the header. DEFAULT true = exactly today's receipt.
+		receiptShowCashier: boolean('receipt_show_cashier').notNull().default(true),
+		receiptShowTable: boolean('receipt_show_table').notNull().default(true),
+		receiptShowBusinessDate: boolean('receipt_show_business_date').notNull().default(true),
+		receiptShowOrderType: boolean('receipt_show_order_type').notNull().default(true),
+		receiptShowUnitPrice: boolean('receipt_show_unit_price').notNull().default(true),
+		receiptShowCurrencyLine: boolean('receipt_show_currency_line').notNull().default(true),
+		receiptShowDeviceLine: boolean('receipt_show_device_line').notNull().default(true),
+		receiptShowPaymentNumbers: boolean('receipt_show_payment_numbers').notNull().default(true),
+		receiptTaxBreakdown: boolean('receipt_tax_breakdown').notNull().default(true),
+		// Optional heading above the payment-numbers block; NULL = no heading. No DEFAULT.
+		receiptPaymentNumbersHeading: text('receipt_payment_numbers_heading'),
 		// The menu snapshot's version (spec 5) — see the note above this table.
 		menuVersion: integer('menu_version').notNull().default(1),
 		updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
@@ -148,6 +181,10 @@ export const restaurantSettings = pgTable(
 		check(
 			'restaurant_settings_receipt_footer_length',
 			sql`${table.receiptFooter} is null or char_length(${table.receiptFooter}) between 1 and 120`
+		),
+		check(
+			'restaurant_settings_receipt_payment_numbers_heading_length',
+			sql`${table.receiptPaymentNumbersHeading} is null or (char_length(${table.receiptPaymentNumbersHeading}) between 1 and 40 and ${table.receiptPaymentNumbersHeading} !~ '[[:cntrl:]]')`
 		)
 	]
 );
