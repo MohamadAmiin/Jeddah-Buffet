@@ -25,6 +25,9 @@ import * as ordersSchema from '../schema/orders';
 import * as posSyncSchema from '../schema/pos-sync';
 import * as inventorySchema from '../schema/inventory';
 import * as purchasesSchema from '../schema/purchases';
+import * as taxRatesSchema from '../schema/tax-rates';
+import * as paymentMethodsSchema from '../schema/payment-methods';
+import * as receiptSchema from '../schema/receipt';
 import { TABLES } from '../test/reset';
 
 // Tables are DISCOVERED from the schema modules' exports, never from a
@@ -51,7 +54,10 @@ const modules = {
 	...ordersSchema,
 	...posSyncSchema,
 	...inventorySchema,
-	...purchasesSchema
+	...purchasesSchema,
+	...taxRatesSchema,
+	...paymentMethodsSchema,
+	...receiptSchema
 };
 
 // Every file in src/lib/server/db/schema/ that is imported above. A schema file
@@ -63,14 +69,17 @@ const IMPORTED_SCHEMA_FILES = [
 	'inventory.ts',
 	'menu.ts',
 	'orders.ts',
+	'payment-methods.ts',
 	'pos-devices.ts',
 	'pos-sessions.ts',
 	'pos-sync.ts',
 	'purchases.ts',
+	'receipt.ts',
 	'restaurant-settings.ts',
 	'restaurants.ts',
 	'roles.ts',
 	'sessions.ts',
+	'tax-rates.ts',
 	'users.ts'
 ];
 
@@ -219,12 +228,15 @@ describe('schema guards every future aggregate inherits', () => {
 			'order_line_modifiers',
 			'order_lines',
 			'orders',
+			'payment_methods',
 			'payments',
 			'pos_devices',
 			'pos_sessions',
 			'pos_sync_ops',
 			'purchase_lines',
 			'purchases',
+			'receipt_lines',
+			'receipt_logos',
 			'recipe_lines',
 			'restaurant_settings',
 			'restaurants',
@@ -235,6 +247,7 @@ describe('schema guards every future aggregate inherits', () => {
 			'stock_counts',
 			'stock_movements',
 			'supplier_payments',
+			'tax_rates',
 			'users',
 			'waste_entries'
 		]);
