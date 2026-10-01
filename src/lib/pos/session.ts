@@ -10,7 +10,7 @@ import type { OpEnvelope, SessionClosePayload, SessionOpenPayload } from '../syn
 
 function secureId(): string {
 	if (typeof crypto === 'undefined' || typeof crypto.randomUUID !== 'function') {
-		throw new Error('This device cannot open a session securely.');
+		throw new Error('This device cannot open a shift securely.');
 	}
 	return crypto.randomUUID();
 }

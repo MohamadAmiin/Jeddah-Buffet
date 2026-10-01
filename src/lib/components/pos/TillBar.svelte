@@ -224,8 +224,7 @@
 
 	{#if session === null}
 		<p class="hidden shrink-0 flex-col leading-tight md:flex">
-			<span class="font-semibold"
-				><span aria-hidden="true" class="font-mono">○</span> No session</span
+			<span class="font-semibold"><span aria-hidden="true" class="font-mono">○</span> No shift</span
 			>
 			<span class="text-body text-rail-ink-2 hidden xl:block">Open one to start selling</span>
 		</p>
@@ -233,8 +232,8 @@
 		<a
 			href={resolve('/pos/session')}
 			aria-label={sessionBusy
-				? `Session · ${sessionBusy}`
-				: `Session · business date ${businessDate} · Close session`}
+				? `Shift · ${sessionBusy}`
+				: `Shift · business date ${businessDate} · Close shift`}
 			class="min-h-touch-min min-w-touch-min rounded-control border-rail-line bg-rail-raise hidden shrink-0 items-center justify-center gap-2 border px-3 font-semibold sm:flex"
 		>
 			<Icon name="lock" class="text-rail-ink-2 size-5" />
@@ -242,15 +241,15 @@
 				{#if sessionBusy}
 					<span><span aria-hidden="true" class="font-mono">◐</span> {sessionBusy}</span>
 				{:else}
-					<span><span aria-hidden="true" class="font-mono">●</span> Session</span>
-					<span class="text-body text-rail-ink-2 hidden font-normal xl:block">Close session</span>
+					<span><span aria-hidden="true" class="font-mono">●</span> Shift</span>
+					<span class="text-body text-rail-ink-2 hidden font-normal xl:block">Close shift</span>
 				{/if}
 			</span>
 			<Icon name="chevron-right" class="text-rail-ink-2 hidden size-4 md:block" />
 		</a>
 	{:else}
 		<p class="hidden shrink-0 flex-col leading-tight md:flex">
-			<span class="font-semibold"><span aria-hidden="true" class="font-mono">●</span> Session</span>
+			<span class="font-semibold"><span aria-hidden="true" class="font-mono">●</span> Shift</span>
 			<span class="text-body text-rail-ink-2 hidden xl:block">Business date {businessDate}</span>
 		</p>
 	{/if}
@@ -281,7 +280,7 @@
 				{#if session !== null}
 					<a href={resolve('/pos/session')} class={MENU_ITEM}>
 						<Icon name="lock" class="text-ink-2 size-5" />
-						Close session…
+						Close shift…
 					</a>
 				{/if}
 				<a href={resolve('/pos/sales')} class="{MENU_ITEM} 2xl:hidden">

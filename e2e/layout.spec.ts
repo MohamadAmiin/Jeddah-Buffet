@@ -1,7 +1,7 @@
 // THE LAYOUT RULES (docs/redesign Phase 8, section 13.1) — measured, not eyeballed.
 //
 // The till: the document never scrolls; every closer (Register this device, Sign
-// in, Open session, Pay, Pay · Cash, Close session) is fully on screen in its
+// in, Open shift, Pay, Pay · Cash, Close shift) is fully on screen in its
 // error and blocked states too; the unsynced count is always visible; the till
 // bar is one 64px row with no overflow — at 1280x800, 1280x720 (Playwright's
 // default, used by the rest of the suite) and 1024x768.
@@ -134,9 +134,9 @@ test('till: every closer and the unsynced count stay on screen; the document nev
 	await checkEverySize(tillPage, tillPage.getByRole('button', { name: 'Sign in' }), 'PIN, wrong');
 	await enterPin(tillPage, '4321');
 
-	// Open session.
-	await expect(tillPage.getByRole('heading', { name: 'Open a session' })).toBeVisible();
-	await checkEverySize(tillPage, tillPage.getByRole('button', { name: 'Open session' }), 'open');
+	// Open shift.
+	await expect(tillPage.getByRole('heading', { name: 'Open a shift' })).toBeVisible();
+	await checkEverySize(tillPage, tillPage.getByRole('button', { name: 'Open shift' }), 'open');
 	await openSession(tillPage, 50000n);
 
 	// The order screen with 1, 4 and 12 lines.
@@ -178,9 +178,9 @@ test('till: every closer and the unsynced count stay on screen; the document nev
 	await expect(status).toBeInViewport();
 	await tillPage.setViewportSize(TILL[0]);
 
-	await tillPage.getByRole('link', { name: /^Session · business date/ }).click();
-	await expect(tillPage.getByRole('heading', { name: 'Close this session' })).toBeVisible();
-	const closeKey = tillPage.getByRole('button', { name: 'Close session' });
+	await tillPage.getByRole('link', { name: /^Shift · business date/ }).click();
+	await expect(tillPage.getByRole('heading', { name: 'Close this shift' })).toBeVisible();
+	const closeKey = tillPage.getByRole('button', { name: 'Close shift' });
 	await expect(closeKey).toBeDisabled();
 	await checkEverySize(tillPage, closeKey, 'close, blocked offline');
 	await till.setOffline(false);

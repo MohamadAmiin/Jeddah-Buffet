@@ -58,7 +58,7 @@
 				'The till registers itself when the owner signs in on it once; the POS page shows it and can revoke it.'
 		},
 		{
-			label: 'Open the first POS session',
+			label: 'Open the first shift on the till',
 			done: false,
 			href: null,
 			detail: 'Opening cash, sales, count, reconciliation, end-of-day report.'
@@ -161,7 +161,7 @@
 			<StatTile label="Recorded events" numeric caption="most recent shown below">
 				{data.activity.length}
 			</StatTile>
-			<StatTile label="Selling" caption="no POS session has been opened">
+			<StatTile label="Selling" caption="no shift has been opened on the till">
 				<span class="flex items-center gap-2">
 					<!-- Colour never alone: the glyph and the word both say it. -->
 					<span aria-hidden="true" class="text-st-offline font-mono">◆</span>

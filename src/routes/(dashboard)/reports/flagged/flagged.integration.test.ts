@@ -416,6 +416,6 @@ describe('summarizeOp', () => {
 		expect(summarizeOp('sale.complete', payload, usd).total).toBeNull();
 		expect(
 			summarizeOp('session.open', { posSessionId: 's', openingCashMinor: '10000' }, usd).lines
-		).toEqual(['Session open · float 100.00 USD']);
+		).toEqual(['Shift open · float 100.00 USD']);
 	});
 });
