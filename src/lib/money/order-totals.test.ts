@@ -6,6 +6,8 @@ import {
 	minor,
 	roundToMinor,
 	subtract,
+	sum,
+	sumExact,
 	type Minor,
 	type RoundingRule
 } from './index';
@@ -13,6 +15,7 @@ import { TAX_MODES, type TaxMode } from './tax';
 import {
 	computeOrderTotals,
 	serializeTotals,
+	taxBreakdown,
 	totalsEqual,
 	type OrderTotals,
 	type TotalsLine
@@ -347,6 +350,288 @@ describe('serializeTotals and totalsEqual', () => {
 		expect(totalsEqual(t, { ...t, discount: minor(1n) as Minor })).toBe(false);
 		expect(totalsEqual(t, { ...t, tax: minor(99n) as Minor })).toBe(false);
 		expect(totalsEqual(t, { ...t, total: minor(1099n) as Minor })).toBe(false);
+	});
+});
+
+describe('taxBreakdown — per-rate tax that sums to the stored tax', () => {
+	type Rate = { rateBp: number; name: string | null };
+	const rate = (rateBp: number, name: string | null): Rate => ({ rateBp, name });
+
+	// Each entry pairs an order line with the rate that describes it, so
+	// rates[i] always describes lines[i]. The rule is passed explicitly, to both
+	// calls: the breakdown splits what computeOrderTotals rounded with that rule.
+	function split(taxMode: TaxMode, entries: Array<[TotalsLine, Rate]>, rule: RoundingRule) {
+		const t = computeOrderTotals({ taxMode, lines: entries.map(([l]) => l) }, rule);
+		const rows = taxBreakdown(
+			t,
+			entries.map(([, r]) => r),
+			rule
+		);
+		return { t, rows };
+	}
+
+	it('MANDATORY (spec 29 — tax in both modes): exclusive, two rates', () => {
+		const { t, rows } = split(
+			'exclusive',
+			[
+				[line(850, 1000), rate(1000, 'VAT 10%')],
+				[line(1000, 500), rate(500, 'VAT 5%')]
+			],
+			R
+		);
+		expect(t.tax).toBe(135n);
+		expect(t.total).toBe(1985n);
+		expect(rows).toEqual([
+			{ rateBp: 1000, name: 'VAT 10%', tax: 85n },
+			{ rateBp: 500, name: 'VAT 5%', tax: 50n }
+		]);
+	});
+
+	it('MANDATORY (spec 29 — tax in both modes): inclusive, two rates', () => {
+		const { t, rows } = split(
+			'inclusive',
+			[
+				[line(1100, 1000), rate(1000, 'VAT 10%')],
+				[line(1050, 500), rate(500, 'VAT 5%')]
+			],
+			R
+		);
+		expect(t.tax).toBe(150n);
+		expect(t.total).toBe(2150n);
+		expect(rows).toEqual([
+			{ rateBp: 1000, name: 'VAT 10%', tax: 100n },
+			{ rateBp: 500, name: 'VAT 5%', tax: 50n }
+		]);
+	});
+
+	it('MANDATORY (spec 29 — money arithmetic and rounding): inclusive, where rounding each rate on its own mis-sums', () => {
+		const { t, rows } = split(
+			'inclusive',
+			[
+				[line(999, 2000), rate(2000, 'VAT 20%')],
+				[line(1414, 1200), rate(1200, 'VAT 12%')]
+			],
+			R
+		);
+		expect(t.lines[0].tax).toEqual(exact(333n, 2n)); // 166.5
+		expect(t.lines[1].tax).toEqual(exact(303n, 2n)); // 151.5
+		expect(t.tax).toBe(318n);
+		expect(t.total).toBe(2413n);
+		expect(rows).toEqual([
+			{ rateBp: 2000, name: 'VAT 20%', tax: 167n },
+			{ rateBp: 1200, name: 'VAT 12%', tax: 151n }
+		]);
+		// Rounding each rate group on its own would give 167 + 152 = 319: one cent
+		// more than the TAX line, the invoice and Cr 2100.
+		expect(roundToMinor(t.lines[0].tax, R) + roundToMinor(t.lines[1].tax, R)).toBe(319n);
+	});
+
+	it('MANDATORY (spec 29 — money arithmetic and rounding): exclusive three-way ties, under both rules', () => {
+		const entries: Array<[TotalsLine, Rate]> = [
+			[line(105, 1000), rate(1000, 'A')],
+			[line(210, 500), rate(500, 'B')],
+			[line(350, 300), rate(300, 'C')]
+		];
+		const halfUp = split('exclusive', entries, R);
+		for (const perLine of halfUp.t.lines) expect(perLine.tax).toEqual(exact(21n, 2n)); // 10.5
+		expect(halfUp.t.tax).toBe(32n);
+		expect(halfUp.rows).toEqual([
+			{ rateBp: 1000, name: 'A', tax: 11n },
+			{ rateBp: 500, name: 'B', tax: 10n },
+			{ rateBp: 300, name: 'C', tax: 11n }
+		]);
+		// Rounding each group on its own would give 11 + 11 + 11 = 33.
+		expect(halfUp.t.lines.reduce((acc, l) => acc + roundToMinor(l.tax, R), 0n)).toBe(33n);
+
+		const halfEven = split('exclusive', entries, 'half-even');
+		expect(halfEven.t.tax).toBe(32n);
+		expect(halfEven.rows).toEqual([
+			{ rateBp: 1000, name: 'A', tax: 10n },
+			{ rateBp: 500, name: 'B', tax: 11n },
+			{ rateBp: 300, name: 'C', tax: 11n }
+		]);
+	});
+
+	it('the same rate under two names is two rows (exclusive)', () => {
+		// Inclusive would give 48n and 47n, hence the named mode.
+		const { t, rows } = split(
+			'exclusive',
+			[
+				[line(1000, 500), rate(500, 'Levy')],
+				[line(1000, 500), rate(500, 'VAT')]
+			],
+			R
+		);
+		expect(t.tax).toBe(100n);
+		expect(rows).toEqual([
+			{ rateBp: 500, name: 'Levy', tax: 50n },
+			{ rateBp: 500, name: 'VAT', tax: 50n }
+		]);
+	});
+
+	it('a group that reappears merges in first-appearance order, and a 0% group is kept (exclusive)', () => {
+		// Inclusive would give 136n, hence the named mode.
+		const { t, rows } = split(
+			'exclusive',
+			[
+				[line(1000, 1000), rate(1000, 'VAT 10%')],
+				[line(1000, 0), rate(0, 'Exempt')],
+				[line(500, 1000), rate(1000, 'VAT 10%')]
+			],
+			R
+		);
+		expect(t.tax).toBe(150n);
+		expect(rows).toEqual([
+			{ rateBp: 1000, name: 'VAT 10%', tax: 150n },
+			{ rateBp: 0, name: 'Exempt', tax: 0n }
+		]);
+	});
+
+	it('one group is one row equal to the stored tax: three 333s at 8.25% exclusive', () => {
+		const tax = rate(825, 'Tax');
+		const { t, rows } = split(
+			'exclusive',
+			[
+				[line(333, 825), tax],
+				[line(333, 825), tax],
+				[line(333, 825), tax]
+			],
+			R
+		);
+		expect(t.tax).toBe(82n);
+		expect(rows).toEqual([{ rateBp: 825, name: 'Tax', tax: 82n }]);
+	});
+
+	it('null names (lines recorded before named rates) group together and stay apart from any name', () => {
+		const twoNulls = split(
+			'exclusive',
+			[
+				[line(1000, 825), rate(825, null)],
+				[line(1000, 825), rate(825, null)]
+			],
+			R
+		);
+		expect(twoNulls.rows).toEqual([{ rateBp: 825, name: null, tax: 165n }]);
+
+		const nullAndTheWordNull = split(
+			'exclusive',
+			[
+				[line(1000, 825), rate(825, null)],
+				[line(1000, 825), rate(825, 'null')]
+			],
+			R
+		);
+		expect(nullAndTheWordNull.rows).toEqual([
+			{ rateBp: 825, name: null, tax: 83n },
+			{ rateBp: 825, name: 'null', tax: 82n }
+		]);
+
+		const nullAndTax = split(
+			'exclusive',
+			[
+				[line(1000, 825), rate(825, null)],
+				[line(1000, 825), rate(825, 'Tax')]
+			],
+			R
+		);
+		expect(nullAndTax.rows).toEqual([
+			{ rateBp: 825, name: null, tax: 83n },
+			{ rateBp: 825, name: 'Tax', tax: 82n }
+		]);
+	});
+
+	it('an empty order has an empty breakdown', () => {
+		const t = computeOrderTotals({ taxMode: 'exclusive', lines: [] }, R);
+		expect(taxBreakdown(t, [], R)).toEqual([]);
+	});
+
+	it('refuses a rate list of the wrong length, and totals rounded under another rule', () => {
+		const short = computeOrderTotals(
+			{ taxMode: 'exclusive', lines: [line(1000, 825), line(1000, 825)] },
+			R
+		);
+		expect(() => taxBreakdown(short, [rate(825, 'Tax')], R)).toThrow(RangeError);
+
+		const tax = rate(825, 'Tax');
+		const t = computeOrderTotals(
+			{ taxMode: 'exclusive', lines: [line(333, 825), line(333, 825), line(334, 825)] },
+			'half-even'
+		);
+		expect(t.tax).toBe(82n); // exact 82.5, to the even neighbour
+		expect(() => taxBreakdown(t, [tax, tax, tax], 'half-up')).toThrow(Error);
+		expect(() => taxBreakdown(t, [tax, tax, tax], 'half-up')).toThrow(/do not reconcile/);
+	});
+
+	it('MANDATORY (spec 29 — tax in both modes; money arithmetic and rounding): 500 seeded carts, both modes, both rules', () => {
+		const POOL: Rate[] = [
+			rate(0, 'Exempt'),
+			rate(500, 'VAT 5%'),
+			rate(825, 'Tax'),
+			rate(825, null),
+			rate(1500, 'Alcohol duty')
+		];
+		const RULES: RoundingRule[] = ['half-up', 'half-even'];
+		const next = generator(20261001n);
+		const discountCoin = { head: 0, tail: 0 };
+		for (let i = 0; i < 500; i++) {
+			const nLines = Number(between(next, 1n, 8n));
+			// The coin from the HIGH bits (the low bit alternates in this LCG).
+			const head = (next() >> 16n) % 2n === 0n; // head → no discounts
+			if (head) discountCoin.head++;
+			else discountCoin.tail++;
+			const lines: TotalsLine[] = [];
+			const rates: Rate[] = [];
+			for (let j = 0; j < nLines; j++) {
+				const lineRate = POOL[Number(between(next, 0n, 4n))];
+				const unit = between(next, 0n, 99_999n);
+				const quantity = between(next, 1n, 9n);
+				const base = unit * quantity;
+				const discount = head ? 0n : between(next, 0n, base);
+				lines.push({
+					unitPriceMinor: minor(unit),
+					quantity,
+					modifierDeltasMinor: [],
+					taxRateBp: lineRate.rateBp,
+					discountMinor: minor(discount)
+				});
+				rates.push(lineRate);
+			}
+			// The distinct (rateBp, name) keys of the cart, in first-appearance order,
+			// each with the indices of its lines.
+			const groupIndices = new Map<string, number[]>();
+			rates.forEach((r, index) => {
+				const key = JSON.stringify([r.rateBp, r.name]);
+				const indices = groupIndices.get(key);
+				if (indices) indices.push(index);
+				else groupIndices.set(key, [index]);
+			});
+
+			for (const taxMode of TAX_MODES as readonly TaxMode[]) {
+				for (const rule of RULES) {
+					const t = computeOrderTotals({ taxMode, lines }, rule);
+					const rows = taxBreakdown(t, rates, rule);
+					expect(sum(rows.map((r) => r.tax))).toBe(t.tax);
+					for (const row of rows) expect(row.tax).toBeGreaterThanOrEqual(0n);
+					expect(rows.length).toBe(groupIndices.size);
+					expect(rows.map((r) => JSON.stringify([r.rateBp, r.name]))).toEqual([
+						...groupIndices.keys()
+					]);
+					// Half away from zero on non-negative sums keeps every row strictly
+					// within one minor unit of its group's exact tax. Under 'half-even' the
+					// bound is ≤ 1, so it is not asserted there.
+					if (rule === 'half-up') {
+						for (const row of rows) {
+							const indices = groupIndices.get(JSON.stringify([row.rateBp, row.name])) ?? [];
+							const g = sumExact(indices.map((index) => t.lines[index].tax));
+							const d = row.tax * g.denominator - g.numerator;
+							expect(d > -g.denominator && d < g.denominator).toBe(true);
+						}
+					}
+				}
+			}
+		}
+		expect(discountCoin.head).toBeGreaterThan(0);
+		expect(discountCoin.tail).toBeGreaterThan(0);
 	});
 });
 
