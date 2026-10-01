@@ -223,7 +223,17 @@ export type AuditEvent =
 			event: 'payment_method.updated';
 			details: { changes: Record<string, { old: unknown; new: unknown }> };
 	  }
-	| { event: 'payment_method.archived'; details: { name: string; kind: 'card' | 'mobile' } };
+	| { event: 'payment_method.archived'; details: { name: string; kind: 'card' | 'mobile' } }
+	// tasks/settings-tax-payments-receipt (T-12)
+	| {
+			event: 'receipt.lines_updated';
+			details: { section: 'header' | 'footer'; old: string[]; new: string[] };
+	  }
+	| {
+			event: 'receipt.logo_updated';
+			details: { sha256: string; widthDots: number; heightDots: number };
+	  }
+	| { event: 'receipt.logo_removed'; details: { sha256: string } };
 
 export type AuditEventName = AuditEvent['event'];
 
@@ -280,7 +290,10 @@ export const AUDIT_EVENT_NAMES = [
 	'tax_rate.archived',
 	'payment_method.created',
 	'payment_method.updated',
-	'payment_method.archived'
+	'payment_method.archived',
+	'receipt.lines_updated',
+	'receipt.logo_updated',
+	'receipt.logo_removed'
 ] as const satisfies readonly AuditEventName[];
 
 type AssertTrue<T extends true> = T;

@@ -53,5 +53,8 @@ export const EVENT_TEXT: Record<AuditEventName, string> = {
 	'tax_rate.archived': 'Tax rate archived',
 	'payment_method.created': 'Payment method added',
 	'payment_method.updated': 'Payment method changed',
-	'payment_method.archived': 'Payment method archived'
+	'payment_method.archived': 'Payment method archived',
+	'receipt.lines_updated': 'Receipt header or footer lines changed',
+	'receipt.logo_updated': 'Receipt logo uploaded',
+	'receipt.logo_removed': 'Receipt logo removed'
 };

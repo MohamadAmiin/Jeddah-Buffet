@@ -11,9 +11,12 @@ import { SUPPORTED_CURRENCIES } from '../../money/format';
 import { DEFAULT_ROLES } from '../permissions/keys';
 import { isValidTimeZone, canonicalTimeZone } from './time-zone';
 import { ensureCashMethod } from './payment-methods';
+import { RECEIPT_SHOW_COLUMNS, RECEIPT_SHOW_SELECTION, receiptShowFrom } from './receipt';
+import { RECEIPT_SHOW_KEYS, type ReceiptShow } from '../../receipt-layout';
 
 export { isValidTimeZone, canonicalTimeZone, timeZoneSuggestions } from './time-zone';
 export * from './payment-methods';
+export * from './receipt';
 
 // This module holds restaurant identity and settings and the onRestaurantCreated
 // initializer list. It calls audit/ and, for the chart seed only, accounting/chart
@@ -57,6 +60,14 @@ export type RestaurantWithSettings = {
 	receiptPhone: string | null;
 	taxRegistrationNumber: string | null;
 	receiptFooter: string | null;
+	/**
+	 * The nine receipt display switches (tasks/settings-tax-payments-receipt
+	 * T-12), as ONE nested object built by receiptShowFrom — never the nine flat
+	 * columns.
+	 */
+	receiptShow: ReceiptShow;
+	/** The heading above the receipt's payment-numbers block; null = no heading. */
+	receiptPaymentNumbersHeading: string | null;
 	createdAt: Date;
 };
 
@@ -86,6 +97,10 @@ export async function getRestaurantWithSettings(
 			receiptPhone: restaurantSettings.receiptPhone,
 			taxRegistrationNumber: restaurantSettings.taxRegistrationNumber,
 			receiptFooter: restaurantSettings.receiptFooter,
+			// T-12: the nine switches arrive nested and leave as ONE receiptShow
+			// object; the logo's bitmap is never selected here.
+			receiptShowColumns: RECEIPT_SHOW_SELECTION,
+			receiptPaymentNumbersHeading: restaurantSettings.receiptPaymentNumbersHeading,
 			createdAt: restaurants.createdAt
 		})
 		.from(restaurants)
@@ -95,9 +110,14 @@ export async function getRestaurantWithSettings(
 
 	const row = rows[0];
 	if (!row) return null;
+	const { receiptShowColumns, ...rest } = row;
 	// The column is text; the CHECK restaurant_settings_tax_mode_valid admits exactly
 	// TAX_MODES or NULL, which is what makes this narrowing true.
-	return { ...row, taxMode: row.taxMode as TaxMode | null };
+	return {
+		...rest,
+		taxMode: row.taxMode as TaxMode | null,
+		receiptShow: receiptShowFrom(receiptShowColumns)
+	};
 }
 
 export type SettingsChanges = {
@@ -117,6 +137,11 @@ export type SettingsChanges = {
 	receiptPhone?: string | null;
 	taxRegistrationNumber?: string | null;
 	receiptFooter?: string | null;
+	// tasks/settings-tax-payments-receipt T-12: the receipt display switches —
+	// only the submitted keys, each a boolean — and the payment-numbers heading,
+	// trimmed like the receipt header text ('' clears it to null).
+	receiptShow?: Partial<ReceiptShow>;
+	receiptPaymentNumbersHeading?: string | null;
 };
 
 export type UpdateSettingsContext = {
@@ -151,11 +176,16 @@ const POS_IDLE_LOCK_MAX_SECONDS = 1800;
 // here so a value is refused BEFORE the database would (the CHECKs in
 // restaurant-settings.ts carry the same numbers). Control characters are
 // refused because this text goes to an ESC/POS printer, which obeys them.
+// receiptPaymentNumbersHeading (tasks/settings-tax-payments-receipt T-12) is
+// receipt text of exactly the same kind — trimmed, '' clears it, at most 40, no
+// control character (restaurant_settings_receipt_payment_numbers_heading_length)
+// — so it rides the same loop.
 const RECEIPT_LIMITS = {
 	receiptAddress: 120,
 	receiptPhone: 40,
 	taxRegistrationNumber: 40,
-	receiptFooter: 120
+	receiptFooter: 120,
+	receiptPaymentNumbersHeading: 40
 } as const;
 type ReceiptField = keyof typeof RECEIPT_LIMITS;
 
@@ -266,6 +296,8 @@ export async function updateSettings(
 	// a control character or a length over the column's bound is refused before
 	// anything is written. NEVER bumps menu_version — the receipt header is not in
 	// the till's menu snapshot; it reaches the till through GET /api/pos/employees.
+	// The same holds for the payment-numbers heading (in this loop) and the nine
+	// receipt switches (below) that T-12 added: neither ever bumps menu_version.
 	const receipt: Partial<Record<ReceiptField, string | null>> = {};
 	for (const key of Object.keys(RECEIPT_LIMITS) as ReceiptField[]) {
 		const value = changes[key];
@@ -282,6 +314,41 @@ export async function updateSettings(
 		if (next !== current[key]) {
 			diff[key] = { old: current[key], new: next };
 			receipt[key] = next;
+		}
+	}
+
+	// tasks/settings-tax-payments-receipt T-12: the receipt display switches. Only
+	// the submitted keys; each must be one of RECEIPT_SHOW_KEYS with a boolean
+	// value, or nothing is written. A changed key diffs as receiptShow.<key>.
+	// NEVER bumps menu_version, like the receipt text above.
+	const showColumns: Partial<Record<(typeof RECEIPT_SHOW_COLUMNS)[keyof ReceiptShow], boolean>> =
+		{};
+	if (changes.receiptShow !== undefined) {
+		const submitted: unknown = changes.receiptShow;
+		if (
+			typeof submitted !== 'object' ||
+			submitted === null ||
+			Array.isArray(submitted) ||
+			(Object.getPrototypeOf(submitted) !== Object.prototype &&
+				Object.getPrototypeOf(submitted) !== null)
+		) {
+			return { ok: false, reason: 'invalid_receipt_field' };
+		}
+		const entries = Object.entries(submitted);
+		for (const [key, value] of entries) {
+			if (!(RECEIPT_SHOW_KEYS as readonly string[]).includes(key)) {
+				return { ok: false, reason: 'invalid_receipt_field' };
+			}
+			// undefined means "not submitted", as for every optional field here.
+			if (value !== undefined && typeof value !== 'boolean') {
+				return { ok: false, reason: 'invalid_receipt_field' };
+			}
+		}
+		for (const key of RECEIPT_SHOW_KEYS) {
+			const value = (submitted as Partial<ReceiptShow>)[key];
+			if (value === undefined || value === current.receiptShow[key]) continue;
+			diff[`receiptShow.${key}`] = { old: current.receiptShow[key], new: value };
+			showColumns[RECEIPT_SHOW_COLUMNS[key]] = value;
 		}
 	}
 
@@ -302,6 +369,10 @@ export async function updateSettings(
 	// 11). Adding the column to the payload without widening the condition would
 	// write the audit row and nothing else — and the owner could then never satisfy
 	// settingsComplete().
+	//
+	// The receipt switches and the payment-numbers heading (T-12) are NOT in the
+	// bump: like the receipt header text, they reach the till in the settings
+	// bundle of GET /api/pos/employees, not in the menu snapshot.
 	const bumpMenuVersion = Boolean(diff.taxMode || diff.taxRateBp || diff.currencyCode);
 	if (
 		diff.timeZone ||
@@ -314,7 +385,9 @@ export async function updateSettings(
 		diff.receiptAddress ||
 		diff.receiptPhone ||
 		diff.taxRegistrationNumber ||
-		diff.receiptFooter
+		diff.receiptFooter ||
+		Object.keys(diff).some((k) => k.startsWith('receiptShow.')) ||
+		diff.receiptPaymentNumbersHeading
 	) {
 		await tx
 			.update(restaurantSettings)
@@ -333,6 +406,12 @@ export async function updateSettings(
 					? { taxRegistrationNumber: receipt.taxRegistrationNumber ?? null }
 					: {}),
 				...(diff.receiptFooter ? { receiptFooter: receipt.receiptFooter ?? null } : {}),
+				// T-12: only the switch columns that changed, through RECEIPT_SHOW_COLUMNS,
+				// and the heading when it changed (null clears it).
+				...showColumns,
+				...(diff.receiptPaymentNumbersHeading
+					? { receiptPaymentNumbersHeading: receipt.receiptPaymentNumbersHeading ?? null }
+					: {}),
 				// T-29: the ONE menu-version bump on the server side. Inline SQL so
 				// two concurrent saves cannot both read 7 and both write 8. The
 				// convention amendment (CLAUDE.md, 2026-09-28, T-02): restaurants/
