@@ -50,5 +50,8 @@ export const EVENT_TEXT: Record<AuditEventName, string> = {
 	'opening_stock.recorded': 'Recorded opening stock',
 	'tax_rate.created': 'Tax rate added',
 	'tax_rate.updated': 'Tax rate changed',
-	'tax_rate.archived': 'Tax rate archived'
+	'tax_rate.archived': 'Tax rate archived',
+	'payment_method.created': 'Payment method added',
+	'payment_method.updated': 'Payment method changed',
+	'payment_method.archived': 'Payment method archived'
 };

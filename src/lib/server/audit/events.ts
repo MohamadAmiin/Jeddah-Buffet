@@ -213,7 +213,17 @@ export type AuditEvent =
 			event: 'tax_rate.updated';
 			details: { changes: Record<string, { old: unknown; new: unknown }> };
 	  }
-	| { event: 'tax_rate.archived'; details: { name: string; rateBp: number } };
+	| { event: 'tax_rate.archived'; details: { name: string; rateBp: number } }
+	// tasks/settings-tax-payments-receipt (T-11)
+	| {
+			event: 'payment_method.created';
+			details: { name: string; kind: 'card' | 'mobile'; merchantNumber: string | null };
+	  }
+	| {
+			event: 'payment_method.updated';
+			details: { changes: Record<string, { old: unknown; new: unknown }> };
+	  }
+	| { event: 'payment_method.archived'; details: { name: string; kind: 'card' | 'mobile' } };
 
 export type AuditEventName = AuditEvent['event'];
 
@@ -267,7 +277,10 @@ export const AUDIT_EVENT_NAMES = [
 	'opening_stock.recorded',
 	'tax_rate.created',
 	'tax_rate.updated',
-	'tax_rate.archived'
+	'tax_rate.archived',
+	'payment_method.created',
+	'payment_method.updated',
+	'payment_method.archived'
 ] as const satisfies readonly AuditEventName[];
 
 type AssertTrue<T extends true> = T;

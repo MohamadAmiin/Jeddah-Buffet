@@ -10,8 +10,10 @@ import { TAX_MODES, type TaxMode } from '../../money/tax';
 import { SUPPORTED_CURRENCIES } from '../../money/format';
 import { DEFAULT_ROLES } from '../permissions/keys';
 import { isValidTimeZone, canonicalTimeZone } from './time-zone';
+import { ensureCashMethod } from './payment-methods';
 
 export { isValidTimeZone, canonicalTimeZone, timeZoneSuggestions } from './time-zone';
+export * from './payment-methods';
 
 // This module holds restaurant identity and settings and the onRestaurantCreated
 // initializer list. It calls audit/ and, for the chart seed only, accounting/chart
@@ -19,6 +21,12 @@ export { isValidTimeZone, canonicalTimeZone, timeZoneSuggestions } from './time-
 // permissions/keys.ts. The two lists it reads from the isomorphic src/lib/money
 // (TAX_MODES, SUPPORTED_CURRENCIES) call nothing. It is called by routes and by
 // auth/register.ts. CLAUDE.md's "Where code lives" does not list it; T-26 adds it.
+//
+// It also owns payment-methods.ts (the owner-named payment methods and the
+// built-in Cash row, tasks/settings-tax-payments-receipt T-11) and, from T-12,
+// receipt.ts (the receipt layout). Both are re-exported from here, and the module
+// still calls only audit/ and accounting/chart — never menu/: payment methods and
+// the receipt layout reach the till in the settings bundle, not the menu snapshot.
 //
 // CONVENTION, applied throughout src/lib/server: functions that WRITE take DbTx,
 // so a plain `db` handle cannot be passed where a transaction is required;
@@ -430,10 +438,11 @@ async function insertDefaultRoles(tx: DbTx, restaurantId: string): Promise<void>
 /**
  * Ordered initializers run INSIDE the registration transaction.
  *
- * Ships with the settings row, the default role rows and the chart of
- * accounts. The list exists so later plans can add idempotent per-restaurant
- * initialization here, rather than writing a migration that cross-joins every
- * existing restaurant and then silently does nothing for the next one created.
+ * Ships with the settings row, the default role rows, the chart of accounts
+ * and the built-in Cash payment method. The list exists so later plans can add
+ * idempotent per-restaurant initialization here, rather than writing a
+ * migration that cross-joins every existing restaurant and then silently does
+ * nothing for the next one created.
  */
 export const restaurantInitializers: Array<
 	(tx: DbTx, restaurantId: string, input: RestaurantInitializerInput) => Promise<void>
@@ -454,6 +463,14 @@ export const restaurantInitializers: Array<
 	// for exactly this entry — it still calls no other module.
 	async function seedChartOfAccounts(tx, restaurantId) {
 		await ensureChart(tx, restaurantId);
+	},
+	// The built-in Cash payment method (tasks/settings-tax-payments-receipt T-11).
+	// Cash is a built-in tender, not an answer to an open decision: spec 33
+	// decision 4's tender set always includes cash, and which card and mobile
+	// methods a restaurant takes stays the owner's configuration on
+	// /settings/payments. Idempotent; migration 0017 seeded existing restaurants.
+	async function seedCashMethod(tx, restaurantId) {
+		await ensureCashMethod(tx, restaurantId);
 	}
 ];
 
@@ -476,3 +493,6 @@ export async function onRestaurantCreated(
 // The chart of accounts HAS landed here (T-12 of tasks/pos-sales, by decision of
 // 2026-09-28): seeded through the initializer list for new restaurants and
 // backfilled by migration 0012 for existing ones.
+// Cash IS seeded here (seedCashMethod). NO tax rate is ever seeded here, in any
+// form: a silent 0% default would post Cr 2100 Tax Payable = 0 on every sale,
+// which no reversing entry recovers (tasks/settings-tax-payments-receipt risk 5).
