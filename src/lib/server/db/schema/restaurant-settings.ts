@@ -94,14 +94,12 @@ export const restaurantSettings = pgTable(
 		defaultTaxRateId: uuid('default_tax_rate_id'),
 		// Spec 33 open decision 4: an ISO 4217 code the money formatter can render.
 		currencyCode: text('currency_code'),
-		// Spec 33 open decision 4 (payment methods at launch), the part ASSUMED on
-		// 2026-09-28 (tasks/pos-sales Assumption 3, recorded in CLAUDE.md by T-02
-		// pending the user's confirmation): cash is always accepted; card and
-		// mobile are recorded external-terminal tenders the owner switches on
-		// here. NULLABLE with NO column DEFAULT, exactly like tax_mode above:
-		// null means the owner has not chosen, and the till treats it as OFF and
-		// shows the reason on the disabled key. Written only by updateSettings
-		// (T-29).
+		// RETIRED: both columns are REPLACED by payment_methods
+		// (tasks/settings-tax-payments-receipt) — owner-named methods, each with a
+		// fixed kind 'card' or 'mobile', beside one built-in Cash row. Migration
+		// 0017 turns a true into one enabled method of that kind (NULL or false
+		// into nothing), T-33 drops both columns in migration 0018, and no new
+		// code may read them.
 		acceptsCard: boolean('accepts_card'),
 		acceptsMobile: boolean('accepts_mobile'),
 		// Receipt header text (T-20) — optional, nullable, no default; see above.

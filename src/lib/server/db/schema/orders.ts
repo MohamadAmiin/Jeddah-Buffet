@@ -17,6 +17,7 @@ import { users } from './users';
 import { posSessions } from './pos-sessions';
 import { menuItems, modifiers } from './menu';
 import { taxRates } from './tax-rates';
+import { paymentMethods } from './payment-methods';
 
 // SPEC 13: order and item statuses.
 //   orders.status  ∈ ('open','billed','paid','voided','refunded')
@@ -48,7 +49,10 @@ import { taxRates } from './tax-rates';
 // INVARIANT 2 — invoices and payments get append-only triggers in migration
 // 0012 (T-09). orders.status is updated EXACTLY ONCE (open → paid) inside the
 // payment transaction — spec 13's own "Mark Order PAID" step — and nothing
-// else updates a paid order; a mistake is a REVERSING record.
+// else updates a paid order; a mistake is a REVERSING record. payments.method
+// is the KIND snapshot ('cash', 'card', 'mobile'), tied to the method row's kind
+// by payments_payment_method_fk; the method's id and name (payment_method_id,
+// payment_method_name) are snapshots beside it.
 //
 // The server first sees an order when it is paid (the sale.complete op
 // carries the whole order), so paid_at is NOT NULL: the row is inserted with
@@ -234,6 +238,12 @@ export const payments = pgTable(
 		restaurantId: tenant(),
 		orderId: uuid('order_id').notNull(),
 		method: text('method').notNull(),
+		// The owner-named method the payment was taken with, and its name AT THE TIME OF SALE
+		// (tasks/settings-tax-payments-receipt). NULL on rows recorded before that plan — this
+		// table is append-only (0012), so they are never backfilled; readers LEFT JOIN and fall
+		// back to `method`, which stays the KIND literal.
+		paymentMethodId: uuid('payment_method_id'),
+		paymentMethodName: text('payment_method_name'),
 		amountMinor: bigint('amount_minor', { mode: 'bigint' }).notNull(),
 		// Cash only: what the customer handed over and what went back. Null for card/mobile.
 		tenderedMinor: bigint('tendered_minor', { mode: 'bigint' }),
@@ -249,6 +259,21 @@ export const payments = pgTable(
 			name: 'payments_order_fk'
 		}).onDelete('restrict'),
 		index('payments_order_idx').on(t.orderId),
+		// The KIND on the payment must be the kind of the method row it names. MATCH SIMPLE:
+		// a NULL payment_method_id (every pre-plan row) is not checked.
+		foreignKey({
+			columns: [t.restaurantId, t.paymentMethodId, t.method],
+			foreignColumns: [paymentMethods.restaurantId, paymentMethods.id, paymentMethods.kind],
+			name: 'payments_payment_method_fk'
+		}).onDelete('restrict'),
+		check(
+			'payments_payment_method_pair',
+			sql`(${t.paymentMethodId} is null) = (${t.paymentMethodName} is null)`
+		),
+		check(
+			'payments_payment_method_name_length',
+			sql`${t.paymentMethodName} is null or char_length(${t.paymentMethodName}) between 1 and 40`
+		),
 		check('payments_method_valid', sql`${t.method} in ('cash', 'card', 'mobile')`),
 		check('payments_amount_minor_non_negative', sql`${t.amountMinor} >= 0`),
 		check(
