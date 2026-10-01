@@ -113,7 +113,15 @@
 	function press(digit: string) {
 		if (locked || pending) return;
 		// Accept 4 to 6 digits: a press past the sixth is ignored.
-		if (digits.length < PIN_MAX_DIGITS) digits += digit;
+		if (digits.length >= PIN_MAX_DIGITS) return;
+		digits += digit;
+		// THE SIXTH DIGIT SIGNS IN BY ITSELF: six is the longest a PIN can be, so the
+		// entry is complete and there is nothing left to wait for. A shorter PIN still
+		// needs Sign in (or Enter) — the till cannot know a 4-digit entry is finished,
+		// and checking each length silently would be either a wrong attempt against
+		// the server's five-attempt lockout or an unlimited guess against the cached
+		// hash. One submit, one attempt, exactly as a tap on Sign in.
+		if (digits.length === PIN_MAX_DIGITS) void submit();
 	}
 
 	function backspace() {
@@ -370,7 +378,42 @@
 		else if (key === 'clear') clear();
 		else press(key);
 	}
+
+	// THE HARDWARE KEYBOARD does what the keys on the screen do: a till on a PC has
+	// one, and a number pad is the fastest way to enter a PIN. Digits, Backspace,
+	// Delete or Escape (clear) and Enter (sign in) go through the SAME press,
+	// backspace, clear and submit as a tap, so the six-digit limit, the lockout and
+	// "never render the PIN" hold unchanged — there is still no input element, so
+	// nothing for a browser to remember or autofill.
+	function onKeydown(event: KeyboardEvent) {
+		if (signedIn || !employeeId) return;
+		// Ctrl+R, Alt+Left, Cmd+1: a shortcut is not a digit.
+		if (event.ctrlKey || event.metaKey || event.altKey) return;
+		// Another control has the keyboard (the till bar, "Choose your name"): Enter
+		// and the rest are its own. A key on the keypad card is not "another control" —
+		// the last key tapped keeps focus, and Enter after it must still sign in
+		// rather than tap that key again.
+		const target = event.target instanceof Element ? event.target : null;
+		const control = target?.closest('a, button, input, select, textarea, summary') ?? null;
+		if (control && !control.closest('[data-pin-keypad]')) return;
+
+		if (event.key >= '0' && event.key <= '9' && event.key.length === 1) {
+			// A held key must not fill the PIN.
+			if (!event.repeat) press(event.key);
+		} else if (event.key === 'Backspace') {
+			backspace();
+		} else if (event.key === 'Delete' || event.key === 'Escape') {
+			clear();
+		} else if (event.key === 'Enter') {
+			if (!event.repeat) void submit();
+		} else {
+			return;
+		}
+		event.preventDefault();
+	}
 </script>
+
+<svelte:window onkeydown={onKeydown} />
 
 <svelte:head>
 	<title>Enter your PIN · matcami</title>
@@ -436,7 +479,10 @@
 					{:else if pending}
 						<p class="text-body text-ink-2">Checking the PIN…</p>
 					{:else if digits.length < PIN_MIN_DIGITS}
-						<p class="text-body text-ink-2">Enter at least {PIN_MIN_DIGITS} digits</p>
+						<p class="text-body text-ink-2">
+							Enter at least {PIN_MIN_DIGITS} digits — a {PIN_MAX_DIGITS}-digit PIN signs in by
+							itself
+						</p>
 					{/if}
 				</div>
 
@@ -454,6 +500,7 @@
 
 			<section
 				aria-label="PIN keypad"
+				data-pin-keypad
 				class="rounded-card border-line bg-raise shadow-raised flex flex-col gap-3 border p-4"
 			>
 				<Keypad label="PIN keypad" disabled={keysDisabled} reason="pin-hint" {onkey} />
