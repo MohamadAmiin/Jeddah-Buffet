@@ -15,6 +15,16 @@
 // belongs to the sales plan, which must import src/lib/money — the one rounding
 // rule spec 17 requires — and never copy any of it into src/lib/pos.
 
+/**
+ * The snapshot shape this build understands. 1 = before named tax rates (no
+ * `format` key on the wire); 2 = `defaultTaxRate` and per-item `taxRate`. A cached
+ * copy in any other format is replaced at the next version check, even at an equal
+ * version (store.ts `syncMenu`).
+ */
+export const MENU_FORMAT = 2;
+
+export type SnapshotTaxRate = { id: string; name: string; rateBp: number };
+
 export type SnapshotCategory = { id: string; name: string; sortOrder: number };
 
 export type SnapshotItem = {
@@ -26,8 +36,16 @@ export type SnapshotItem = {
 	name: string;
 	/** A decimal string of minor units, exactly as the server sent it. */
 	priceMinor: string;
-	/** Integer basis points, or null — "inherit the restaurant rate". */
+	/**
+	 * LEGACY. Format 1: the item's own rate, or null to inherit. Format 2: the
+	 * effective rate's number. Read only by `resolveTaxRate`'s fallback.
+	 */
 	taxRateBp: number | null;
+	/**
+	 * The item's EFFECTIVE named rate (its own or the restaurant default), or null
+	 * when neither exists. Missing on a format-1 snapshot → null.
+	 */
+	taxRate: SnapshotTaxRate | null;
 	isAvailable: boolean;
 	sortOrder: number;
 	modifierGroupIds: string[];
@@ -45,12 +63,23 @@ export type SnapshotModifierGroup = {
 
 export type MenuSnapshot = {
 	version: number;
+	/** The snapshot's shape (MENU_FORMAT): a payload with no `format` key is format 1. */
+	format: number;
 	/** The restaurant this snapshot belongs to: the till replaces its copy when it changes. */
 	restaurantId: string;
 	currency: string | null;
 	currencyExponent: number | null;
 	taxMode: string | null;
+	/**
+	 * LEGACY. Format 1: the restaurant's rate, or null while none is set. Format 2:
+	 * the default rate's number. Read only by `resolveTaxRate`'s fallback.
+	 */
 	taxRateBp: number | null;
+	/**
+	 * The restaurant's named default rate, or null while the owner has not picked
+	 * one. Missing on a format-1 snapshot → null.
+	 */
+	defaultTaxRate: SnapshotTaxRate | null;
 	categories: SnapshotCategory[];
 	items: SnapshotItem[];
 	modifierGroups: SnapshotModifierGroup[];
@@ -112,6 +141,17 @@ function flag(value: unknown, field: string): boolean {
 	return value;
 }
 
+/** A named tax rate `{ id, name, rateBp }`, or null. Validates; never converts. */
+function nullableTaxRate(value: unknown, field: string): SnapshotTaxRate | null {
+	if (value === null) return null;
+	const rate = record(value, field);
+	return {
+		id: text(rate.id, `${field}.id`),
+		name: text(rate.name, `${field}.name`),
+		rateBp: integer(rate.rateBp, `${field}.rateBp`)
+	};
+}
+
 /** A *Minor field: a decimal STRING, returned unchanged. A number is refused, never coerced. */
 function minorText(value: unknown, field: string): string {
 	if (typeof value !== 'string' || !MINOR.test(value)) {
@@ -129,11 +169,19 @@ export function parseSnapshot(raw: unknown): MenuSnapshot {
 	const body = record(raw, 'payload');
 	return {
 		version: integer(body.version, 'version'),
+		// A server before named tax rates sends no `format`, no `defaultTaxRate` and no
+		// per-item `taxRate` (the imageId precedent below): a MISSING key reads as
+		// format 1 / null, while a PRESENT key of the wrong shape is a SnapshotError.
+		format: body.format === undefined ? 1 : integer(body.format, 'format'),
 		restaurantId: text(body.restaurantId, 'restaurantId'),
 		currency: nullableText(body.currency, 'currency'),
 		currencyExponent: nullableInteger(body.currencyExponent, 'currencyExponent'),
 		taxMode: nullableText(body.taxMode, 'taxMode'),
 		taxRateBp: nullableInteger(body.taxRateBp, 'taxRateBp'),
+		defaultTaxRate:
+			body.defaultTaxRate === undefined
+				? null
+				: nullableTaxRate(body.defaultTaxRate, 'defaultTaxRate'),
 		categories: list(body.categories, 'categories').map((entry, i) => {
 			const category = record(entry, `categories[${i}]`);
 			return {
@@ -154,6 +202,8 @@ export function parseSnapshot(raw: unknown): MenuSnapshot {
 				name: text(item.name, `items[${i}].name`),
 				priceMinor: minorText(item.priceMinor, `items[${i}].priceMinor`),
 				taxRateBp: nullableInteger(item.taxRateBp, `items[${i}].taxRateBp`),
+				taxRate:
+					item.taxRate === undefined ? null : nullableTaxRate(item.taxRate, `items[${i}].taxRate`),
 				isAvailable: flag(item.isAvailable, `items[${i}].isAvailable`),
 				sortOrder: integer(item.sortOrder, `items[${i}].sortOrder`),
 				modifierGroupIds: list(item.modifierGroupIds, `items[${i}].modifierGroupIds`).map((id, j) =>

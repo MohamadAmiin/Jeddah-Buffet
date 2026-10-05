@@ -15,12 +15,14 @@ import { verifyPin } from '../pin';
 import type { OpEnvelope, OpKind, SaleCompletePayload, SyncResult } from '../sync-ops';
 import {
 	compareVersions,
+	MENU_FORMAT,
 	parseSnapshot,
 	SnapshotError,
 	type MenuSnapshot,
 	type SnapshotCategory,
 	type SnapshotItem,
-	type SnapshotModifierGroup
+	type SnapshotModifierGroup,
+	type SnapshotTaxRate
 } from './menu-snapshot';
 
 const DB_NAME = 'matcami-pos';
@@ -742,6 +744,21 @@ const MENU_VERSION_KEY = 'menuVersion';
 const MENU_RESTAURANT_KEY = 'menuRestaurantId';
 
 /**
+ * The format of the cached menu copy (MENU_FORMAT in menu-snapshot.ts): null when
+ * there is no copy, the header's `format` when it is a number, and 1 otherwise — a
+ * copy written by a build before named tax rates has no `format` key at all.
+ */
+async function readCachedMenuFormat(): Promise<number | null> {
+	const row = (await withDb((db) =>
+		valueOf(db.transaction('menu', 'readonly').objectStore('menu').get('snapshot'))
+	)) as { data?: { format?: unknown } } | undefined;
+
+	if (!row) return null;
+
+	return typeof row.data?.format === 'number' ? row.data.format : 1;
+}
+
+/**
  * Refresh the local menu: compare versions, and on a mismatch download the FULL
  * snapshot and replace the local copy (spec 5; no change-only sync). Every network
  * await happens BEFORE the IndexedDB transaction opens — a transaction commits on
@@ -781,8 +798,15 @@ export async function syncMenu(fetchFn: typeof fetch = fetch): Promise<'up-to-da
 	const localRestaurant = await readCachedSetting(MENU_RESTAURANT_KEY);
 	const localVersion = await readCachedSetting(MENU_VERSION_KEY);
 
+	// A copy in another FORMAT is no copy either, by the same rule. A till that
+	// synced the new server with an OLD shell stored a format-1 copy AT THE NEW
+	// VERSION. Trusting it would send every line without a rate id until the next
+	// menu edit (tasks/settings-tax-payments-receipt, risk 4). compareVersions stays
+	// a pure version comparison: the format is decided here, before it.
 	const local =
-		localRestaurant === server.restaurantId && typeof localVersion === 'number'
+		localRestaurant === server.restaurantId &&
+		typeof localVersion === 'number' &&
+		(await readCachedMenuFormat()) === MENU_FORMAT
 			? localVersion
 			: null;
 
@@ -849,14 +873,19 @@ export function replaceMenu(snapshot: MenuSnapshot, abortForTest = false): Promi
 
 					menu.clear();
 
+					// `format` is what syncMenu checks: a copy in another format is replaced
+					// even at an equal version. Each item row is stored as is, so its
+					// `taxRate` goes with it.
 					menu.put({
 						id: 'snapshot',
 						kind: 'snapshot',
 						data: {
+							format: snapshot.format,
 							currency: snapshot.currency,
 							currencyExponent: snapshot.currencyExponent,
 							taxMode: snapshot.taxMode,
-							taxRateBp: snapshot.taxRateBp
+							taxRateBp: snapshot.taxRateBp,
+							defaultTaxRate: snapshot.defaultTaxRate
 						}
 					});
 
@@ -907,11 +936,15 @@ export function replaceMenu(snapshot: MenuSnapshot, abortForTest = false): Promi
 
 export type LocalMenu = {
 	version: number;
+	/** MENU_FORMAT of the copy; 1 for a copy written by a build before named tax rates. */
+	format: number;
 	restaurantId: string;
 	currency: string | null;
 	currencyExponent: number | null;
 	taxMode: string | null;
 	taxRateBp: number | null;
+	/** The restaurant's named default rate, or null (none picked, or a format-1 copy). */
+	defaultTaxRate: SnapshotTaxRate | null;
 	categories: SnapshotCategory[];
 	items: Array<Omit<SnapshotItem, 'priceMinor'> & { priceMinor: bigint }>;
 	modifierGroups: Array<
@@ -935,6 +968,12 @@ type MenuRow = {
  * The local menu, or null before the first replace. THE ONE PLACE a menu amount
  * is converted: the stored decimal strings become bigint here, through BigInt(),
  * never through a number.
+ *
+ * It also reads a copy written by the PREVIOUS build, whose header has no
+ * `format`/`defaultTaxRate` and whose item rows have no `taxRate`: that copy reads
+ * as format 1 with null rates, and an offline till keeps selling from it through
+ * resolveTaxRate's fallback to the legacy numbers (invariant 5). syncMenu replaces
+ * it at the next version check.
  */
 export async function readMenu(): Promise<LocalMenu | null> {
 	const version = await readCachedSetting(MENU_VERSION_KEY);
@@ -951,8 +990,12 @@ export async function readMenu(): Promise<LocalMenu | null> {
 	const of = <T>(kind: string) =>
 		rows.filter((row) => row.kind === kind).map((row) => row.data as T);
 
-	const header =
-		of<Pick<LocalMenu, 'currency' | 'currencyExponent' | 'taxMode' | 'taxRateBp'>>('snapshot')[0];
+	const header = of<
+		Pick<LocalMenu, 'currency' | 'currencyExponent' | 'taxMode' | 'taxRateBp'> & {
+			format?: unknown;
+			defaultTaxRate?: SnapshotTaxRate | null;
+		}
+	>('snapshot')[0];
 
 	if (!header) return null;
 
@@ -962,11 +1005,14 @@ export async function readMenu(): Promise<LocalMenu | null> {
 		version,
 		restaurantId,
 		...header,
+		format: typeof header.format === 'number' ? header.format : 1,
+		defaultTaxRate: header.defaultTaxRate ?? null,
 		categories: of<SnapshotCategory>('category').sort(bySortOrder),
 		items: of<SnapshotItem>('item')
 			.sort(bySortOrder)
 			.map((item) => ({
 				...item,
+				taxRate: item.taxRate ?? null,
 				priceMinor: BigInt(item.priceMinor)
 			})),
 		modifierGroups: of<SnapshotModifierGroup>('group').map((group) => ({
