@@ -4,7 +4,11 @@
 	// modifiers, unit prices and tax rates stay visible — and the closer pinned to
 	// the bottom-right, the spot where Pay was. The document never scrolls.
 	//
-	// /pos/pay — the tender step. A completed CASH sale is a recorded fact the
+	// /pos/pay — the tender step. The tenders are the owner's NAMED methods from
+	// the till's cache (tenders.ts, settings-tax-payments-receipt T-22): Cash
+	// always first, then each card- or mobile-kind method under its name, with
+	// its merchant number shown once chosen. Every decision here keys on the
+	// method's KIND, never its name. A completed CASH sale is a recorded fact the
 	// moment completeSale resolves, online or not. Card and mobile never complete
 	// offline: their keys are disabled with the reason written on them BEFORE the
 	// tap (invariant 5). Change comes from changeDue; this file adds nothing up.
@@ -28,6 +32,7 @@
 	import { readLocalSession } from '$lib/pos/session';
 	import { flush, onFlushEvent, type FlushEvent } from '$lib/pos/queue';
 	import { printOriginals, type OriginalsResult } from '$lib/pos/printing';
+	import { readPaymentMethods } from '$lib/pos/settings';
 	import {
 		readBoundDeviceId,
 		readCachedSetting,
@@ -36,7 +41,14 @@
 		type LocalSession
 	} from '$lib/pos/store';
 	import { lineTaxRateText } from '$lib/pos/menu-view';
-	import Icon, { type IconName } from '$lib/components/ui/Icon.svelte';
+	import {
+		CASH_TENDER_KEY,
+		tenderOptions,
+		tenderReason,
+		type TenderKind,
+		type TenderOption
+	} from '$lib/pos/tenders';
+	import Icon from '$lib/components/ui/Icon.svelte';
 	import Check from '$lib/components/pos/Check.svelte';
 	import Closer from '$lib/components/pos/Closer.svelte';
 	import Keypad, { type KeypadKey } from '$lib/components/pos/Keypad.svelte';
@@ -45,13 +57,6 @@
 	import { KEY, KEY_CHOSEN } from '$lib/components/pos/keys';
 
 	const restored = getContext<Promise<void>>(RESTORED_CONTEXT) ?? Promise.resolve();
-
-	type Tender = 'cash' | 'card' | 'mobile';
-	const TENDER_LABEL: Record<Tender, string> = {
-		cash: 'Cash',
-		card: 'Card',
-		mobile: 'Mobile money'
-	};
 
 	let ready = $state(false);
 	let deviceId = $state<string | null>(null);
@@ -62,18 +67,25 @@
 	let taxMode = $state<TaxMode>('exclusive');
 	// Raw: completeSale stores the cart, and a $state proxy cannot be cloned into IndexedDB.
 	let cart = $state.raw<Cart | null>(null);
-	let acceptsCard = $state(false);
-	let acceptsMobile = $state(false);
+	// The tenders: Cash is offered before the cache read lands (tenders.ts).
+	let options = $state.raw<TenderOption[]>(tenderOptions([]));
 	let online = $state(true);
 
-	let tender = $state<Tender | null>('cash');
+	// The chosen option's KEY: `cash`, or a method's id.
+	let tender = $state<string | null>(CASH_TENDER_KEY);
 	let digits = $state('');
 	let tendered = $state<Minor | null>(null);
 	let busy = $state(false);
 	let failure = $state('');
 
 	let sale = $state<
-		(CompleteSaleResult & { method: Tender; total: Minor; tendered: Minor | null }) | null
+		| (CompleteSaleResult & {
+				kind: TenderKind;
+				name: string;
+				total: Minor;
+				tendered: Minor | null;
+		  })
+		| null
 	>(null);
 	let outcome = $state<'paid' | 'pending' | 'review' | 'refused'>('paid');
 	let refusalReason = $state('');
@@ -100,25 +112,27 @@
 		figures && format ? quickTenders(figures.totals.total, format.exponent) : []
 	);
 
-	function reasonFor(t: Tender): string | null {
-		if (t === 'cash') return null;
-		const accepted = t === 'card' ? acceptsCard : acceptsMobile;
-		if (!accepted) return 'Not accepted in settings';
-		if (!online) return '◆ Cash only while offline';
-		return null;
+	const selected = $derived(options.find((o) => o.key === tender) ?? null);
+
+	// THE offline rule, by KIND (invariant 5): cash never; card and mobile while offline.
+	function reasonFor(o: TenderOption): string | null {
+		return tenderReason(o.kind, online);
 	}
 
 	$effect(() => {
-		// A card/mobile selection that loses its connection falls back to Cash.
-		if (tender !== null && tender !== 'cash' && reasonFor(tender) !== null) tender = 'cash';
+		// A choice that is no longer offered, or a card/mobile choice that loses
+		// its connection, falls back to Cash.
+		if (selected === null || (selected.kind !== 'cash' && reasonFor(selected) !== null)) {
+			tender = CASH_TENDER_KEY;
+		}
 	});
 
 	const payBlocked = $derived(
 		busy
 			? 'Recording…'
-			: tender === null
+			: selected === null
 				? 'Choose a tender'
-				: tender === 'cash' && change === null
+				: selected.kind === 'cash' && change === null
 					? 'The amount tendered is less than the total'
 					: null
 	);
@@ -193,8 +207,7 @@
 				void goto(resolve('/pos/order'));
 				return;
 			}
-			acceptsCard = (await readCachedSetting('acceptsCard').catch(() => null)) === true;
-			acceptsMobile = (await readCachedSetting('acceptsMobile').catch(() => null)) === true;
+			options = tenderOptions(await readPaymentMethods().catch(() => []));
 			const code = await readCachedSetting('deviceCode').catch(() => null);
 			deviceCode = typeof code === 'string' ? code : null;
 			ready = true;
@@ -210,7 +223,7 @@
 	async function pay() {
 		if (
 			payBlocked !== null ||
-			tender === null ||
+			selected === null ||
 			!cart ||
 			!menu ||
 			!figures ||
@@ -227,7 +240,8 @@
 		busy = true;
 		failure = '';
 		try {
-			const method = tender;
+			// Captured once: every decision below keys on the option's KIND.
+			const option = selected;
 			const result = await completeSale({
 				cart,
 				deviceId,
@@ -238,26 +252,29 @@
 				currencyCode: menu.currency as string,
 				menuVersion: menu.version,
 				payment: {
-					method,
-					tenderedMinor: method === 'cash' ? cashTendered : null,
-					// T-22 passes the chosen method's id and name.
-					paymentMethodId: null,
-					paymentMethodName: null
+					method: option.kind,
+					tenderedMinor: option.kind === 'cash' ? cashTendered : null,
+					// The owner-named method, id and name always as a pair; the synthetic
+					// Cash sends both null and the server resolves the restaurant's Cash
+					// row and its name (T-15).
+					paymentMethodId: option.id,
+					paymentMethodName: option.id === null ? null : option.name
 				},
 				now: new Date(),
 				// Kept on the local order for the receipt (T-18).
 				cashierName: signedIn.current.displayName,
 				businessDate: session.businessDate ?? null
 			});
-			outcome = method === 'cash' ? 'paid' : 'pending';
+			outcome = option.kind === 'cash' ? 'paid' : 'pending';
 			sale = {
 				...result,
-				method,
+				kind: option.kind,
+				name: option.name,
 				total: figures.totals.total,
-				tendered: method === 'cash' ? cashTendered : null
+				tendered: option.kind === 'cash' ? cashTendered : null
 			};
 			void flush().catch(() => {});
-			if (method === 'cash') {
+			if (option.kind === 'cash') {
 				// Fire-and-report: the sale is complete on the device; the printer
 				// never holds up ● Paid (invariant 4). Card and mobile print from the
 				// layout's auto-printer once the server confirms (invariant 5).
@@ -296,11 +313,6 @@
 
 	// The tender radio group: only the checked radio is in the tab order, and the
 	// arrow keys move the choice, skipping a tender that is disabled.
-	const TENDERS: { id: Tender; icon: IconName }[] = [
-		{ id: 'cash', icon: 'cash' },
-		{ id: 'card', icon: 'card' },
-		{ id: 'mobile', icon: 'phone' }
-	];
 	let tenderRadios = $state<HTMLButtonElement[]>([]);
 	function tenderKey(event: KeyboardEvent, index: number) {
 		const step =
@@ -311,10 +323,10 @@
 					: 0;
 		if (step === 0) return;
 		event.preventDefault();
-		for (let n = 1; n < TENDERS.length; n++) {
-			const next = (index + step * n + TENDERS.length) % TENDERS.length;
-			if (reasonFor(TENDERS[next].id) === null) {
-				tender = TENDERS[next].id;
+		for (let n = 1; n < options.length; n++) {
+			const next = (index + step * n + options.length) % options.length;
+			if (reasonFor(options[next]) === null) {
+				tender = options[next].key;
 				tenderRadios[next]?.focus();
 				return;
 			}
@@ -403,7 +415,7 @@
 				reasonId="{uid}-why-pay"
 				onclick={pay}
 			>
-				Pay · {TENDER_LABEL[tender ?? 'cash']}
+				Pay · {selected?.name ?? 'Cash'}
 				<span class="font-mono font-medium tabular-nums"
 					>{formatMoney(figures.totals.total, format)}</span
 				>
@@ -465,9 +477,15 @@
 							>
 						{:else}
 							<TillBanner tone="danger">Not recorded: {refusalReason}</TillBanner>
-							<p class="text-ink-2">
-								The card terminal's charge, if any, must be voided on the terminal
-							</p>
+							{#if sale.kind === 'card'}
+								<p class="text-ink-2">
+									The card terminal's charge, if any, must be voided on the terminal
+								</p>
+							{:else if sale.kind === 'mobile'}
+								<p class="text-ink-2">
+									Any mobile money payment received must be sent back to the customer
+								</p>
+							{/if}
 						{/if}
 					{/if}
 				</div>
@@ -480,7 +498,7 @@
 								<dt class="text-ink-2">Total</dt>
 								<dd class="font-mono tabular-nums">{formatMoney(sale.total, money)}</dd>
 							</div>
-							{#if sale.method === 'cash' && sale.tendered !== null && sale.changeMinor !== null}
+							{#if sale.kind === 'cash' && sale.tendered !== null && sale.changeMinor !== null}
 								<div class="flex items-baseline justify-between gap-3">
 									<dt class="text-ink-2">Tendered</dt>
 									<dd class="font-mono tabular-nums">{formatMoney(sale.tendered, money)}</dd>
@@ -506,9 +524,9 @@
 						<div class="flex flex-col gap-2">
 							<p id="tender-l" class="font-semibold">Tender</p>
 							<div role="radiogroup" aria-labelledby="tender-l" class="grid grid-cols-3 gap-3">
-								{#each TENDERS as t, i (t.id)}
-									{@const why = reasonFor(t.id)}
-									{@const on = tender === t.id}
+								{#each options as o, i (o.key)}
+									{@const why = reasonFor(o)}
+									{@const on = tender === o.key}
 									<button
 										bind:this={tenderRadios[i]}
 										type="button"
@@ -516,23 +534,23 @@
 										aria-checked={on}
 										tabindex={on ? 0 : -1}
 										disabled={why !== null}
-										aria-describedby={why !== null ? `why-${t.id}` : undefined}
+										aria-describedby={why !== null ? `why-${i}` : undefined}
 										class="min-h-touch-lg flex flex-col items-center justify-center px-2 text-center {KEY} {KEY_CHOSEN}"
-										onclick={() => (tender = t.id)}
+										onclick={() => (tender = o.key)}
 										onkeydown={(event) => tenderKey(event, i)}
 									>
 										<span class="flex items-center gap-2">
-											<Icon name={t.icon} class="hidden size-6 sm:block" />
-											{TENDER_LABEL[t.id]}
+											<Icon name={o.icon} class="hidden size-6 sm:block" />
+											{o.name}
 											{#if on}<Icon name="check-circle" class="size-6" />{/if}
 										</span>
-										{#if why}<span id="why-{t.id}" class="text-body font-normal">{why}</span>{/if}
+										{#if why}<span id="why-{i}" class="text-body font-normal">{why}</span>{/if}
 									</button>
 								{/each}
 							</div>
 						</div>
 
-						{#if tender === 'cash'}
+						{#if selected?.kind === 'cash'}
 							<div class="grid gap-5 sm:grid-cols-2">
 								<div class="flex flex-col gap-5">
 									<div class="flex flex-col gap-2">
@@ -576,13 +594,31 @@
 									<Keypad label="Amount tendered keypad" onkey={press} />
 								</section>
 							</div>
-						{:else if tender !== null}
+						{:else if selected !== null}
 							<div class="rounded-card border-line bg-raise-2 flex items-start gap-3 border p-4">
-								<Icon name={tender === 'card' ? 'card' : 'phone'} class="text-accent size-6" />
-								<p>
-									Charge {formatMoney(figures.totals.total, money)} on the card terminal, then press Pay
-									once it is approved.
-								</p>
+								<Icon name={selected.icon} class="text-accent size-6" />
+								<div class="flex flex-col gap-2">
+									{#if selected.kind === 'card'}
+										<p>
+											Charge {formatMoney(figures.totals.total, money)} on the card terminal, then press
+											Pay once it is approved.
+										</p>
+										{#if selected.merchantNumber !== null}
+											<p class="text-ink-2">
+												Merchant number <span class="font-mono" data-testid="merchant-number"
+													>{selected.merchantNumber}</span
+												>
+											</p>
+										{/if}
+									{:else if selected.kind === 'mobile'}
+										<p>
+											The customer sends {formatMoney(figures.totals.total, money)} by {selected.name}{#if selected.merchantNumber !== null}
+												to <span class="font-mono" data-testid="merchant-number"
+													>{selected.merchantNumber}</span
+												>{/if}. Press Pay once the payment has arrived.
+										</p>
+									{/if}
+								</div>
 							</div>
 						{/if}
 

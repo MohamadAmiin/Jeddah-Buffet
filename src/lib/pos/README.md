@@ -87,6 +87,9 @@ invariant 5).
   holds it for offline use (best effort — never a service-worker cache).
 - `can-print.ts` — THE rule for what may print: a completed cash sale always; card and mobile
   only once the server said `accepted` or `recorded_flagged` (fail closed).
+- `tenders.ts` — the pay screen's tender list from the cached named methods (Cash always first,
+  synthetic when the cache has none) and THE offline rule: card and mobile kinds are disabled
+  offline with the reason in words; everything decides by kind, never by name.
 - `receipt.ts` — the receipt, kitchen-ticket and test-page formatter. Pure: the sale's STORED
   snapshot in, lines of printable ASCII out, 32 or 48 columns; it computes nothing.
 - `print-client.ts` — the loopback agent client: the pairing settings (a loopback address and a
