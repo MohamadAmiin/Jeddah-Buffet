@@ -10,6 +10,7 @@
 // the same words ("Open the POS page", "Add employees", "Open menu").
 import { expect, type Page } from '@playwright/test';
 import pg from 'pg';
+import { formatTaxRate } from '../src/lib/money/tax';
 
 /**
  * The till's landing screen (T-25). `/pos`, with NO trailing slash: it is the
@@ -162,7 +163,14 @@ export async function closeDbRows(): Promise<void> {
 	}
 }
 
-/** Tax, currency and the idle lock: /settings, then /device, each by its rail link. */
+/**
+ * Tax, currency and the idle lock, each page by its rail or sub-navigation link
+ * (tasks/settings-tax-payments-receipt T-28): the currency on /settings
+ * (General), the tax mode and ONE named default rate on /settings/tax, the idle
+ * lock on /device. The rate is named `Tax` so receipts print `Tax 10.00%` exactly
+ * as before (gate decision 5); its percent is the money module's formatted rate
+ * with the `%` cut off — string surgery, never number formatting in a fixture.
+ */
 export async function completeSettings(
 	page: Page,
 	s: {
@@ -177,11 +185,27 @@ export async function completeSettings(
 		.getByRole('link', { name: 'Settings', exact: true })
 		.click();
 	await expect(page).toHaveURL(/\/settings$/);
-	await page.getByLabel('Tax mode').fill(s.taxMode);
-	await page.getByLabel('Tax rate (basis points)').fill(String(s.taxRateBp));
 	await page.getByLabel('Currency code').fill(s.currency);
 	await page.getByRole('button', { name: 'Save settings' }).click();
 	await expect(page.getByRole('alert')).toContainText('Settings saved.');
+
+	await page
+		.getByRole('navigation', { name: 'Settings sections' })
+		.getByRole('link', { name: 'Tax', exact: true })
+		.click();
+	await expect(page).toHaveURL(/\/settings\/tax$/);
+	await page.getByLabel('Tax mode').selectOption(s.taxMode);
+	await page.getByRole('button', { name: 'Save tax mode' }).click();
+	await expect(page.getByRole('alert')).toContainText('Tax mode saved.');
+
+	// Scoped to the panel: the per-rate cards carry `Name` and `Percent`, and
+	// getByLabel matches substrings.
+	const panel = page.getByRole('region', { name: 'Add tax rate' });
+	await panel.getByLabel('Rate name').fill('Tax');
+	await panel.getByLabel('Rate (%)').fill(formatTaxRate(s.taxRateBp).slice(0, -1));
+	await panel.getByLabel('Make this the default rate').check();
+	await page.getByRole('button', { name: 'Add rate' }).click();
+	await expect(page.getByRole('alert')).toContainText('Tax added and made the default rate.');
 
 	await page
 		.getByRole('navigation', { name: 'Dashboard sections' })

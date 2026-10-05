@@ -25,6 +25,7 @@ const DASHBOARD_ROUTE_IDS = [
 	'/(dashboard)',
 	'/(dashboard)/dashboard',
 	'/(dashboard)/settings',
+	'/(dashboard)/settings/tax',
 	'/(dashboard)/device',
 	'/(dashboard)/employees',
 	'/(dashboard)/employees/[id]',
