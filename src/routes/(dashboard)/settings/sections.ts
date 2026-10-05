@@ -1,17 +1,18 @@
 import { resolve } from '$app/paths';
 
 // THE SETTINGS SUB-NAVIGATION (tasks/settings-tax-payments-receipt, gate decision
-// 8). The order is General, Tax, Payments, Receipt. General (T-27) and Tax (T-28)
-// are listed here: SvelteKit's typed resolve() refuses a route that does not
-// exist yet, so T-29 (Payments) and T-31 (Receipt) each append their link in the
-// same commit that creates their page. It is a FUNCTION, not a constant, so that
+// 8). The order is General, Tax, Payments, Receipt. General (T-27), Tax (T-28)
+// and Payments (T-29) are listed here: SvelteKit's typed resolve() refuses a
+// route that does not exist yet, so T-31 (Receipt) appends its link in the same
+// commit that creates its page. It is a FUNCTION, not a constant, so that
 // resolve() runs per render — as the inventory pages do.
 
 /** The settings sub-navigation, in order. Every settings page renders it in PageHeader's `below`. */
 export function settingsSections(): Array<{ label: string; href: string }> {
 	return [
 		{ label: 'General', href: resolve('/settings') },
-		{ label: 'Tax', href: resolve('/settings/tax') }
+		{ label: 'Tax', href: resolve('/settings/tax') },
+		{ label: 'Payments', href: resolve('/settings/payments') }
 	];
 }
 

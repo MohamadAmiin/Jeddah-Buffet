@@ -225,9 +225,29 @@ test('receipts, kitchen tickets and the drawer: cash prints, a reprint is COPY, 
 	await page.getByLabel('Address').fill('Makka Al-Mukarama Rd, Km4');
 	await page.getByLabel('Phone').fill('61 555 0142');
 	await page.getByLabel('Footer line').fill('Mahadsanid! Thank you!');
-	await page.getByLabel('Card terminal').selectOption('yes');
 	await page.getByRole('button', { name: 'Save settings' }).click();
 	await expect(page.getByRole('alert')).toContainText('Settings saved.');
+
+	// The card terminal is a NAMED method on /settings/payments (T-29), not a
+	// switch on /settings. It is named `Card` so the till steps below — the
+	// `/^Card/` tender key and `Pay · Card` — keep matching.
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Settings', exact: true })
+		.click();
+	await page
+		.getByRole('navigation', { name: 'Settings sections' })
+		.getByRole('link', { name: 'Payments', exact: true })
+		.click();
+	await expect(page).toHaveURL(/\/settings\/payments$/);
+	// Scoped to the panel: the per-method cards carry `Name`, `Number` and
+	// `Offered at the till`, and getByLabel matches substrings.
+	const panel = page.getByRole('region', { name: 'Add payment method' });
+	await panel.getByLabel('Method name').fill('Card');
+	await panel.getByLabel('Method type').selectOption('card');
+	await panel.getByLabel('Accepted at the till').check();
+	await panel.getByRole('button', { name: 'Add method' }).click();
+	await expect(page.getByRole('alert')).toContainText('Card added.');
 
 	// 2. Burger 8.00 with no category, and the Extras group with No cheese at -0.50.
 	await createMenuItem(page, { category: null, name: 'Burger', priceMinor: 800n });
