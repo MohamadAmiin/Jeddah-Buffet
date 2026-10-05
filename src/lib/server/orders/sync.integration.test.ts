@@ -4,15 +4,19 @@ import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { onRestaurantCreated, updateSettings } from '../restaurants';
 import { registerDevice } from '../auth/pos-device';
-import { createCategory, createItem, getMenuVersion } from '../menu';
+import { createCategory, createItem, getMenuVersion, updateItem } from '../menu';
 import { seedStaff } from '../db/test/seed';
-import { seedTaxRate } from '../db/test/settings';
+import {
+	cashMethodId,
+	defaultTaxRateOf,
+	seedPaymentMethod,
+	seedTaxRate
+} from '../db/test/settings';
 import { closeTestDb, testDb } from '../db/test/db';
 import { restaurants } from '../db/schema/restaurants';
 import { users } from '../db/schema/users';
-import { restaurantSettings } from '../db/schema/restaurant-settings';
 import { posSyncOps } from '../db/schema/pos-sync';
-import { orders, invoices } from '../db/schema/orders';
+import { orders, invoices, payments } from '../db/schema/orders';
 import { journalEntries } from '../db/schema/accounting';
 import { auditLog } from '../db/schema/audit';
 import { posSessions } from '../db/schema/pos-sessions';
@@ -34,6 +38,10 @@ type Fixture = {
 	teaId: string;
 	menuVersion: number;
 	sessionId: string;
+	/** One method per KIND (T-16): the built-in Cash row, 'Card' and 'Mobile money'. */
+	methods: Record<'cash' | 'card' | 'mobile', { id: string; name: string }>;
+	/** The named default rate ('Tax' 10%), which saleEnv sends on its line. */
+	defaultRate: { id: string; name: string };
 };
 
 async function requireId<T>(p: Promise<T | { ok: false }>): Promise<string> {
@@ -74,10 +82,22 @@ async function makeFixture(email: string): Promise<Fixture> {
 			ctx
 		);
 	});
-	await testDb()
-		.update(restaurantSettings)
-		.set({ acceptsCard: true, acceptsMobile: true })
-		.where(eq(restaurantSettings.restaurantId, restaurantId));
+	// Card and mobile are named payment methods since T-15, not the retired
+	// accepts_card / accepts_mobile switches; Cash is built in (seedCashMethod).
+	const { cardId, mobileId } = await db.transaction(async (tx) => {
+		const ctx = { actorUserId: owner.id, ip: null, userAgent: null };
+		return {
+			cardId: await seedPaymentMethod(tx, restaurantId, { name: 'Card', kind: 'card' }, ctx),
+			mobileId: await seedPaymentMethod(
+				tx,
+				restaurantId,
+				{ name: 'Mobile money', kind: 'mobile' },
+				ctx
+			)
+		};
+	});
+	const defaultRate = await defaultTaxRateOf(testDb(), restaurantId);
+	if (defaultRate === null) throw new Error('fixture has no default tax rate');
 	const device = await db.transaction((tx) =>
 		registerDevice(tx, { restaurantId, actorUserId: owner.id, label: 'Counter' })
 	);
@@ -117,7 +137,13 @@ async function makeFixture(email: string): Promise<Fixture> {
 		waiterId: waiter.id,
 		teaId,
 		menuVersion,
-		sessionId: posSessionId
+		sessionId: posSessionId,
+		methods: {
+			cash: { id: await cashMethodId(testDb(), restaurantId), name: 'Cash' },
+			card: { id: cardId, name: 'Card' },
+			mobile: { id: mobileId, name: 'Mobile money' }
+		},
+		defaultRate: { id: defaultRate.id, name: defaultRate.name }
 	};
 }
 
@@ -136,6 +162,12 @@ function saleEnv(
 		posSessionId?: string;
 		unitPriceMinor?: string;
 		totals?: { subtotalMinor: string; discountMinor: string; taxMinor: string; totalMinor: string };
+		/** The named method that took the payment; it must be of kind `method`.
+		 * Defaults to the fixture's method of that kind (T-16). */
+		paymentMethod?: { id: string; name: string };
+		/** The pre-plan payload format (settings-tax-payments-receipt T-14): none of
+		 * the four optional keys (method id and name, line rate id and name). */
+		omitIds?: boolean;
 	} = {}
 ): OpEnvelope<OpKind, unknown> {
 	const invoiceSeq = overrides.invoiceSeq ?? 1;
@@ -146,12 +178,21 @@ function saleEnv(
 		taxMinor: '85',
 		totalMinor: '935'
 	};
+	// The four optional keys (T-14), sent by default; absent with omitIds.
+	const paymentMethod = overrides.paymentMethod ?? fx.methods[method];
+	const methodKeys = overrides.omitIds
+		? {}
+		: { paymentMethodId: paymentMethod.id, paymentMethodName: paymentMethod.name };
+	const rateKeys = overrides.omitIds
+		? {}
+		: { taxRateId: fx.defaultRate.id, taxRateName: fx.defaultRate.name };
 	const payments =
 		method === 'cash'
 			? [
 					{
 						paymentId: randomUUID(),
 						method: 'cash',
+						...methodKeys,
 						amountMinor: totals.totalMinor,
 						tenderedMinor: '2000',
 						changeMinor: String(Number(2000) - Number(totals.totalMinor))
@@ -161,6 +202,7 @@ function saleEnv(
 					{
 						paymentId: randomUUID(),
 						method,
+						...methodKeys,
 						amountMinor: totals.totalMinor,
 						tenderedMinor: null,
 						changeMinor: null
@@ -194,6 +236,7 @@ function saleEnv(
 					quantity: 1,
 					unitPriceMinor: overrides.unitPriceMinor ?? '850',
 					taxRateBp: 1000,
+					...rateKeys,
 					discountMinor: '0',
 					modifiers: []
 				}
@@ -639,5 +682,182 @@ describe('journal entries land on the right sale.recorded fixture', () => {
 			.from(journalEntries)
 			.where(eq(journalEntries.restaurantId, fx.restaurantId));
 		expect(entries[0].c).toBe('1');
+	});
+});
+
+describe('named methods and rates (settings-tax-payments-receipt T-16)', () => {
+	const send = (env: OpEnvelope<OpKind, unknown>) =>
+		handleOp(db, posDeviceCtx(fx), { ip: null, userAgent: null }, env);
+
+	/** Every row a recorded sale writes, counted for one restaurant. */
+	async function saleCounts(restaurantId: string) {
+		const r = await testDb().execute<Record<string, number>>(sql`
+			select
+				(select count(*)::int from orders where restaurant_id = ${restaurantId}) as orders,
+				(select count(*)::int from payments where restaurant_id = ${restaurantId}) as payments,
+				(select count(*)::int from invoices where restaurant_id = ${restaurantId}) as invoices,
+				(select count(*)::int from journal_entries where restaurant_id = ${restaurantId}) as entries,
+				(select count(*)::int from audit_log
+					where restaurant_id = ${restaurantId} and event = 'sale.recorded') as recorded
+		`);
+		return r.rows[0];
+	}
+	const ONE_OF_EACH = { orders: 1, payments: 1, invoices: 1, entries: 1, recorded: 1 };
+
+	const paymentRows = () =>
+		testDb().select().from(payments).where(eq(payments.restaurantId, fx.restaurantId));
+
+	async function seedMethod(input: {
+		name: string;
+		kind: 'card' | 'mobile';
+		enabled?: boolean;
+	}): Promise<{ id: string; name: string }> {
+		const ctx = { actorUserId: fx.ownerId, ip: null, userAgent: null };
+		const id = await db.transaction((tx) => seedPaymentMethod(tx, fx.restaurantId, input, ctx));
+		return { id, name: input.name };
+	}
+
+	// MANDATORY (spec 29 — offline sync: retries never create duplicates), with the
+	// four keys. Invariant 2: a replay updates nothing, so the payment row is unchanged.
+	it('MANDATORY (spec 29): a sale with the four keys sent twice is accepted then replayed; one of each row', async () => {
+		const env = saleEnv(fx);
+		const first = await send(env);
+		expect(first.http).toBe(200);
+		if (first.http === 200) expect(first.body.status).toBe('accepted');
+		const before = await paymentRows();
+		expect(before).toHaveLength(1);
+		expect(before[0]).toMatchObject({
+			method: 'cash',
+			paymentMethodId: fx.methods.cash.id,
+			paymentMethodName: 'Cash'
+		});
+
+		const second = await send(env);
+		expect(second.http).toBe(200);
+		if (second.http === 200) expect(second.body.status).toBe('replayed');
+
+		expect(await saleCounts(fx.restaurantId)).toEqual(ONE_OF_EACH);
+		expect(await paymentRows()).toEqual(before);
+	});
+
+	// MANDATORY (spec 29 — offline retries), the pre-plan format (invariant 5): a till
+	// queued before this plan sends none of the four keys.
+	it('MANDATORY (spec 29): the pre-plan payload sent twice is accepted then replayed; the payment is on the Cash row', async () => {
+		const env = saleEnv(fx, { omitIds: true });
+		const payload = env.payload as {
+			lines: Record<string, unknown>[];
+			payments: Record<string, unknown>[];
+		};
+		for (const key of ['paymentMethodId', 'paymentMethodName']) {
+			expect(key in payload.payments[0], key).toBe(false);
+		}
+		for (const key of ['taxRateId', 'taxRateName']) {
+			expect(key in payload.lines[0], key).toBe(false);
+		}
+
+		const first = await send(env);
+		expect(first.http).toBe(200);
+		if (first.http === 200) expect(first.body.status).toBe('accepted');
+		const second = await send(env);
+		expect(second.http).toBe(200);
+		if (second.http === 200) expect(second.body.status).toBe('replayed');
+
+		expect(await saleCounts(fx.restaurantId)).toEqual(ONE_OF_EACH);
+		const rows = await paymentRows();
+		expect(rows).toHaveLength(1);
+		expect(rows[0].paymentMethodId).toBe(fx.methods.cash.id);
+		expect(rows[0].paymentMethodName).toBe('Cash');
+	});
+
+	// MANDATORY (spec 29 — offline retries), mobile.
+	it('MANDATORY (spec 29): a mobile sale naming EVC Plus sent twice is accepted then replayed; one order, posted mobile_sale', async () => {
+		const evc = await seedMethod({ name: 'EVC Plus', kind: 'mobile' });
+		const env = saleEnv(fx, { method: 'mobile', paymentMethod: evc });
+		const orderId = (env.payload as { orderId: string }).orderId;
+
+		const first = await send(env);
+		expect(first.http).toBe(200);
+		if (first.http === 200) expect(first.body.status).toBe('accepted');
+		const second = await send(env);
+		expect(second.http).toBe(200);
+		if (second.http === 200) expect(second.body.status).toBe('replayed');
+
+		const orderRows = await testDb()
+			.select({ id: orders.id })
+			.from(orders)
+			.where(eq(orders.restaurantId, fx.restaurantId));
+		expect(orderRows).toEqual([{ id: orderId }]);
+		const entries = await testDb()
+			.select({ event: journalEntries.event })
+			.from(journalEntries)
+			.where(eq(journalEntries.sourceId, orderId));
+		expect(entries).toEqual([{ event: 'mobile_sale' }]);
+	});
+
+	// The request class is decided by the KIND (peekMethod / isRequestClass): a
+	// mobile sale has not completed on the till, so a HARD failure is a 422 the till
+	// turns into sale.abandoned — never an unrecorded row (CLAUDE.md decision (f)).
+	it('a mobile sale naming a switched-off method is 422 rejected invalid_payload; nothing is stored', async () => {
+		const zaad = await seedMethod({ name: 'Zaad', kind: 'mobile', enabled: false });
+		const env = saleEnv(fx, { method: 'mobile', paymentMethod: zaad });
+
+		expect(await send(env)).toEqual({
+			http: 422,
+			body: { error: 'rejected', flag: 'invalid_payload' }
+		});
+		const ops = await testDb()
+			.select({ id: posSyncOps.id })
+			.from(posSyncOps)
+			.where(eq(posSyncOps.clientOpId, env.clientOpId));
+		expect(ops).toHaveLength(0);
+		const orderRows = await testDb()
+			.select({ id: orders.id })
+			.from(orders)
+			.where(eq(orders.restaurantId, fx.restaurantId));
+		expect(orderRows).toHaveLength(0);
+	});
+
+	it('retry resolves the method: an unrecorded cash sale retried after a menu change records on the Cash row', async () => {
+		const env = saleEnv(fx, { unitPriceMinor: '1' });
+		const stored = await send(env);
+		expect(stored.http).toBe(200);
+		if (stored.http === 200) {
+			expect(stored.body.status).toBe('unrecorded');
+			expect(stored.body.flag).toBe('price_tamper');
+		}
+		const [op] = await testDb()
+			.select({ id: posSyncOps.id })
+			.from(posSyncOps)
+			.where(eq(posSyncOps.clientOpId, env.clientOpId));
+
+		// updateItem bumps the menu version, so the op's version is now an older one.
+		const changed = await db.transaction((tx) =>
+			updateItem(
+				tx,
+				fx.restaurantId,
+				fx.teaId,
+				{ priceMinor: 900n },
+				{ actorUserId: fx.ownerId, ip: null, userAgent: null }
+			)
+		);
+		expect(changed).toEqual({ ok: true, changed: true });
+		expect(await getMenuVersion(testDb(), fx.restaurantId)).toBeGreaterThan(fx.menuVersion);
+
+		expect(await retryOp(db, fx.restaurantId, op.id.toString(), fx.ownerId)).toEqual({
+			ok: true,
+			status: 'recorded_flagged'
+		});
+		const [order] = await testDb()
+			.select({ flagReason: orders.flagReason })
+			.from(orders)
+			.where(eq(orders.restaurantId, fx.restaurantId));
+		expect(order.flagReason?.split(',')).toContain('stale_menu_price');
+		const rows = await paymentRows();
+		expect(rows).toHaveLength(1);
+		expect(rows[0]).toMatchObject({
+			method: 'cash',
+			paymentMethodId: fx.methods.cash.id,
+			paymentMethodName: 'Cash'
+		});
 	});
 });

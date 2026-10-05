@@ -5,7 +5,9 @@
 // owner, one staff, one device, a small menu with a modifier); the
 // three helpers below drive T-20's session and T-21's sale.complete envelope
 // through recordSale, exactly the way the server sync path does. All money on
-// the wire is a decimal string, in bigint after that.
+// the wire is a decimal string, in bigint after that. saleEnvelope sends the
+// payment's method id and name and each line's rate id and name by default
+// (settings-tax-payments-receipt T-16); `omitIds` builds the pre-plan payload.
 
 import { randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
@@ -23,7 +25,7 @@ import {
 	linkModifierGroup
 } from '../../menu';
 import { seedStaff } from './seed';
-import { cashMethodId, seedPaymentMethod, seedTaxRate } from './settings';
+import { cashMethodId, defaultTaxRateOf, seedPaymentMethod, seedTaxRate } from './settings';
 import { openSession, closeSession, type SessionContext } from '../../pos-sessions';
 import { validateSale, type SyncContext } from '../../orders/validate';
 import { recordSale } from '../../orders/pay';
@@ -52,6 +54,9 @@ export type SalesFixture = {
 	taxMode: TaxMode;
 	/** The default rate's number — what the line builder below charges (T-13). */
 	taxRateBp: number;
+	/** The named default rate (T-16): saleEnvelope sends its id and name on every
+	 * line unless a line names its own. */
+	defaultTaxRate: { id: string; name: string };
 	currencyCode: 'USD';
 	/** One method per KIND (T-15): the built-in Cash row, 'Card' and 'Mobile money'. */
 	paymentMethods: Record<'cash' | 'card' | 'mobile', { id: string; name: string }>;
@@ -123,6 +128,11 @@ export async function seedSalesRestaurant(
 			{ name: 'Mobile money', kind: 'mobile' },
 			ctx
 		);
+		// T-16: the default rate's id and name, which saleEnvelope sends on each line.
+		const defaultRate = await defaultTaxRateOf(tx, restaurantId);
+		if (defaultRate === null) {
+			throw new Error('seedSalesRestaurant: the restaurant has no default tax rate');
+		}
 
 		const [owner] = await tx
 			.insert(users)
@@ -187,6 +197,7 @@ export async function seedSalesRestaurant(
 			menuVersion,
 			taxMode,
 			taxRateBp,
+			defaultTaxRate: { id: defaultRate.id, name: defaultRate.name },
 			currencyCode: 'USD' as const,
 			paymentMethods: {
 				cash: { id: await cashMethodId(tx, restaurantId), name: 'Cash' },
@@ -293,6 +304,10 @@ export type RecordSaleLine = {
 	quantity: number;
 	unitPriceMinor: bigint;
 	taxRateBp: number;
+	/** The named rate the line was taxed under (T-16); defaults to the fixture's
+	 * default rate. Not sent at all with `omitIds`. */
+	taxRateId?: string | null;
+	taxRateName?: string | null;
 	modifiers?: { modifierId: string; modifierName: string; priceDeltaMinor: bigint }[];
 };
 
@@ -307,6 +322,13 @@ export type RecordSaleOptions = {
 	 * produce the pre-T-22 format (no `note` key at all). */
 	note?: string | null;
 	employeeId?: string;
+	/** The named method that took the payment (T-16); it must be of kind `method`.
+	 * Defaults to the fixture's method of that kind. Not sent at all with `omitIds`. */
+	paymentMethod?: { id: string; name: string };
+	/** The pre-plan payload format (settings-tax-payments-receipt T-14): none of the
+	 * four optional keys — the payment's method id and name, each line's rate id and
+	 * name — is written into the payload. */
+	omitIds?: boolean;
 	lines: RecordSaleLine[];
 };
 
@@ -332,6 +354,13 @@ export function saleEnvelope(
 		quantity: l.quantity,
 		unitPriceMinor: l.unitPriceMinor.toString(),
 		taxRateBp: l.taxRateBp,
+		// Spread conditionally, as `note` is: with omitIds the keys are absent.
+		...(o.omitIds
+			? {}
+			: {
+					taxRateId: l.taxRateId ?? f.defaultTaxRate.id,
+					taxRateName: l.taxRateName ?? f.defaultTaxRate.name
+				}),
 		discountMinor: '0',
 		modifiers: (l.modifiers ?? []).map((m) => ({
 			modifierId: m.modifierId,
@@ -348,9 +377,13 @@ export function saleEnvelope(
 		tenderedMinor = tendered.toString();
 		changeMinor = changeDue(minor(tendered), minor(totalMinor)).toString();
 	}
+	const paymentMethod = o.paymentMethod ?? f.paymentMethods[o.method];
 	const payment = {
 		paymentId: randomUUID(),
 		method: o.method,
+		...(o.omitIds
+			? {}
+			: { paymentMethodId: paymentMethod.id, paymentMethodName: paymentMethod.name }),
 		amountMinor: serialised.totalMinor,
 		tenderedMinor,
 		changeMinor

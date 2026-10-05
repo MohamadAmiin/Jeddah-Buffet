@@ -6,7 +6,12 @@ import { onRestaurantCreated, updateSettings } from '../restaurants';
 import { registerDevice } from '../auth/pos-device';
 import { createCategory, createItem, getMenuVersion, updateTaxRate } from '../menu';
 import { seedStaff } from '../db/test/seed';
-import { seedPaymentMethod, seedTaxRate } from '../db/test/settings';
+import {
+	cashMethodId,
+	defaultTaxRateOf,
+	seedPaymentMethod,
+	seedTaxRate
+} from '../db/test/settings';
 import { closeTestDb, testDb } from '../db/test/db';
 import { restaurants } from '../db/schema/restaurants';
 import { users } from '../db/schema/users';
@@ -18,6 +23,7 @@ import { accounts, journalEntries, journalEntryLines } from '../db/schema/accoun
 import { auditLog } from '../db/schema/audit';
 import { validateSale, type SyncContext } from './validate';
 import { recordSale } from './pay';
+import { expectedCash } from '../pos-sessions';
 import type { OpEnvelope } from '../../sync-ops';
 
 afterAll(async () => {
@@ -707,5 +713,253 @@ describe('recordSale (T-19) — 0% and inclusive-20% coverage', () => {
 		expect(byCode['1000'].debit).toBe(999n);
 		expect(byCode['4000'].credit).toBe(832n);
 		expect(byCode['2100'].credit).toBe(167n);
+	});
+});
+
+describe('recordSale — named methods and rates (settings-tax-payments-receipt T-16)', () => {
+	// Every test runs on the fresh per-test `fx` from the beforeEach above; each
+	// extra sale in one fixture takes its own invoiceSeq and invoiceNumber.
+	type NamedMethod = { id: string; name: string };
+
+	function seedMethod(
+		f: Fixture,
+		input: { name: string; kind: 'card' | 'mobile'; merchantNumber?: string | null }
+	): Promise<NamedMethod> {
+		const ctx = { actorUserId: f.ownerId, ip: null, userAgent: null };
+		return db
+			.transaction((tx) => seedPaymentMethod(tx, f.restaurantId, input, ctx))
+			.then((id) => ({ id, name: input.name }));
+	}
+
+	/** twoLineCashEnvelope (the 1100 cash sale, no ids) as the device's sale number `seq`. */
+	function nthSale(f: Fixture, seq: number): Payload {
+		const env = twoLineCashEnvelope(f);
+		const payload = env.payload as { invoiceSeq: number; invoiceNumber: string };
+		payload.invoiceSeq = seq;
+		payload.invoiceNumber = `${f.deviceCode}-${String(seq).padStart(6, '0')}`;
+		return env;
+	}
+
+	/** The same 1100 sale, number `seq`, paid by a named card or mobile method. */
+	function paidBy(f: Fixture, seq: number, kind: 'card' | 'mobile', m: NamedMethod): Payload {
+		const env = nthSale(f, seq);
+		(env.payload as { payments: unknown[] }).payments = [
+			{
+				paymentId: randomUUID(),
+				method: kind,
+				paymentMethodId: m.id,
+				paymentMethodName: m.name,
+				amountMinor: '1100',
+				tenderedMinor: null,
+				changeMinor: null
+			}
+		];
+		return env;
+	}
+
+	async function eventOf(entryId: string): Promise<string> {
+		const [entry] = await testDb()
+			.select({ event: journalEntries.event })
+			.from(journalEntries)
+			.where(eq(journalEntries.id, entryId));
+		return entry.event;
+	}
+
+	/** The entry's lines as { code, debit, credit }, ordered by account code. */
+	async function ledger(entryId: string) {
+		const lines = await entryLines(entryId);
+		return lines
+			.map(({ code, debit, credit }) => ({ code, debit, credit }))
+			.sort((a, b) => a.code.localeCompare(b.code));
+	}
+
+	async function paymentOf(orderId: string) {
+		return testDb()
+			.select({
+				method: payments.method,
+				paymentMethodId: payments.paymentMethodId,
+				paymentMethodName: payments.paymentMethodName
+			})
+			.from(payments)
+			.where(eq(payments.orderId, orderId));
+	}
+
+	async function lineRatesOf(orderId: string) {
+		return testDb()
+			.select({ taxRateId: orderLines.taxRateId, taxRateName: orderLines.taxRateName })
+			.from(orderLines)
+			.where(eq(orderLines.orderId, orderId))
+			.orderBy(orderLines.lineNo);
+	}
+
+	// MANDATORY (spec 29 — one posting-rule test per business event): spec 24 "Card /
+	// mobile sale". By KIND, never by method id (decision 3): EVC Plus and Zaad are
+	// both mobile, so both debit 1030; the payment row says WHICH method took it.
+	it('MANDATORY (spec 29): every mobile method posts mobile_sale, Dr 1030 / Cr 4000 / Cr 2100, and each payment names its method', async () => {
+		const evc = await seedMethod(fx, {
+			name: 'EVC Plus',
+			kind: 'mobile',
+			merchantNumber: '61 234 5678'
+		});
+		const zaad = await seedMethod(fx, {
+			name: 'Zaad',
+			kind: 'mobile',
+			merchantNumber: '63 345 6789'
+		});
+
+		for (const [seq, method] of [
+			[1, evc],
+			[2, zaad]
+		] as const) {
+			const result = await recordThrough(fx, paidBy(fx, seq, 'mobile', method), fx.cashierId);
+			expect(result.entryIds).toHaveLength(1);
+			expect(await eventOf(result.entryIds[0])).toBe('mobile_sale');
+			expect(await ledger(result.entryIds[0])).toEqual([
+				{ code: '1030', debit: 1100n, credit: 0n },
+				{ code: '2100', debit: 0n, credit: 100n },
+				{ code: '4000', debit: 0n, credit: 1000n }
+			]);
+			expect(await paymentOf(result.orderId)).toEqual([
+				{ method: 'mobile', paymentMethodId: method.id, paymentMethodName: method.name }
+			]);
+		}
+	});
+
+	// MANDATORY (spec 29 — the same event, card): a card method debits 1020.
+	it('MANDATORY (spec 29): a card method posts card_sale, Dr 1020, and the payment names it', async () => {
+		const visa = await seedMethod(fx, { name: 'Visa terminal', kind: 'card' });
+		const result = await recordThrough(fx, paidBy(fx, 1, 'card', visa), fx.cashierId);
+		expect(result.entryIds).toHaveLength(1);
+		expect(await eventOf(result.entryIds[0])).toBe('card_sale');
+		expect(await ledger(result.entryIds[0])).toEqual([
+			{ code: '1020', debit: 1100n, credit: 0n },
+			{ code: '2100', debit: 0n, credit: 100n },
+			{ code: '4000', debit: 0n, credit: 1000n }
+		]);
+		expect(await paymentOf(result.orderId)).toEqual([
+			{ method: 'card', paymentMethodId: visa.id, paymentMethodName: 'Visa terminal' }
+		]);
+	});
+
+	// MANDATORY (spec 29 — journal entries always balance): every entry above.
+	it('MANDATORY (spec 29): every named-method sale entry balances, Σ debit = Σ credit = 1100', async () => {
+		const evc = await seedMethod(fx, { name: 'EVC Plus', kind: 'mobile' });
+		const zaad = await seedMethod(fx, { name: 'Zaad', kind: 'mobile' });
+		const visa = await seedMethod(fx, { name: 'Visa terminal', kind: 'card' });
+
+		for (const [seq, kind, method] of [
+			[1, 'mobile', evc],
+			[2, 'mobile', zaad],
+			[3, 'card', visa]
+		] as const) {
+			const { entryIds } = await recordThrough(fx, paidBy(fx, seq, kind, method), fx.cashierId);
+			expect(entryIds).toHaveLength(1);
+			const lines = await entryLines(entryIds[0]);
+			const debits = lines.reduce((acc, l) => acc + l.debit, 0n);
+			const credits = lines.reduce((acc, l) => acc + l.credit, 0n);
+			expect(debits, method.name).toBe(credits);
+			expect(debits, method.name).toBe(1100n);
+		}
+	});
+
+	it('a cash sale with the four keys stores the line rates, the Cash row and sale.recorded in one transaction', async () => {
+		const cashId = await cashMethodId(testDb(), fx.restaurantId);
+		const env = twoLineCashEnvelope(fx);
+		const payload = env.payload as {
+			orderId: string;
+			lines: Record<string, unknown>[];
+			payments: Record<string, unknown>[];
+		};
+		// A name other than the row's 'Tax', so the stored name is provably the SENT
+		// one: the till's snapshot wins (spec 17).
+		payload.lines = payload.lines.map((l) => ({
+			...l,
+			taxRateId: fx.taxRateId,
+			taxRateName: 'Sales tax'
+		}));
+		payload.payments = [
+			{ ...payload.payments[0], paymentMethodId: cashId, paymentMethodName: 'Cash' }
+		];
+		await recordThrough(fx, env, fx.cashierId);
+
+		expect(await lineRatesOf(payload.orderId)).toEqual([
+			{ taxRateId: fx.taxRateId, taxRateName: 'Sales tax' },
+			{ taxRateId: fx.taxRateId, taxRateName: 'Sales tax' }
+		]);
+		expect(await paymentOf(payload.orderId)).toEqual([
+			{ method: 'cash', paymentMethodId: cashId, paymentMethodName: 'Cash' }
+		]);
+		const audit = await testDb()
+			.select({ details: auditLog.details })
+			.from(auditLog)
+			.where(and(eq(auditLog.restaurantId, fx.restaurantId), eq(auditLog.event, 'sale.recorded')));
+		expect(audit).toHaveLength(1);
+		expect(audit[0].details).toMatchObject({
+			method: 'cash',
+			paymentMethodId: cashId,
+			paymentMethodName: 'Cash'
+		});
+
+		// One transaction (invariant 4): PostgreSQL stamps every row version with the
+		// id of the transaction that wrote it (xmin), and the payment path opens no
+		// savepoint, so the two lines, the payment and the audit row share one.
+		const writers = await testDb().execute<{ xid: string }>(sql`
+			select xmin::text as xid from order_lines where order_id = ${payload.orderId}
+			union all
+			select xmin::text from payments where order_id = ${payload.orderId}
+			union all
+			select xmin::text from audit_log
+				where restaurant_id = ${fx.restaurantId} and event = 'sale.recorded'
+		`);
+		expect(writers.rows).toHaveLength(4);
+		expect(new Set(writers.rows.map((r) => r.xid)).size).toBe(1);
+	});
+
+	// Invariant 5: a till queued before this plan sends none of the four keys; the
+	// sale records on the Cash row, and both lines are attributed to the default
+	// rate because their 1000 equals its number.
+	it('the pre-plan payload stores the Cash row on the payment and the default rate on both lines', async () => {
+		const env = twoLineCashEnvelope(fx);
+		const payload = env.payload as {
+			orderId: string;
+			lines: Record<string, unknown>[];
+			payments: Record<string, unknown>[];
+		};
+		for (const key of ['paymentMethodId', 'paymentMethodName']) {
+			expect(key in payload.payments[0], key).toBe(false);
+		}
+		for (const line of payload.lines) {
+			for (const key of ['taxRateId', 'taxRateName']) expect(key in line, key).toBe(false);
+		}
+		const rate = await defaultTaxRateOf(testDb(), fx.restaurantId);
+		expect(rate).toEqual({ id: fx.taxRateId, name: 'Tax', rateBp: 1000 });
+
+		await recordThrough(fx, env, fx.cashierId);
+
+		expect(await paymentOf(payload.orderId)).toEqual([
+			{
+				method: 'cash',
+				paymentMethodId: await cashMethodId(testDb(), fx.restaurantId),
+				paymentMethodName: 'Cash'
+			}
+		]);
+		expect(await lineRatesOf(payload.orderId)).toEqual([
+			{ taxRateId: rate!.id, taxRateName: rate!.name },
+			{ taxRateId: rate!.id, taxRateName: rate!.name }
+		]);
+	});
+
+	// Spec 10: expected cash counts cash only — EVC Plus money never enters the drawer.
+	it('expected cash counts the cash sale only, not the EVC Plus one', async () => {
+		const evc = await seedMethod(fx, {
+			name: 'EVC Plus',
+			kind: 'mobile',
+			merchantNumber: '61 234 5678'
+		});
+		await recordThrough(fx, nthSale(fx, 1), fx.cashierId); // cash, 1100
+		await recordThrough(fx, paidBy(fx, 2, 'mobile', evc), fx.cashierId); // EVC Plus, 1100
+
+		// fx.sessionId opened with a float of 0.
+		expect(await expectedCash(testDb(), fx.restaurantId, fx.sessionId)).toBe(1100n);
 	});
 });

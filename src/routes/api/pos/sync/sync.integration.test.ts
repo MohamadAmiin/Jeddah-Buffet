@@ -1,17 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, describe, expect, it } from 'vitest';
-import { eq, sql } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { posSyncOps } from '$lib/server/db/schema/pos-sync';
 import { db } from '$lib/server/db/client';
 import { closeTestDb } from '$lib/server/db/test/db';
 import { onRestaurantCreated, updateSettings } from '$lib/server/restaurants';
 import { restaurants } from '$lib/server/db/schema/restaurants';
 import { users } from '$lib/server/db/schema/users';
-import { restaurantSettings } from '$lib/server/db/schema/restaurant-settings';
 import { registerDevice } from '$lib/server/auth/pos-device';
 import { createCategory, createItem, getMenuVersion } from '$lib/server/menu';
 import { seedStaff } from '$lib/server/db/test/seed';
-import { seedTaxRate } from '$lib/server/db/test/settings';
+import { seedPaymentMethod, seedTaxRate } from '$lib/server/db/test/settings';
 import { POST } from './+server';
 import type { RequestEvent } from '@sveltejs/kit';
 import type { OpEnvelope, OpKind } from '$lib/sync-ops';
@@ -72,10 +71,9 @@ async function makeFixture(email: string): Promise<Fixture> {
 			ctx
 		);
 	});
-	await db
-		.update(restaurantSettings)
-		.set({ acceptsCard: true })
-		.where(eq(restaurantSettings.restaurantId, restaurant.id));
+	await db.transaction((tx) =>
+		seedPaymentMethod(tx, restaurant.id, { name: 'Card', kind: 'card' })
+	);
 	const cashier = await seedStaff(db, restaurant.id, {
 		displayName: 'Sam',
 		roleName: 'Cashier'

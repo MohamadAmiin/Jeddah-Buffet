@@ -108,6 +108,8 @@ export type AuditEvent =
 				invoiceNumber: string;
 				orderType: OrderType;
 				method: 'cash' | 'card' | 'mobile';
+				paymentMethodId: string;
+				paymentMethodName: string;
 				totalMinor: string;
 			};
 	  }
