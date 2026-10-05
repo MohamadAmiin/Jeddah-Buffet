@@ -31,6 +31,7 @@ type ReportData = {
 	itemAmountLabel: string;
 	totals: Record<string, string | number>;
 	byTender: unknown[];
+	byPaymentMethod: { key: string; label: string; kind: string; count: number; amount: string }[];
 	byOrderType: { orderType: string; label: string; count: number; amount: string }[];
 	byItem: unknown[];
 	sessions: { difference: { text: string; negative: boolean } | null }[];
@@ -211,6 +212,10 @@ describe('formatting happens in the load', () => {
 		});
 		expect(data.itemAmountLabel).toBe('Net');
 		expect(data.byTender[0]).toEqual({ method: 'cash', label: 'Cash', count: 1, amount: '9.35' });
+		// settings-tax-payments-receipt T-17: the named-method section, formatted here.
+		expect(data.byPaymentMethod).toEqual([
+			{ key: f.paymentMethods.cash.id, label: 'Cash', kind: 'Cash', count: 1, amount: '9.35' }
+		]);
 		expect(data.sessions[0].difference).toEqual({ text: '−0.35 USD', negative: true });
 
 		const json = JSON.stringify(data);
