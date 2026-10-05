@@ -28,7 +28,9 @@ import {
 	startAutoPrint
 } from './printing';
 import { flush } from './queue';
+import { PAYMENT_METHODS_SETTING, RECEIPT_LAYOUT_SETTING } from './settings';
 import { cacheSettings, withDb, type LocalOrder } from './store';
+import { DEFAULT_RECEIPT_LAYOUT, type ReceiptLayout } from '../receipt-layout';
 
 function deleteDatabase(): Promise<void> {
 	return new Promise((resolve, reject) => {
@@ -266,6 +268,46 @@ describe('printOriginals', () => {
 			true
 		);
 	});
+
+	it("prints the owner's cached layout and today's payment numbers (T-23): a header line, the heading, the method and its number; a hidden business date is absent", async () => {
+		// Cached exactly as src/routes/(pos)/pos/+page.svelte caches the bundle
+		// after T-21: the two values AS THEY ARRIVED, under the keys settings.ts owns.
+		const receipt: ReceiptLayout = {
+			headerLines: ['Open daily 7-23'],
+			footerLines: [],
+			show: { ...DEFAULT_RECEIPT_LAYOUT.show, businessDate: false },
+			paymentNumbersHeading: 'PAY BY MOBILE MONEY',
+			logo: null
+		};
+		await cacheSettings([
+			{
+				key: PAYMENT_METHODS_SETTING,
+				value: [
+					{ id: 'pm-cash', name: 'Cash', kind: 'cash', merchantNumber: null },
+					{ id: 'pm-evc', name: 'EVC Plus', kind: 'mobile', merchantNumber: '61 234 5678' }
+				]
+			},
+			{ key: RECEIPT_LAYOUT_SETTING, value: receipt }
+		]);
+		const agent = stubAgent();
+		const { orderId } = await sell('cash');
+		const result = await printOriginals(orderId, {
+			drawer: false,
+			fetchFn: agent.fetchFn,
+			now: () => NOW_MS
+		});
+		expect(result.receipt).toBe('queued');
+		const tape = textOf(agent.jobs()[0]!);
+		expect(tape).toContain('Open daily 7-23');
+		expect(tape).toContain('PAY BY MOBILE MONEY');
+		expect(tape).toContain('EVC Plus');
+		expect(tape).toContain('61 234 5678');
+		expect(tape).not.toContain('Business date');
+		// The numbers print on a cash sale too (Settings 6), and a cached layout
+		// replaces the legacy receiptFooter fallback (T-21).
+		expect(tape).toContain('CASH');
+		expect(tape).not.toContain('Mahadsanid!');
+	});
 });
 
 describe('reprint', () => {
@@ -427,13 +469,12 @@ describe('listRecentSales and saleStatusMark (T-31)', () => {
 });
 
 describe('readReceiptHeader', () => {
-	it('reads the cached settings and falls back to Restaurant', async () => {
+	it('reads the four cached header settings and falls back to Restaurant; the footer is part of the layout now', async () => {
 		expect(await readReceiptHeader()).toEqual({
 			restaurantName: 'Maqaayadda Hodan',
 			address: 'Makka Al-Mukarama Rd, Km4',
 			phone: null,
-			taxRegistrationNumber: null,
-			footer: 'Mahadsanid!'
+			taxRegistrationNumber: null
 		});
 		await cacheSettings([{ key: 'restaurantName', value: null }]);
 		expect((await readReceiptHeader()).restaurantName).toBe('Restaurant');

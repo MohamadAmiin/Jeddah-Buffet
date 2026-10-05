@@ -1,14 +1,27 @@
 // THE RECEIPT AND KITCHEN-TICKET FORMATTER (spec 11, 17; tasks/menu-and-printing
-// T-23). Pure: it takes the sale's STORED snapshot (src/lib/pos/store.ts
-// SaleSnapshot — the queued payload, the per-line amounts, cashier, time) and
-// nothing else, and returns lines of printable ASCII for the print agent to
-// encode. It runs on the till, so it works offline.
+// T-23; tasks/settings-tax-payments-receipt T-23). Pure: it takes the sale's
+// STORED snapshot (src/lib/pos/store.ts SaleSnapshot — the queued payload, the
+// per-line amounts, the stored per-rate tax rows, cashier, time) plus what the
+// CALLER passes in — the owner's receipt layout, the payment numbers and the
+// logo, which src/lib/pos/printing.ts reads from the till's cache — and returns
+// lines for the print agent to encode: printable ASCII text lines and, on a
+// receipt, at most one image line. It reads no setting and computes nothing.
+// It runs on the till, so it works offline.
 //
 // EVERY AMOUNT ON PAPER IS A STORED STRING FORMATTED, NEVER RECOMPUTED
 // (invariants 1 and 7). This file imports none of the totals, change or tax
 // helpers and no settings or menu reader (receipt.test.ts pins that by name):
 // a reprint after a tax-mode change prints the sale's own figures, which are
-// the ledger's.
+// the ledger's. The per-rate tax rows are the sale's stored breakdown, printed
+// as stored and in stored order — never summed here and never checked against
+// the total: the money module made them add up when the sale was completed.
+//
+// WHAT THE OWNER MAY HIDE is decided here, not by the database (CLAUDE.md
+// "Settings 4"): each of the layout's nine switches removes or replaces ONE
+// line. The restaurant name, the invoice number, the date and time, the items,
+// the subtotal, discount, tax and total, the payment, the COPY marks and the
+// tax registration number when one is set have no switch and always print
+// (spec 33 decision 3 stays open; this layout is the default pending it).
 //
 // RECEIPTS ARE A SEPARATE PROBLEM (CLAUDE.md, design-system §8): 32 or 48 fixed
 // characters, no colour, monospace. A thermal printer in code page PC437 obeys
@@ -16,21 +29,38 @@
 // the money formatter's U+2212 minus and U+00A0 space, curly quotes, dashes and
 // accents to ASCII, turns control characters (an ESC pasted into a table label)
 // into spaces, and every other character into '?' — BEFORE any width is measured.
+// Every owner-written text — a header or footer line, the heading, a method or
+// rate name — goes through it the same way.
 import { formatAmount, moneyFormatFor } from '../money/format';
 import { minor } from '../money';
 // Aliased on import: the plan's tripwire greps every file this plan added for a
 // number-conversion call token, and the parser's own name would match it by accident.
 import { parseInvoiceNumber as parseInvoice, type OrderType } from '../sync-ops';
+import type { ReceiptLayout, ReceiptPaymentNumber } from '../receipt-layout';
 import { formatTaxRate } from './menu-view';
 import type { SaleSnapshot } from './store';
 
-export type PrintLine = {
+/** One line of text for the agent to encode. */
+export type TextLine = {
 	text: string;
 	bold?: boolean;
 	/** `tall` = double height, full width; `double` = double width AND height, half the columns. */
 	size?: 'normal' | 'tall' | 'double';
 	align?: 'left' | 'center';
 };
+
+/**
+ * The logo as plain 1-bit pixel data — the width in dots (a multiple of 8), the
+ * height in dots and the packed rows as standard base64 — for a print agent of
+ * version 2 or later to validate and encode itself (T-25). Never any other key.
+ */
+export type ImageLine = { image: { widthDots: number; heightDots: number; bitmap: string } };
+
+export type PrintLine = TextLine | ImageLine;
+
+export function isImageLine(line: PrintLine): line is ImageLine {
+	return 'image' in line;
+}
 
 export type ReceiptWidth = 32 | 48;
 
@@ -39,7 +69,6 @@ export type ReceiptHeader = {
 	address: string | null;
 	phone: string | null;
 	taxRegistrationNumber: string | null;
-	footer: string | null;
 };
 
 export type ReceiptInput = {
@@ -48,6 +77,16 @@ export type ReceiptInput = {
 	/** The restaurant's IANA zone (invariant 11): the time on paper is the till's local time. */
 	timeZone: string;
 	deviceCode: string;
+	/** The owner's layout as the till cached it (T-21). `layout.logo` is only the fingerprint. */
+	layout: ReceiptLayout;
+	/** The payment-numbers block (Settings 6): the CURRENT settings, not sale data. */
+	paymentNumbers: ReceiptPaymentNumber[];
+	/**
+	 * What prints at the top of a receipt, or null — null whenever the agent is
+	 * below version 2, no logo is cached, or the owner has not confirmed the
+	 * logo's test print (T-24). The kitchen ticket never carries it.
+	 */
+	logo: ImageLine['image'] | null;
 };
 
 export type CopyMark = { reprintedAt: string; by: string };
@@ -128,7 +167,7 @@ export const ORDER_TYPE_LABELS: Record<OrderType, string> = {
 
 // ── Layout over already-printable text ───────────────────────────────────────
 
-function rule(char: string, width: number): PrintLine {
+function rule(char: string, width: number): TextLine {
 	return { text: char.repeat(width) };
 }
 
@@ -199,8 +238,8 @@ function pair(left: string, right: string, width: number, indent = ''): string[]
 	return [first.padEnd(width - right.length) + right, ...rest];
 }
 
-const line = (text: string, extra: Omit<PrintLine, 'text'> = {}): PrintLine => ({ text, ...extra });
-const lines = (texts: string[], extra: Omit<PrintLine, 'text'> = {}): PrintLine[] =>
+const line = (text: string, extra: Omit<TextLine, 'text'> = {}): TextLine => ({ text, ...extra });
+const lines = (texts: string[], extra: Omit<TextLine, 'text'> = {}): TextLine[] =>
 	texts.map((text) => line(text, extra));
 
 function orderNo(sale: SaleSnapshot): string {
@@ -208,30 +247,93 @@ function orderNo(sale: SaleSnapshot): string {
 	return String(seq);
 }
 
-/** The one rate every line shares, or null when they differ. */
-function sharedRate(sale: SaleSnapshot): number | null {
-	const rates = new Set(sale.payload.lines.map((l) => l.taxRateBp));
-	if (rates.size !== 1) return null;
-	const [rate] = rates;
-	return typeof rate === 'number' ? rate : null;
+// ── The tax lines: stored rates and stored rows, never a sum ─────────────────
+
+type TaxMode = SaleSnapshot['payload']['taxMode'];
+
+/** A rate as a line stored it: the basis points taxed and the rate's name, if the till knew one. */
+type StoredRate = { rateBp: number; name: string | null };
+
+/** One stored per-rate row: the name, the rate and that rate's tax as a decimal string. */
+type StoredRow = StoredRate & { taxMinor: string };
+
+/**
+ * The one (rate, name) pair every payload line shares, or null when the lines
+ * differ in either — or there is no line. A line stored before this plan has no
+ * name key, which reads as null.
+ */
+function sharedRate(sale: SaleSnapshot): StoredRate | null {
+	let shared: StoredRate | null = null;
+	for (const l of sale.payload.lines) {
+		if (typeof l.taxRateBp !== 'number') return null;
+		const name = l.taxRateName ?? null;
+		if (shared === null) shared = { rateBp: l.taxRateBp, name };
+		else if (shared.rateBp !== l.taxRateBp || shared.name !== name) return null;
+	}
+	return shared;
+}
+
+/**
+ * The label of a tax line: exactly today's `Tax 10.00%` / `Incl. tax 10.00%`
+ * for a rate stored without a name; `VAT 10.00%` / `Incl. VAT 10.00%` for a
+ * named one. The name is owner-written text, so it goes through toPrintable.
+ */
+function taxLabel(rateBp: number, name: string | null, mode: TaxMode): string {
+	const rate = formatTaxRate(rateBp);
+	if (name === null || name === '')
+		return mode === 'inclusive' ? `Incl. tax ${rate}` : `Tax ${rate}`;
+	const printable = toPrintable(name);
+	return mode === 'inclusive' ? `Incl. ${printable} ${rate}` : `${printable} ${rate}`;
+}
+
+/**
+ * The sale's stored per-rate rows, when there are at least two and every one
+ * is well formed — else null, and one tax line prints the stored total. This
+ * is a check of SHAPE only, against a snapshot written by an older build or
+ * garbled in storage: the rows are never summed or compared with the total
+ * here (invariant 1) — the money module made them add up when the sale was
+ * completed (invariant 7).
+ */
+function storedBreakdown(sale: SaleSnapshot): StoredRow[] | null {
+	const rows: unknown = sale.taxBreakdown;
+	if (!Array.isArray(rows) || rows.length < 2) return null;
+	const out: StoredRow[] = [];
+	for (const row of rows as unknown[]) {
+		if (typeof row !== 'object' || row === null) return null;
+		const { name, rateBp, taxMinor } = row as Record<string, unknown>;
+		if (typeof rateBp !== 'number' || !Number.isInteger(rateBp)) return null;
+		if (rateBp < 0 || rateBp > 10_000) return null;
+		if (name !== null && typeof name !== 'string') return null;
+		if (typeof taxMinor !== 'string' || !/^-?\d+$/.test(taxMinor)) return null;
+		out.push({ name, rateBp, taxMinor });
+	}
+	return out;
 }
 
 // ── The customer receipt (design/06-receipt.html, sample A) ─────────────────
 
 export function renderReceipt(input: ReceiptInput, opts: RenderOptions): PrintLine[] {
 	const w = opts.width;
-	const { sale, header } = input;
+	const { sale, header, layout } = input;
 	const { payload } = sale;
+	const { show } = layout;
 	const cur = payload.currencyCode;
 	const p = toPrintable;
 	const out: PrintLine[] = [];
 
+	// 1. The COPY banner — never hideable (spec 11).
 	if (opts.copy) {
 		out.push(rule('*', w));
 		out.push(line('*' + center('COPY', w - 2)[0]!.padEnd(w - 2) + '*'));
 		out.push(rule('*', w));
 	}
 
+	// 2. The logo, exactly as given and nothing added: the agent validates and
+	//    encodes it (T-25). What prints is input.logo, never layout.logo.
+	if (input.logo !== null) out.push({ image: input.logo });
+
+	// 3. Who sold: the name and the tax registration number when set never hide;
+	//    then the owner's header lines.
 	out.push(...lines(center(p(header.restaurantName), w), { bold: true, align: 'center' }));
 	if (header.address) out.push(...lines(center(p(header.address), w), { align: 'center' }));
 	if (header.phone) out.push(...lines(center(p(`Tel ${header.phone}`), w), { align: 'center' }));
@@ -240,20 +342,32 @@ export function renderReceipt(input: ReceiptInput, opts: RenderOptions): PrintLi
 			...lines(center(p(`Tax no. ${header.taxRegistrationNumber}`), w), { align: 'center' })
 		);
 	}
+	for (const text of layout.headerLines)
+		out.push(...lines(center(p(text), w), { align: 'center' }));
 	out.push(rule('-', w));
 
+	// 4. When, and which sale: the date and time and the invoice number never hide.
 	out.push(...lines(pair('Date/Time', formatDateTime(sale.completedAt, input.timeZone), w)));
-	if (sale.businessDate) {
+	if (show.businessDate && sale.businessDate) {
 		out.push(...lines(pair('Business date', formatBusinessDate(sale.businessDate), w)));
 	}
 	out.push(...lines(pair('Invoice', p(payload.invoiceNumber), w)));
-	out.push(...lines(pair(`Order #${orderNo(sale)}`, ORDER_TYPE_LABELS[payload.orderType], w)));
+	const order = `Order #${orderNo(sale)}`;
+	if (show.orderType) out.push(...lines(pair(order, ORDER_TYPE_LABELS[payload.orderType], w)));
+	else out.push(line(order));
+
+	// 5. The table and the cashier, each behind its own switch.
 	const cashier = p(sale.cashierName);
 	if (payload.orderType === 'dine_in' && payload.tableLabel) {
-		out.push(...lines(pair(p(`Table ${payload.tableLabel}`), `Cashier ${cashier}`, w)));
-	} else {
+		const table = p(`Table ${payload.tableLabel}`);
+		if (show.table && show.cashier) out.push(...lines(pair(table, `Cashier ${cashier}`, w)));
+		else if (show.table) out.push(...lines(wrap(table, w)));
+		else if (show.cashier) out.push(...lines(pair('Cashier', cashier, w)));
+	} else if (show.cashier) {
 		out.push(...lines(pair('Cashier', cashier, w)));
 	}
+
+	// 6. The copy marks — never hideable — and the items.
 	if (opts.copy) {
 		out.push(...lines(pair('Reprinted', formatDateTime(opts.copy.reprintedAt, input.timeZone), w)));
 		out.push(...lines(pair('Reprint by', p(opts.copy.by), w)));
@@ -270,43 +384,85 @@ export function renderReceipt(input: ReceiptInput, opts: RenderOptions): PrintLi
 			const delta = m.priceDeltaMinor === '0' ? '' : money(m.priceDeltaMinor, cur);
 			out.push(...lines(pair(`    + ${p(m.modifierName)}`, delta, w, '      ')));
 		}
-		if (l.quantity > 1) out.push(line(`    @ ${money(l.unitPriceMinor, cur)} each`));
+		if (l.quantity > 1 && show.unitPrice) {
+			out.push(line(`    @ ${money(l.unitPriceMinor, cur)} each`));
+		}
 	});
 
+	// 7. The totals — never hideable. The tax: one line at the rate every line
+	//    shares; the stored per-rate rows, as stored, when the rates differ, the
+	//    switch is on and the sale stored them; else one line for the mixed rates.
 	out.push(rule('-', w));
 	out.push(...lines(pair('Subtotal', money(payload.totals.subtotalMinor, cur), w)));
 	if (payload.totals.discountMinor !== '0') {
 		out.push(...lines(pair('Discount', '-' + money(payload.totals.discountMinor, cur), w)));
 	}
-	const rate = sharedRate(sale);
-	const taxLabel =
-		(payload.taxMode === 'inclusive' ? 'Incl. tax' : 'Tax') +
-		(rate === null ? ' (mixed rates)' : ` ${formatTaxRate(rate)}`);
-	out.push(...lines(pair(taxLabel, money(payload.totals.taxMinor, cur), w)));
+	const mode = payload.taxMode;
+	const shared = sharedRate(sale);
+	const rows = shared === null && show.taxBreakdown ? storedBreakdown(sale) : null;
+	if (shared !== null) {
+		const label = taxLabel(shared.rateBp, shared.name, mode);
+		out.push(...lines(pair(label, money(payload.totals.taxMinor, cur), w)));
+	} else if (rows !== null) {
+		for (const row of rows) {
+			const label = taxLabel(row.rateBp, row.name, mode);
+			out.push(...lines(pair(label, money(row.taxMinor, cur), w)));
+		}
+	} else {
+		const label = (mode === 'inclusive' ? 'Incl. tax' : 'Tax') + ' (mixed rates)';
+		out.push(...lines(pair(label, money(payload.totals.taxMinor, cur), w)));
+	}
+
+	// 8. The total.
 	out.push(rule('=', w));
 	out.push(
 		...lines(pair('TOTAL', money(payload.totals.totalMinor, cur), w), { bold: true, size: 'tall' })
 	);
 	out.push(rule('=', w));
 
+	// 9. The payment — never hideable. Cash by KIND, as today; card and mobile
+	//    under the method's STORED name, or the kind for a sale recorded before
+	//    the name was stored.
 	const payment = payload.payments[0];
 	if (payment) {
 		if (payment.method === 'cash') {
 			out.push(...lines(pair('CASH', money(payment.tenderedMinor ?? payment.amountMinor, cur), w)));
 			out.push(...lines(pair('CHANGE', money(payment.changeMinor ?? '0', cur), w)));
 		} else {
-			out.push(
-				...lines(
-					pair(payment.method === 'card' ? 'CARD' : 'MOBILE', money(payment.amountMinor, cur), w)
-				)
-			);
+			const name = payment.paymentMethodName;
+			const label =
+				typeof name === 'string' && name !== ''
+					? p(name).toUpperCase()
+					: payment.method === 'card'
+						? 'CARD'
+						: 'MOBILE';
+			out.push(...lines(pair(label, money(payment.amountMinor, cur), w)));
 		}
 	}
 	out.push(rule('-', w));
 
-	if (header.footer) out.push(...lines(center(p(header.footer), w), { align: 'center' }));
-	out.push(...lines(center(`All amounts in ${p(cur)}`, w), { align: 'center' }));
-	out.push(...lines(center(`matcami POS  ${p(input.deviceCode)}`, w), { align: 'center' }));
+	// 10. The payment-numbers block (Settings 6): the owner's CURRENT numbers,
+	//     cash sales included — not sale data, never part of the COPY figures.
+	if (show.paymentNumbers && input.paymentNumbers.length > 0) {
+		if (layout.paymentNumbersHeading) {
+			out.push(...lines(center(p(layout.paymentNumbersHeading), w), { align: 'center' }));
+		}
+		for (const entry of input.paymentNumbers) {
+			out.push(...lines(pair(p(entry.name), p(entry.number), w)));
+		}
+		out.push(rule('-', w));
+	}
+
+	// 11. The footer: the owner's lines, the two switched lines, the COPY
+	//     sentence — never hideable.
+	for (const text of layout.footerLines)
+		out.push(...lines(center(p(text), w), { align: 'center' }));
+	if (show.currencyLine) {
+		out.push(...lines(center(`All amounts in ${p(cur)}`, w), { align: 'center' }));
+	}
+	if (show.deviceLine) {
+		out.push(...lines(center(`matcami POS  ${p(input.deviceCode)}`, w), { align: 'center' }));
+	}
 	if (opts.copy) {
 		out.push(
 			...lines(
@@ -321,13 +477,14 @@ export function renderReceipt(input: ReceiptInput, opts: RenderOptions): PrintLi
 
 // ── The kitchen ticket (design/06-receipt.html, sample B) ───────────────────
 
-export function renderKitchenTicket(input: ReceiptInput, opts: RenderOptions): PrintLine[] {
+/** Text only: the kitchen ticket reads none of the layout, the payment numbers or the logo. */
+export function renderKitchenTicket(input: ReceiptInput, opts: RenderOptions): TextLine[] {
 	const w = opts.width;
 	const half = Math.floor(w / 2);
 	const { sale } = input;
 	const { payload } = sale;
 	const up = (text: string) => toPrintable(text).toUpperCase();
-	const out: PrintLine[] = [];
+	const out: TextLine[] = [];
 
 	/** Centred at double size when it fits half the columns, else at normal size. */
 	const banner = (text: string) =>
@@ -407,10 +564,10 @@ export type TestPageInput = {
  * and a ruler of exactly `width` characters so a wrong paper width is visible
  * at a glance (a 48-column page on 58 mm paper wraps or clips the ruler).
  */
-export function renderTestPage(input: TestPageInput): PrintLine[] {
+export function renderTestPage(input: TestPageInput): TextLine[] {
 	const w = input.width;
 	const ruler = '1234567890'.repeat(5).slice(0, w);
-	const out: PrintLine[] = [
+	const out: TextLine[] = [
 		...lines(center('matcami', w), { bold: true, align: 'center' }),
 		...lines(center('TEST PRINT', w), { bold: true, size: 'tall', align: 'center' }),
 		rule('-', w),

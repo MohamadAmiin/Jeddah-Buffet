@@ -14,7 +14,11 @@
 //      cash sale's recorded row is the drawer's audit evidence (assumption 6).
 //
 // Every amount on paper comes from the order's stored SaleSnapshot through
-// receipt.ts; this file computes nothing (invariants 1, 7).
+// receipt.ts; this file computes nothing (invariants 1, 7). The owner's receipt
+// layout and the enabled methods' merchant numbers are read HERE from the
+// till's cache (settings.ts, T-21) and passed in: the formatter reads no setting
+// (tasks/settings-tax-payments-receipt T-23).
+import { paymentNumbersFrom } from '../receipt-layout';
 import { canPrint, type CanPrint } from './can-print';
 import type { Cart } from './orders';
 import { agentStatus, pulseDrawer, submitJob } from './print-client';
@@ -27,6 +31,7 @@ import {
 	type ReceiptWidth
 } from './receipt';
 import { readSessionRow } from './session';
+import { readPaymentMethods, readReceiptLayout } from './settings';
 import {
 	inTransaction,
 	readCachedSetting,
@@ -79,21 +84,23 @@ async function setting(key: string): Promise<string | null> {
 	return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
-/** The receipt header from the settings the till cached at sign-in (T-21). */
+/**
+ * The receipt header from the settings the till cached at sign-in (T-21). The
+ * footer is no longer here: the legacy `receiptFooter` reaches paper as footer
+ * line 1 through readReceiptLayout's fallback until a layout is cached.
+ */
 export async function readReceiptHeader(): Promise<ReceiptHeader> {
-	const [restaurantName, address, phone, taxRegistrationNumber, footer] = await Promise.all([
+	const [restaurantName, address, phone, taxRegistrationNumber] = await Promise.all([
 		setting('restaurantName'),
 		setting('receiptAddress'),
 		setting('receiptPhone'),
-		setting('taxRegistrationNumber'),
-		setting('receiptFooter')
+		setting('taxRegistrationNumber')
 	]);
 	return {
 		restaurantName: restaurantName ?? 'Restaurant',
 		address,
 		phone,
-		taxRegistrationNumber,
-		footer
+		taxRegistrationNumber
 	};
 }
 
@@ -141,17 +148,25 @@ async function businessDateFor(order: LocalOrder<Cart>): Promise<string | null> 
 async function receiptInput(order: LocalOrder<Cart>): Promise<ReceiptInput> {
 	const sale = order.sale;
 	if (!sale) throw new Error('order has no sale snapshot');
-	const [header, timeZone, deviceCode, businessDate] = await Promise.all([
+	const [header, timeZone, deviceCode, businessDate, layout, methods] = await Promise.all([
 		readReceiptHeader(),
 		setting('timeZone'),
 		setting('deviceCode'),
-		businessDateFor(order)
+		businessDateFor(order),
+		readReceiptLayout(),
+		readPaymentMethods()
 	]);
 	return {
 		sale: { ...sale, businessDate },
 		header,
 		timeZone: timeZone ?? 'UTC',
-		deviceCode: deviceCode ?? ''
+		deviceCode: deviceCode ?? '',
+		layout,
+		// The CURRENT settings, not sale data: a reprint prints today's numbers,
+		// and they are never part of the COPY figures (Settings 6).
+		paymentNumbers: paymentNumbersFrom(methods),
+		// T-24 puts the cached logo here, for an agent of version 2 only.
+		logo: null
 	};
 }
 
