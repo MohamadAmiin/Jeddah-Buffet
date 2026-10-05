@@ -52,16 +52,16 @@ reports.
 
 The IndexedDB database is `matcami-pos`, `DB_VERSION = 3`.
 
-| Store              | keyPath      | Owning module           | Cleared by `bindDevice` / `forgetDevice`?                                                                                                                                                                                                |
-| ------------------ | ------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `employees`        | `id`         | `store.ts`              | yes — a per-device cache of the staff bundle                                                                                                                                                                                             |
-| `settings`         | `key`        | `store.ts`              | yes — including `printAgentUrl` and `printAgentToken` (the pairing), on purpose: a re-registered till pairs again                                                                                                                        |
-| `menu`             | `id`         | `menu-snapshot.ts`      | yes                                                                                                                                                                                                                                      |
-| `offline_logins`   | `clientOpId` | `store.ts` + `queue.ts` | NEVER — unsynced audit facts                                                                                                                                                                                                             |
-| `orders`           | `id`         | `orders.ts`             | NEVER — completed sales are facts, pruned only 30 days after they sync; a completed row carries `sale` (the queued payload, line amounts, cashier, business date) and `printed` marks (`receiptAt`, `kitchenAt`, `drawerAt`, `reprints`) |
-| `sync_queue`       | `clientOpId` | `queue.ts`              | NEVER — the queue IS the unsynced work                                                                                                                                                                                                   |
-| `invoice_sequence` | `deviceId`   | `invoice-sequence.ts`   | NEVER — a rewind would reissue a number already queued; resume point `max(local counter, highest queued number for that device, server hint)`                                                                                            |
-| `session`          | `deviceId`   | `session.ts`            | NEVER — the open session's business date belongs to queued sales                                                                                                                                                                         |
+| Store              | keyPath      | Owning module           | Cleared by `bindDevice` / `forgetDevice`?                                                                                                                                                                                                                               |
+| ------------------ | ------------ | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `employees`        | `id`         | `store.ts`              | yes — a per-device cache of the staff bundle                                                                                                                                                                                                                            |
+| `settings`         | `key`        | `store.ts`              | yes — including `printAgentUrl` and `printAgentToken` (the pairing), on purpose: a re-registered till pairs again; and `paymentMethods`, `receiptLayout` and `receiptLogo` (`settings.ts`), so a re-registered till keeps no other restaurant's methods, layout or logo |
+| `menu`             | `id`         | `menu-snapshot.ts`      | yes                                                                                                                                                                                                                                                                     |
+| `offline_logins`   | `clientOpId` | `store.ts` + `queue.ts` | NEVER — unsynced audit facts                                                                                                                                                                                                                                            |
+| `orders`           | `id`         | `orders.ts`             | NEVER — completed sales are facts, pruned only 30 days after they sync; a completed row carries `sale` (the queued payload, line amounts, cashier, business date) and `printed` marks (`receiptAt`, `kitchenAt`, `drawerAt`, `reprints`)                                |
+| `sync_queue`       | `clientOpId` | `queue.ts`              | NEVER — the queue IS the unsynced work                                                                                                                                                                                                                                  |
+| `invoice_sequence` | `deviceId`   | `invoice-sequence.ts`   | NEVER — a rewind would reissue a number already queued; resume point `max(local counter, highest queued number for that device, server hint)`                                                                                                                           |
+| `session`          | `deviceId`   | `session.ts`            | NEVER — the open session's business date belongs to queued sales                                                                                                                                                                                                        |
 
 A wipe protects a stolen or re-registered tablet's PIN hashes and menu, but the facts already
 recorded on it belong to the restaurant's books and are never the wipe's to lose (spec 6,
@@ -74,7 +74,13 @@ invariant 5).
   `lastActiveAt` and refuses to restore past the idle limit — NEVER `localStorage`.
 - `idle.ts` — the idle watch; `null` seconds is inert, never a default.
 - `menu-snapshot.ts` — parses the full menu snapshot; amounts stay decimal strings until
-  `readMenu` converts them with `BigInt`.
+  `readMenu` converts them with `BigInt`; format 2 carries each item's resolved named rate; a
+  cached copy in another format is replaced at the next version check.
+- `settings.ts` — the cached payment methods, receipt layout and logo (keys `paymentMethods`,
+  `receiptLayout`, `receiptLogo`); readers fall back safely (no methods → `[]`; no layout → the
+  default with a pre-plan `receiptFooter` as footer line 1; a bad logo → null); the logo's bytes
+  are cached so printing never touches the network, and fetched only when the bundle's
+  fingerprint changes.
 - `menu-view.ts` — pure helpers over the cached menu: category tabs (an item with no category
   sits under the synthetic `Other` tab), the resolved tax rate, modifier groups, `formatTaxRate`.
 - `photo-warmup.ts` — after every menu sync, fetches each photo once so the browser's HTTP cache

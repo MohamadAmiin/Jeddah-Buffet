@@ -26,6 +26,14 @@
 	import { adoptServerSession } from '$lib/pos/session';
 	import { signOut } from '$lib/pos/employee.svelte';
 	import { hasPendingPairing } from '$lib/pos/print-client';
+	import {
+		PAYMENT_METHODS_SETTING,
+		RECEIPT_LAYOUT_SETTING,
+		readReceiptLayout,
+		refreshReceiptLogo,
+		type CachedPaymentMethod
+	} from '$lib/pos/settings';
+	import type { ReceiptLayout } from '$lib/receipt-layout';
 	import { KEY } from '$lib/components/pos/keys';
 
 	type DirectoryEntry = {
@@ -130,6 +138,10 @@
 				receiptPhone: string | null;
 				taxRegistrationNumber: string | null;
 				receiptFooter: string | null;
+				// tasks/settings-tax-payments-receipt T-20: the enabled, live methods
+				// (cash first) and the receipt layout with the logo's FINGERPRINT only.
+				paymentMethods: CachedPaymentMethod[];
+				receipt: ReceiptLayout;
 			};
 		};
 
@@ -158,7 +170,13 @@
 				{ key: 'receiptAddress', value: body.settings.receiptAddress },
 				{ key: 'receiptPhone', value: body.settings.receiptPhone },
 				{ key: 'taxRegistrationNumber', value: body.settings.taxRegistrationNumber },
-				{ key: 'receiptFooter', value: body.settings.receiptFooter }
+				{ key: 'receiptFooter', value: body.settings.receiptFooter },
+				// tasks/settings-tax-payments-receipt T-21: the payment methods and the
+				// receipt layout, stored AS THEY ARRIVED — the readers in
+				// $lib/pos/settings sanitise them on the way out. The legacy keys above
+				// stay until T-33.
+				{ key: PAYMENT_METHODS_SETTING, value: body.settings.paymentMethods },
+				{ key: RECEIPT_LAYOUT_SETTING, value: body.settings.receipt }
 			]);
 			// T-30: fold the server's invoice hint into the till's counter and
 			// adopt any server-open session so the till doesn't re-open it.
@@ -175,6 +193,15 @@
 							businessDate: body.openSession.businessDate
 						}
 			);
+			// The logo's bytes, fetched only when the cached fingerprint differs from
+			// the SANITISED cached layout's (never the raw body, so a malformed body
+			// cannot throw here). Not awaited and never a cacheWarning: that alert
+			// says the till cannot sign anyone in offline, which would be false for a
+			// logo — a missing logo prints a receipt without it, and the next sign-in
+			// or reconnect retries.
+			void readReceiptLayout()
+				.then((layout) => refreshReceiptLogo(layout))
+				.catch(() => {});
 		} catch {
 			// The live list still works; what fails is starting offline later, and
 			// a till that silently forgets is worse than one that says so.
@@ -204,10 +231,16 @@
 			.then(warmPhotos)
 			.catch(() => {});
 
-		const refreshMenu = () =>
+		const refreshMenu = () => {
 			void syncMenu()
 				.then(warmPhotos)
 				.catch(() => {});
+			// A logo fetch that failed offline is retried on reconnect; it fetches
+			// only when the cached fingerprint differs (T-21).
+			void readReceiptLayout()
+				.then((layout) => refreshReceiptLogo(layout))
+				.catch(() => {});
+		};
 		addEventListener('online', refreshMenu);
 		return () => removeEventListener('online', refreshMenu);
 	});
