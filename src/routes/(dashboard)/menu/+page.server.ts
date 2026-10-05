@@ -26,6 +26,7 @@ import { ROUNDING_RULE, minor, toBigInt } from '$lib/money';
 import { dishMargin } from '$lib/money/costing';
 import { recipeCosts } from '$lib/server/inventory';
 import { formatAmount, moneyFormatFor, type MoneyFormat } from '$lib/money/format';
+import { formatTaxRate } from '$lib/money/tax';
 import {
 	archiveCategorySchema,
 	archiveItemSchema,
@@ -35,10 +36,11 @@ import {
 	createModifierGroupSchema,
 	createModifierSchema,
 	firstMessage,
-	formatTaxRate,
 	itemIdSchema,
+	itemTaxRateLabel,
 	linkSchema,
 	parsePriceInput,
+	parseTaxRateChoice,
 	renameCategorySchema,
 	updateItemSchema
 } from './helpers';
@@ -109,6 +111,23 @@ export const load: ServerLoad = async (event) => {
 		return id === null ? null : (byId.get(id) ?? null);
 	};
 
+	// T-32: the panel's choice, from the SAME list. '' is Default — stored NULL,
+	// so the item FOLLOWS the restaurant's default rate even after the owner
+	// switches it; a rate's id PINS the item to that rate (migration 0017 pins an
+	// override explicitly, by id). Two different choices, never collapsed. Only
+	// LIVE rates are offered; the default row's name is read, never a number.
+	const defaultRate = rates.find((rate) => rate.isDefault) ?? null;
+	const live = rates.filter((rate) => rate.archivedAt === null);
+	const rateOptions = [
+		{
+			value: '',
+			label: defaultRate
+				? `Default — ${defaultRate.name} ${formatTaxRate(defaultRate.rateBp)}`
+				: 'Default — not chosen yet'
+		},
+		...live.map((rate) => ({ value: rate.id, label: `${rate.name} ${formatTaxRate(rate.rateBp)}` }))
+	];
+
 	// COST AND MARGIN (tasks/inventory-cogs T-34), read-only: the recipe's cost at
 	// the ledger's current averages, from a SEPARATE reader — listMenu and the POS
 	// snapshot never carry a cost. The cost and the net price are each rounded
@@ -135,31 +154,30 @@ export const load: ServerLoad = async (event) => {
 	// every photo a URL (the bytes are served by /menu/images/[id]).
 	return {
 		currency: format ? { code: format.code, exponent: format.exponent } : null,
+		rateOptions,
 		categories: menu.categories.map((category) => ({
 			id: category.id,
 			name: category.name,
 			itemCount: menu.items.filter((item) => item.categoryId === category.id).length
 		})),
 		uncategorisedCount: menu.items.filter((item) => item.categoryId === null).length,
-		items: menu.items.map((item) => {
-			const rate = rateOf(item);
-			return {
-				id: item.id,
-				categoryId: item.categoryId,
-				name: item.name,
-				price: amount(item.priceMinor),
-				// 'Tax 10%', or 'restaurant rate' while nothing resolves.
-				taxRate: rate ? `${rate.name} ${formatTaxRate(rate.rateBp)}` : formatTaxRate(null),
-				taxRateId: item.taxRateId,
-				isAvailable: item.isAvailable,
-				imageUrl: item.imageId ? dashboardImageUrl(item.imageId) : null,
-				cost: costOf(item.id),
-				margin: marginOf(item),
-				groupIds: menu.links
-					.filter((link) => link.menuItemId === item.id)
-					.map((link) => link.modifierGroupId)
-			};
-		}),
+		items: menu.items.map((item) => ({
+			id: item.id,
+			categoryId: item.categoryId,
+			name: item.name,
+			price: amount(item.priceMinor),
+			// 'Default (Tax 10.00%)' while the item follows the default, else the named
+			// rate it is pinned to, 'Exempt 0.00%' (T-32).
+			taxRate: itemTaxRateLabel(item.taxRateId, rates, defaultRate),
+			taxRateId: item.taxRateId,
+			isAvailable: item.isAvailable,
+			imageUrl: item.imageId ? dashboardImageUrl(item.imageId) : null,
+			cost: costOf(item.id),
+			margin: marginOf(item),
+			groupIds: menu.links
+				.filter((link) => link.menuItemId === item.id)
+				.map((link) => link.modifierGroupId)
+		})),
 		groups: menu.modifierGroups.map((group) => ({
 			id: group.id,
 			name: group.name,
@@ -213,15 +231,19 @@ export const actions: Actions = {
 		if (!parsed.success) return fail(400, { message: firstMessage(parsed.error) });
 		const price = parsePriceInput(parsed.data.price, format.exponent);
 		if (!price.ok) return fail(400, { message: price.message });
+		// T-32: '' or no field = Default (null — the item follows the restaurant's
+		// default rate); an id must be a live rate of this restaurant, which
+		// createItem checks (invalid_tax_rate otherwise).
+		const rate = parseTaxRateChoice(form.get('taxRateId'));
+		if (!rate.ok) return fail(400, { message: rate.message });
 
-		// T-13: no rate is passed, so a new item takes the restaurant's default rate.
-		// The named-rate choice arrives with T-32.
 		const result = await db.transaction((tx) =>
 			createItem(tx, restaurantId, {
 				// null = no category (the till's "Other" tab).
 				categoryId: parsed.data.categoryId,
 				name: parsed.data.name,
-				priceMinor: toBigInt(price.minor)
+				priceMinor: toBigInt(price.minor),
+				taxRateId: rate.value
 			})
 		);
 		if (!result.ok) {
@@ -256,19 +278,25 @@ export const actions: Actions = {
 			if (!price.ok) return fail(400, { message: price.message });
 			priceMinor = toBigInt(price.minor);
 		}
+		// T-32: the panel always carries the select; '' puts the item back on the
+		// restaurant's default rate (null), an id pins it to that rate.
+		const rate = parseTaxRateChoice(form.get('taxRateId'));
+		if (!rate.ok) return fail(400, { message: rate.message });
 
 		const { ip, userAgent } = requestContext(event);
-		// The price change and its menu.price_changed audit row commit together.
+		// The price change and its menu.price_changed audit row — and the rate change
+		// and its menu.item_tax_rate_changed row (T-13) — commit together.
 		const result = await db.transaction((tx) =>
 			updateItem(
 				tx,
 				restaurantId,
 				parsed.data.itemId,
-				// categoryId null moves the item to "No category". No rate is passed
-				// (T-13), so an edited item keeps its rate; T-32 adds the choice.
+				// categoryId null moves the item to "No category"; taxRateId null is
+				// Default. An unchanged form writes nothing and audits nothing.
 				{
 					name: parsed.data.name,
 					priceMinor,
+					taxRateId: rate.value,
 					categoryId: parsed.data.categoryId
 				},
 				{ actorUserId: user.userId, ip, userAgent }
