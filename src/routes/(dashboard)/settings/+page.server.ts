@@ -8,8 +8,13 @@ import {
 	timeZoneSuggestions
 } from '$lib/server/restaurants';
 import { requestContext } from '$lib/server/audit';
-import { TAX_MODES } from '$lib/money/tax';
 import { SUPPORTED_CURRENCIES } from '$lib/money/format';
+
+// THE GENERAL SETTINGS PAGE: the restaurant's name, its time zone and its one
+// currency (tasks/settings-tax-payments-receipt T-27, gate decision 8). The tax
+// mode and the default rate live on /settings/tax (T-28), the payment methods on
+// /settings/payments (T-29) and the receipt text on /settings/receipt (T-31).
+// Nothing here reads or writes those columns any more.
 
 export const load: ServerLoad = async (event) => {
 	requirePermission(event, 'admin.settings');
@@ -28,57 +33,25 @@ export const load: ServerLoad = async (event) => {
 		// that are perfectly valid.
 		timeZones: timeZoneSuggestions(),
 		// Null until the owner chooses — rendered as an empty field, never a default.
-		taxMode: restaurant.taxMode,
 		currencyCode: restaurant.currencyCode,
-		acceptsCard: restaurant.acceptsCard,
-		acceptsMobile: restaurant.acceptsMobile,
-		// Receipt header text (T-21): '' for null, for the inputs.
-		receiptAddress: restaurant.receiptAddress ?? '',
-		receiptPhone: restaurant.receiptPhone ?? '',
-		taxRegistrationNumber: restaurant.taxRegistrationNumber ?? '',
-		receiptFooter: restaurant.receiptFooter ?? '',
-		taxModes: [...TAX_MODES],
 		supportedCurrencies: Object.keys(SUPPORTED_CURRENCIES)
 	};
 };
 
-const TAX_MODE_MESSAGE = 'Choose a tax mode of exclusive or inclusive.';
 const CURRENCY_MESSAGE = 'That currency code is not one this system can format.';
 
 const settingsSchema = z.object({
 	name: z.string().trim().min(1, 'Enter the restaurant name').max(200),
 	timeZone: z.string().trim().min(1, 'Choose a time zone').max(100),
-	// OPTIONAL, both: a blank field means "not submitted, leave it alone",
-	// never "clear it" (optionalField below). updateSettings validates each again.
-	// The default TAX RATE is no longer a field here: it is a named rate, chosen on
-	// /settings/tax (tasks/settings-tax-payments-receipt T-13, T-28).
-	taxMode: z.enum(TAX_MODES, { error: TAX_MODE_MESSAGE }).optional(),
+	// OPTIONAL: a blank field means "not submitted, leave it alone", never "clear
+	// it" (optionalField below). updateSettings validates it again.
 	currencyCode: z
 		.string()
 		.trim()
 		.toUpperCase()
 		.refine((code) => Object.hasOwn(SUPPORTED_CURRENCIES, code), CURRENCY_MESSAGE)
-		.optional(),
-	acceptsCard: z.enum(['unset', 'yes', 'no']).optional(),
-	acceptsMobile: z.enum(['unset', 'yes', 'no']).optional(),
-	// Receipt header text (T-21). Unlike the fields above, a BLANK submitted value
-	// means "clear it": these do not go through optionalField — see clearable().
-	receiptAddress: z.string().optional(),
-	receiptPhone: z.string().optional(),
-	taxRegistrationNumber: z.string().optional(),
-	receiptFooter: z.string().optional()
+		.optional()
 });
-
-/** A receipt field: absent = not submitted (undefined); blank = clear (null). */
-function clearable(value: string | undefined): string | null | undefined {
-	if (value === undefined) return undefined;
-	return value.trim() === '' ? null : value;
-}
-
-function tender(value: 'unset' | 'yes' | 'no' | undefined): boolean | undefined {
-	if (value === undefined || value === 'unset') return undefined;
-	return value === 'yes';
-}
 
 /** A blank or absent optional field is "not submitted": undefined, BEFORE parsing. */
 function optionalField(value: FormDataEntryValue | null): FormDataEntryValue | undefined {
@@ -96,18 +69,14 @@ export const actions: Actions = {
 		const restaurantId = event.locals.restaurantId;
 		if (!restaurantId) error(500, 'No restaurant in scope');
 
+		// ONLY these three fields are read. A posted tax mode, tender or receipt
+		// field is IGNORED, never forwarded: those settings belong to their own
+		// pages now, and this action must not stay a back door to them.
 		const form = await event.request.formData();
 		const parsed = settingsSchema.safeParse({
 			name: form.get('name'),
 			timeZone: form.get('timeZone'),
-			taxMode: optionalField(form.get('taxMode')),
-			currencyCode: optionalField(form.get('currencyCode')),
-			acceptsCard: optionalField(form.get('acceptsCard')),
-			acceptsMobile: optionalField(form.get('acceptsMobile')),
-			receiptAddress: form.get('receiptAddress') ?? undefined,
-			receiptPhone: form.get('receiptPhone') ?? undefined,
-			taxRegistrationNumber: form.get('taxRegistrationNumber') ?? undefined,
-			receiptFooter: form.get('receiptFooter') ?? undefined
+			currencyCode: optionalField(form.get('currencyCode'))
 		});
 
 		if (!parsed.success) {
@@ -125,14 +94,7 @@ export const actions: Actions = {
 				{
 					name: parsed.data.name,
 					timeZone: parsed.data.timeZone,
-					taxMode: parsed.data.taxMode,
-					currencyCode: parsed.data.currencyCode,
-					acceptsCard: tender(parsed.data.acceptsCard),
-					acceptsMobile: tender(parsed.data.acceptsMobile),
-					receiptAddress: clearable(parsed.data.receiptAddress),
-					receiptPhone: clearable(parsed.data.receiptPhone),
-					taxRegistrationNumber: clearable(parsed.data.taxRegistrationNumber),
-					receiptFooter: clearable(parsed.data.receiptFooter)
+					currencyCode: parsed.data.currencyCode
 				},
 				{ actorUserId: user.userId, ip, userAgent }
 			)
@@ -141,11 +103,7 @@ export const actions: Actions = {
 		if (!result.ok) {
 			const messages: Partial<Record<typeof result.reason, string>> = {
 				invalid_time_zone: 'That time zone is not recognised.',
-				invalid_tax_mode: TAX_MODE_MESSAGE,
-				invalid_currency: CURRENCY_MESSAGE,
-				invalid_tender: 'Choose Accepted or Not accepted for each payment method.',
-				invalid_receipt_field:
-					'Receipt text must be plain text: address and footer up to 120 characters, phone and tax number up to 40.'
+				invalid_currency: CURRENCY_MESSAGE
 			};
 			return fail(400, {
 				message: messages[result.reason] ?? 'Those settings could not be saved.'
