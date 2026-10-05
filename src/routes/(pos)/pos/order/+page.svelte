@@ -32,9 +32,10 @@
 		type Cart
 	} from '$lib/pos/orders';
 	import {
-		formatTaxRate,
 		itemsByCategory,
+		lineTaxRateText,
 		modifierGroupsFor,
+		resolveTaxRate,
 		type MenuGroup,
 		type MenuItem
 	} from '$lib/pos/menu-view';
@@ -137,7 +138,7 @@
 				negative: m.priceDeltaMinor < 0n
 			})),
 			unitPrice: formatAmount(minor(line.unitPriceMinor), money),
-			taxRate: formatTaxRate(line.taxRateBp),
+			taxRate: lineTaxRateText(line),
 			amount: formatAmount(figures.amounts[i], money)
 		}));
 	});
@@ -152,6 +153,19 @@
 			total: formatMoney(figures.totals.total, format)
 		};
 	});
+
+	// The grid key's "Tax 0%" hint, from the item's RESOLVED rate. A template
+	// must never throw: an item with no rate at all (resolveTaxRate throws) reads
+	// as not zero-rated here, and the cashier hears about it on the tap, from the
+	// catch in tapItem.
+	function zeroRated(item: MenuItem): boolean {
+		if (menu === null) return false;
+		try {
+			return resolveTaxRate(item, menu).rateBp === 0;
+		} catch {
+			return false;
+		}
+	}
 
 	async function loadMenu() {
 		menu = await readMenu().catch(() => null);
@@ -270,7 +284,7 @@
 		error = '';
 		if (item.modifierGroupIds.length === 0) {
 			try {
-				await added(addLine(cart, item, menu.taxRateBp));
+				await added(addLine(cart, item, resolveTaxRate(item, menu)));
 			} catch (err) {
 				error = `✕ ${err instanceof Error ? err.message : 'The item could not be added'}`;
 			}
@@ -303,7 +317,7 @@
 			g.modifiers.filter((m) => (chosen[g.id] ?? []).includes(m.id))
 		);
 		try {
-			await added(addLine(cart, panelItem, menu.taxRateBp, picked));
+			await added(addLine(cart, panelItem, resolveTaxRate(panelItem, menu), picked));
 			panelItem = null;
 		} catch (err) {
 			error = `✕ ${err instanceof Error ? err.message : 'The item could not be added'}`;
@@ -686,7 +700,7 @@
 								? 'Unavailable'
 								: item.modifierGroupIds.length > 0
 									? 'Options'
-									: item.taxRateBp === 0
+									: zeroRated(item)
 										? 'Tax 0%'
 										: ''}
 							<li>

@@ -42,7 +42,7 @@ function deleteDatabase(): Promise<void> {
 const TOKEN = 'ab'.repeat(32);
 const NOW_MS = Date.parse('2026-09-29T09:00:00Z');
 
-const tea: MenuItemForCart = { id: 'item-tea', name: 'Tea', priceMinor: 850n, taxRateBp: 1000 };
+const tea: MenuItemForCart = { id: 'item-tea', name: 'Tea', priceMinor: 850n };
 
 beforeEach(async () => {
 	await deleteDatabase();
@@ -105,10 +105,15 @@ async function sell(
 ) {
 	const deviceId = over.deviceId ?? 'device-A';
 	let cart = newCart(deviceId, over.orderType ?? 'takeaway', null, over.now ?? new Date(NOW_MS));
-	cart = addLine(cart, tea, 1000);
+	cart = addLine(cart, tea, { id: null, name: null, rateBp: 1000 });
 	return completeSale({
 		cart,
-		payment: { method, tenderedMinor: method === 'cash' ? 1000n : null },
+		payment: {
+			method,
+			tenderedMinor: method === 'cash' ? 1000n : null,
+			paymentMethodId: null,
+			paymentMethodName: null
+		},
 		employeeId: 'emp-1',
 		deviceId,
 		deviceCode: 'POS1',

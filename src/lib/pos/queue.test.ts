@@ -39,8 +39,7 @@ function deleteDatabase(): Promise<void> {
 const tea: MenuItemForCart = {
 	id: 'item-tea',
 	name: 'Tea',
-	priceMinor: 850n,
-	taxRateBp: 1000
+	priceMinor: 850n
 };
 
 beforeEach(async () => {
@@ -76,10 +75,15 @@ function makeMockFetch(script: ScriptedReply[]): {
 
 async function seedSale(deviceCode: string, invoiceSeq = 1): Promise<string> {
 	let cart = newCart('device-A', 'takeaway', null, NOW);
-	cart = addLine(cart, tea, 1000);
+	cart = addLine(cart, tea, { id: null, name: null, rateBp: 1000 });
 	const result = await completeSale({
 		cart,
-		payment: { method: 'cash', tenderedMinor: 5000n },
+		payment: {
+			method: 'cash',
+			tenderedMinor: 5000n,
+			paymentMethodId: null,
+			paymentMethodName: null
+		},
 		employeeId: 'emp-1',
 		deviceId: 'device-A',
 		deviceCode,
@@ -301,10 +305,15 @@ describe('flush — parking and rejects', () => {
 
 	it('403 not_permitted on a card sale abandons it and sends the abandon in the same run', async () => {
 		let cart = newCart('device-A', 'takeaway', null, NOW);
-		cart = addLine(cart, tea, 1000);
+		cart = addLine(cart, tea, { id: null, name: null, rateBp: 1000 });
 		const sale = await completeSale({
 			cart,
-			payment: { method: 'card', tenderedMinor: null },
+			payment: {
+				method: 'card',
+				tenderedMinor: null,
+				paymentMethodId: null,
+				paymentMethodName: null
+			},
 			employeeId: 'emp-1',
 			deviceId: 'device-A',
 			deviceCode: 'POS1',
@@ -331,10 +340,15 @@ describe('flush — parking and rejects', () => {
 
 	it('422 rejected on a card sale emits rejected with http 422 and the flag', async () => {
 		let cart = newCart('device-A', 'takeaway', null, NOW);
-		cart = addLine(cart, tea, 1000);
+		cart = addLine(cart, tea, { id: null, name: null, rateBp: 1000 });
 		await completeSale({
 			cart,
-			payment: { method: 'card', tenderedMinor: null },
+			payment: {
+				method: 'card',
+				tenderedMinor: null,
+				paymentMethodId: null,
+				paymentMethodName: null
+			},
 			employeeId: 'emp-1',
 			deviceId: 'device-A',
 			deviceCode: 'POS1',

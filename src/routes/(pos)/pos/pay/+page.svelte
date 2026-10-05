@@ -35,7 +35,7 @@
 		type LocalMenu,
 		type LocalSession
 	} from '$lib/pos/store';
-	import { formatTaxRate } from '$lib/pos/menu-view';
+	import { lineTaxRateText } from '$lib/pos/menu-view';
 	import Icon, { type IconName } from '$lib/components/ui/Icon.svelte';
 	import Check from '$lib/components/pos/Check.svelte';
 	import Closer from '$lib/components/pos/Closer.svelte';
@@ -237,7 +237,13 @@
 				taxMode,
 				currencyCode: menu.currency as string,
 				menuVersion: menu.version,
-				payment: { method, tenderedMinor: method === 'cash' ? cashTendered : null },
+				payment: {
+					method,
+					tenderedMinor: method === 'cash' ? cashTendered : null,
+					// T-22 passes the chosen method's id and name.
+					paymentMethodId: null,
+					paymentMethodName: null
+				},
 				now: new Date(),
 				// Kept on the local order for the receipt (T-18).
 				cashierName: signedIn.current.displayName,
@@ -339,7 +345,7 @@
 				negative: m.priceDeltaMinor < 0n
 			})),
 			unitPrice: formatAmount(minor(line.unitPriceMinor), money),
-			taxRate: formatTaxRate(line.taxRateBp),
+			taxRate: lineTaxRateText(line),
 			amount: formatAmount(figures.amounts[i], money)
 		}));
 	});

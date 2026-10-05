@@ -1,16 +1,20 @@
 // The local cart, completeSale in ONE IndexedDB transaction, and abandonSale.
 //
-// Money arithmetic in this file is exactly one call — cartTotals delegates to
-// computeOrderTotals (invariant 1, 7). The completeSale transaction bundles
-// the completed order row, the invoice number, the queue seq and the queue
-// entry together: they land as one atomic write, and an aborted transaction
-// (a caller error, a browser tab close) burns nothing (invariant 5, spec 6).
+// Every money figure in this file is a call into src/lib/money (invariants 1,
+// 7): the totals come from computeOrderTotals (cartTotals), the per-rate tax
+// breakdown from taxBreakdown, the change from changeDue, and the line amounts
+// from the money module's add/multiplyByInteger (lineAmounts). Nothing rounds
+// here. The completeSale transaction bundles the completed order row, the
+// invoice number, the queue seq and the queue entry together: they land as one
+// atomic write, and an aborted transaction (a caller error, a browser tab
+// close) burns nothing (invariant 5, spec 6).
 
 import { withDb, valueOf, signalUnsyncedChange, type LocalOrder } from './store';
-import { computeOrderTotals, type OrderTotals } from '../money/order-totals';
+import { computeOrderTotals, taxBreakdown, type OrderTotals } from '../money/order-totals';
 import { changeDue } from '../money/change';
 import { add, minor, multiplyByInteger, ROUNDING_RULE, sum, type Minor } from '../money';
 import type { TaxMode } from '../money/tax';
+import type { ResolvedTaxRate } from './menu-view';
 import {
 	PAYMENT_METHODS,
 	type OpEnvelope,
@@ -35,6 +39,12 @@ export type CartLine = {
 	quantity: number;
 	unitPriceMinor: bigint;
 	taxRateBp: number;
+	/** The named rate the line was added at (invariant 7). Null when the till's
+	 * menu was a format-1 copy, in which case the server infers the rate (T-15).
+	 * A cart saved by the previous build has neither key, so every reader
+	 * writes `?? null`. */
+	taxRateId: string | null;
+	taxRateName: string | null;
 	discountMinor: 0n;
 	modifiers: CartModifier[];
 };
@@ -53,12 +63,13 @@ export type Cart = {
 };
 
 /** Item shape addLine consumes — a subset of the menu snapshot after the
- * caller has converted priceMinor to bigint. */
+ * caller has converted priceMinor to bigint. It carries NO rate: the rate
+ * arrives resolved (resolveTaxRate in menu-view.ts), so no caller can think
+ * the item's own number is read here. */
 export type MenuItemForCart = {
 	id: string;
 	name: string;
 	priceMinor: bigint;
-	taxRateBp: number | null;
 };
 
 export type MenuModifierForCart = {
@@ -108,17 +119,22 @@ function requireQuantity(quantity: number): void {
 	}
 }
 
+/**
+ * Add one line, snapshotting the RESOLVED rate on it — number, id and name
+ * (invariant 7). The caller resolves the rate (resolveTaxRate), which throws
+ * for a missing one before this is reached; here the number only has to be a
+ * rate at all. A rate of 0 is a rate, not "unset".
+ */
 export function addLine(
 	cart: Cart,
 	item: MenuItemForCart,
-	restaurantTaxRateBp: number | null,
+	rate: ResolvedTaxRate,
 	modifiers: MenuModifierForCart[] = [],
 	quantity = 1
 ): Cart {
 	requireQuantity(quantity);
-	const taxRateBp = item.taxRateBp ?? restaurantTaxRateBp;
-	if (taxRateBp === null) {
-		throw new Error('No tax rate is configured. The owner sets one on /settings.');
+	if (!Number.isInteger(rate.rateBp) || rate.rateBp < 0 || rate.rateBp > 10000) {
+		throw new Error('tax rate must be an integer number of basis points from 0 to 10000');
 	}
 	const line: CartLine = {
 		lineId: secureId(),
@@ -127,7 +143,9 @@ export function addLine(
 		itemName: item.name,
 		quantity,
 		unitPriceMinor: item.priceMinor,
-		taxRateBp,
+		taxRateBp: rate.rateBp,
+		taxRateId: rate.id,
+		taxRateName: rate.name,
 		discountMinor: 0n,
 		modifiers: modifiers.map((m) => ({
 			modifierId: m.id,
@@ -257,7 +275,17 @@ export function lineAmounts(cart: Cart): Minor[] {
 
 export type CompleteSaleArgs = {
 	cart: Cart;
-	payment: { method: 'cash' | 'card' | 'mobile'; tenderedMinor: bigint | null };
+	/** The tender's KIND and, for cash, what was handed over. `paymentMethodId`
+	 * and `paymentMethodName` are the owner-named method the sale was taken with
+	 * (settings-tax-payments-receipt T-19): both REQUIRED, so no caller can
+	 * forget them; null means "this till does not know the method", and the
+	 * server then resolves it by kind (T-15). */
+	payment: {
+		method: 'cash' | 'card' | 'mobile';
+		tenderedMinor: bigint | null;
+		paymentMethodId: string | null;
+		paymentMethodName: string | null;
+	};
 	employeeId: string;
 	deviceId: string;
 	deviceCode: string;
@@ -313,6 +341,16 @@ export async function completeSale(
 ): Promise<CompleteSaleResult> {
 	validateBeforeTx(args);
 	const totals = cartTotals(args.cart, args.taxMode);
+	// The per-rate split of totals.tax, for the receipt — from the SAME lines in
+	// the SAME order (taxBreakdown pairs lineRates[i] with totals.lines[i]); its
+	// rows sum to totals.tax by construction (invariant 7: one rounding rule, in
+	// the money module). Computed BEFORE the transaction opens, like every other
+	// figure here. A line saved by the previous build has no name key.
+	const breakdown = taxBreakdown(
+		totals,
+		args.cart.lines.map((l) => ({ rateBp: l.taxRateBp, name: l.taxRateName ?? null })),
+		ROUNDING_RULE
+	);
 	const changeMinor =
 		args.payment.method === 'cash'
 			? changeDue(minor(args.payment.tenderedMinor as bigint), totals.total)
@@ -345,6 +383,11 @@ export async function completeSale(
 			quantity: l.quantity,
 			unitPriceMinor: l.unitPriceMinor.toString(),
 			taxRateBp: l.taxRateBp,
+			// settings-tax-payments-receipt T-19: the named rate, optional on the
+			// wire (T-14). This till always sends both keys — null when the rate
+			// came from a format-1 copy or the cart was saved by the previous build.
+			taxRateId: l.taxRateId ?? null,
+			taxRateName: l.taxRateName ?? null,
 			discountMinor: '0',
 			modifiers: l.modifiers.map((m) => ({
 				modifierId: m.modifierId,
@@ -365,7 +408,11 @@ export async function completeSale(
 				amountMinor: totals.total.toString(),
 				tenderedMinor:
 					args.payment.method === 'cash' ? (args.payment.tenderedMinor as bigint).toString() : null,
-				changeMinor: changeMinor === null ? null : changeMinor.toString()
+				changeMinor: changeMinor === null ? null : changeMinor.toString(),
+				// The owner-named method (T-14, optional on the wire): sent as null
+				// when this till does not know it, the way `note` is sent.
+				paymentMethodId: args.payment.paymentMethodId,
+				paymentMethodName: args.payment.paymentMethodName
 			}
 		]
 	};
@@ -399,7 +446,14 @@ export async function completeSale(
 								lineAmountsMinor: amounts.map((a) => a.toString()),
 								cashierName: args.cashierName,
 								completedAt: occurredAt,
-								businessDate: args.businessDate
+								businessDate: args.businessDate,
+								// Decimal strings: a bigint cannot cross JSON, and IndexedDB keeps
+								// the string the receipt prints (T-23 reads it).
+								taxBreakdown: breakdown.map((row) => ({
+									name: row.name,
+									rateBp: row.rateBp,
+									taxMinor: row.tax.toString()
+								}))
 							}
 						} satisfies LocalOrder<Cart>);
 						const envelope: OpEnvelope<'sale.complete', SaleCompletePayload> = {

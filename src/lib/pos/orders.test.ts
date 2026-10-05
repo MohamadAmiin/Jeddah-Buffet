@@ -2,8 +2,10 @@ import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ROUNDING_RULE, minor } from '../money';
 import { computeOrderTotals } from '../money/order-totals';
+import type { TaxMode } from '../money/tax';
 import { withDb, inTransaction, countUnsynced, type QueueEntry, type LocalOrder } from './store';
 import { readSequence } from './invoice-sequence';
+import type { ResolvedTaxRate } from './menu-view';
 import {
 	abandonSale,
 	addLine,
@@ -16,6 +18,7 @@ import {
 	setNote,
 	setOrderType,
 	type Cart,
+	type CartLine,
 	type MenuItemForCart,
 	type MenuModifierForCart
 } from './orders';
@@ -35,17 +38,21 @@ beforeEach(async () => {
 	await deleteDatabase();
 });
 
+// settings-tax-payments-receipt T-19: addLine takes the RESOLVED rate — number,
+// id and name. LEGACY is what a format-1 menu copy resolves to (ids null).
+const VAT: ResolvedTaxRate = { id: 'rate-vat', name: 'VAT', rateBp: 825 };
+const REDUCED: ResolvedTaxRate = { id: 'rate-red', name: 'Reduced', rateBp: 500 };
+const LEGACY: ResolvedTaxRate = { id: null, name: null, rateBp: 825 };
+
 const tea: MenuItemForCart = {
 	id: 'item-tea',
 	name: 'Tea',
-	priceMinor: 850n,
-	taxRateBp: null
+	priceMinor: 850n
 };
 const coffee: MenuItemForCart = {
 	id: 'item-coffee',
 	name: 'Coffee',
-	priceMinor: 999n,
-	taxRateBp: null
+	priceMinor: 999n
 };
 const cream: MenuModifierForCart = {
 	id: 'mod-cream',
@@ -81,20 +88,34 @@ describe('cart primitives', () => {
 		expect(newCart('device-A', 'dine_in', 'x'.repeat(32), NOW).tableLabel).toBe('x'.repeat(32));
 	});
 
-	it('addLine resolves the rate: item override wins; both null throws; removeLine renumbers', () => {
-		let c = newCart('device-A', 'takeaway', null, NOW);
-		c = addLine(c, tea, 825);
-		expect(c.lines[0].taxRateBp).toBe(825);
-		c = addLine(c, { ...tea, taxRateBp: 500 }, 825);
-		expect(c.lines[1].taxRateBp).toBe(500);
-		expect(() => addLine(newCart('device-A', 'takeaway', null, NOW), tea, null)).toThrow(
-			/tax rate/
-		);
+	it('addLine snapshots the resolved rate: number, id and name', () => {
+		const c = newCart('device-A', 'takeaway', null, NOW);
+		expect(addLine(c, tea, VAT).lines[0]).toMatchObject({
+			taxRateBp: 825,
+			taxRateId: 'rate-vat',
+			taxRateName: 'VAT'
+		});
+		expect(addLine(c, tea, LEGACY).lines[0]).toMatchObject({
+			taxRateBp: 825,
+			taxRateId: null,
+			taxRateName: null
+		});
+		// 0 is a rate, not "unset".
+		expect(addLine(c, tea, { id: 'r0', name: 'Exempt', rateBp: 0 }).lines[0]).toMatchObject({
+			taxRateBp: 0,
+			taxRateId: 'r0',
+			taxRateName: 'Exempt'
+		});
+		for (const rateBp of [8.25, -1, 10001]) {
+			expect(() => addLine(c, tea, { id: null, name: null, rateBp })).toThrow(/basis points/);
+		}
+	});
 
+	it('removeLine renumbers; changeQuantity is absolute', () => {
 		let d = newCart('device-A', 'takeaway', null, NOW);
-		d = addLine(d, tea, 825);
-		d = addLine(d, tea, 825);
-		d = addLine(d, tea, 825);
+		d = addLine(d, tea, VAT);
+		d = addLine(d, tea, VAT);
+		d = addLine(d, tea, VAT);
 		const middleId = d.lines[1].lineId;
 		d = removeLine(d, middleId);
 		expect(d.lines.map((l) => l.lineNo)).toEqual([1, 2]);
@@ -106,8 +127,8 @@ describe('cart primitives', () => {
 describe('cartTotals', () => {
 	it("delegates to computeOrderTotals; till's number IS the money module's", () => {
 		let c = newCart('device-A', 'takeaway', null, NOW);
-		c = addLine(c, tea, 825, [cream], 2);
-		c = addLine(c, coffee, 825);
+		c = addLine(c, tea, VAT, [cream], 2);
+		c = addLine(c, coffee, VAT);
 		const t = cartTotals(c, 'exclusive');
 		const expected = computeOrderTotals(
 			{
@@ -132,8 +153,8 @@ describe('cartTotals', () => {
 describe('completeSale', () => {
 	async function buildCart(): Promise<Cart> {
 		let c = newCart('device-A', 'takeaway', null, NOW);
-		c = addLine(c, tea, 825, [cream], 2);
-		c = addLine(c, coffee, 825);
+		c = addLine(c, tea, VAT, [cream], 2);
+		c = addLine(c, coffee, VAT);
 		return c;
 	}
 
@@ -141,7 +162,12 @@ describe('completeSale', () => {
 		const cart = await buildCart();
 		const result = await completeSale({
 			cart,
-			payment: { method: 'cash', tenderedMinor: 5000n },
+			payment: {
+				method: 'cash',
+				tenderedMinor: 5000n,
+				paymentMethodId: null,
+				paymentMethodName: null
+			},
 			employeeId: 'emp-1',
 			deviceId: 'device-A',
 			deviceCode: 'POS1',
@@ -175,10 +201,15 @@ describe('completeSale', () => {
 	// menu-and-printing T-17: delivery rides in the queued payload unchanged.
 	it("a delivery cart completes with orderType 'delivery' and tableLabel null in the queued payload", async () => {
 		let cart = newCart('device-A', 'delivery', 'ignored', NOW);
-		cart = addLine(cart, tea, 825);
+		cart = addLine(cart, tea, VAT);
 		const result = await completeSale({
 			cart,
-			payment: { method: 'cash', tenderedMinor: 5000n },
+			payment: {
+				method: 'cash',
+				tenderedMinor: 5000n,
+				paymentMethodId: null,
+				paymentMethodName: null
+			},
 			employeeId: 'emp-1',
 			deviceId: 'device-A',
 			deviceCode: 'POS1',
@@ -203,7 +234,12 @@ describe('completeSale', () => {
 		const cart = await buildCart();
 		const result = await completeSale({
 			cart,
-			payment: { method: 'cash', tenderedMinor: 5000n },
+			payment: {
+				method: 'cash',
+				tenderedMinor: 5000n,
+				paymentMethodId: null,
+				paymentMethodName: null
+			},
 			employeeId: 'emp-1',
 			deviceId: 'device-A',
 			deviceCode: 'POS1',
@@ -226,13 +262,101 @@ describe('completeSale', () => {
 		expect(order?.sale?.businessDate).toBe('2026-09-28');
 		expect(order?.sale?.completedAt).toBe(NOW.toISOString());
 		expect(order?.printed).toBeUndefined();
+		// settings-tax-payments-receipt T-19: the per-rate breakdown, stored as
+		// decimal strings beside the payload, equals the payload's stored tax.
+		expect(order?.sale?.taxBreakdown).toEqual([{ name: 'VAT', rateBp: 825, taxMinor: '231' }]);
+		expect(order?.sale?.payload.totals.taxMinor).toBe('231');
+	});
+
+	it('payload lines carry the rate id and name; a legacy line sends nulls', async () => {
+		let cart = newCart('device-A', 'takeaway', null, NOW);
+		cart = addLine(cart, tea, VAT);
+		cart = addLine(cart, coffee, LEGACY);
+		await completeSale({
+			cart,
+			payment: {
+				method: 'cash',
+				tenderedMinor: 5000n,
+				paymentMethodId: null,
+				paymentMethodName: null
+			},
+			employeeId: 'emp-1',
+			deviceId: 'device-A',
+			deviceCode: 'POS1',
+			posSessionId: 'ses-1',
+			taxMode: 'exclusive',
+			currencyCode: 'USD',
+			menuVersion: 1,
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
+		});
+		const [entry] = await readQueue();
+		const { lines } = entry.envelope.payload as {
+			lines: { taxRateBp: number; taxRateId: unknown; taxRateName: unknown }[];
+		};
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toMatchObject({ taxRateBp: 825, taxRateId: 'rate-vat', taxRateName: 'VAT' });
+		expect(lines[1]).toMatchObject({ taxRateBp: 825, taxRateId: null, taxRateName: null });
+	});
+
+	it('a cart saved by the previous build sends null ids', async () => {
+		const built = await buildCart();
+		// The previous build's CartLine had neither key at all.
+		const cart: Cart = {
+			...built,
+			lines: built.lines.map((l) => {
+				const legacy: Partial<CartLine> = { ...l };
+				delete legacy.taxRateId;
+				delete legacy.taxRateName;
+				return legacy as CartLine;
+			})
+		};
+		expect('taxRateId' in cart.lines[0]).toBe(false);
+		await completeSale({
+			cart,
+			payment: {
+				method: 'cash',
+				tenderedMinor: 5000n,
+				paymentMethodId: null,
+				paymentMethodName: null
+			},
+			employeeId: 'emp-1',
+			deviceId: 'device-A',
+			deviceCode: 'POS1',
+			posSessionId: 'ses-1',
+			taxMode: 'exclusive',
+			currencyCode: 'USD',
+			menuVersion: 1,
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
+		});
+		const [entry] = await readQueue();
+		const { lines } = entry.envelope.payload as {
+			lines: { taxRateId: unknown; taxRateName: unknown }[];
+		};
+		expect(lines).toHaveLength(2);
+		for (const line of lines) {
+			expect(line.taxRateId).toBeNull();
+			expect(line.taxRateName).toBeNull();
+		}
+		// The breakdown groups the nameless lines under one null-named row.
+		expect((await readOrder(cart.orderId))?.sale?.taxBreakdown).toEqual([
+			{ name: null, rateBp: 825, taxMinor: '231' }
+		]);
 	});
 
 	it('completeSale carries the note in the queued payload, and null without one', async () => {
 		const withNote = setNote(await buildCart(), 'no onions');
 		await completeSale({
 			cart: withNote,
-			payment: { method: 'cash', tenderedMinor: 5000n },
+			payment: {
+				method: 'cash',
+				tenderedMinor: 5000n,
+				paymentMethodId: null,
+				paymentMethodName: null
+			},
 			employeeId: 'emp-1',
 			deviceId: 'device-A',
 			deviceCode: 'POS1',
@@ -247,7 +371,12 @@ describe('completeSale', () => {
 		const plain = await buildCart();
 		await completeSale({
 			cart: plain,
-			payment: { method: 'cash', tenderedMinor: 5000n },
+			payment: {
+				method: 'cash',
+				tenderedMinor: 5000n,
+				paymentMethodId: null,
+				paymentMethodName: null
+			},
 			employeeId: 'emp-1',
 			deviceId: 'device-A',
 			deviceCode: 'POS1',
@@ -271,7 +400,12 @@ describe('completeSale', () => {
 			completeSale(
 				{
 					cart,
-					payment: { method: 'cash', tenderedMinor: 5000n },
+					payment: {
+						method: 'cash',
+						tenderedMinor: 5000n,
+						paymentMethodId: null,
+						paymentMethodName: null
+					},
 					employeeId: 'emp-1',
 					deviceId: 'device-A',
 					deviceCode: 'POS1',
@@ -298,7 +432,12 @@ describe('completeSale', () => {
 	it('two sales get numbers 1 and 2 and different clientOpIds', async () => {
 		const first = await completeSale({
 			cart: await buildCart(),
-			payment: { method: 'cash', tenderedMinor: 5000n },
+			payment: {
+				method: 'cash',
+				tenderedMinor: 5000n,
+				paymentMethodId: null,
+				paymentMethodName: null
+			},
 			employeeId: 'emp-1',
 			deviceId: 'device-A',
 			deviceCode: 'POS1',
@@ -312,7 +451,12 @@ describe('completeSale', () => {
 		});
 		const second = await completeSale({
 			cart: await buildCart(),
-			payment: { method: 'cash', tenderedMinor: 5000n },
+			payment: {
+				method: 'cash',
+				tenderedMinor: 5000n,
+				paymentMethodId: null,
+				paymentMethodName: null
+			},
 			employeeId: 'emp-1',
 			deviceId: 'device-A',
 			deviceCode: 'POS1',
@@ -333,7 +477,12 @@ describe('completeSale', () => {
 		const cart = await buildCart();
 		await completeSale({
 			cart,
-			payment: { method: 'cash', tenderedMinor: 5000n },
+			payment: {
+				method: 'cash',
+				tenderedMinor: 5000n,
+				paymentMethodId: 'pm-cash',
+				paymentMethodName: 'Cash'
+			},
 			employeeId: 'emp-1',
 			deviceId: 'device-A',
 			deviceCode: 'POS1',
@@ -360,7 +509,9 @@ describe('completeSale', () => {
 			method: 'cash',
 			amountMinor: '3030',
 			tenderedMinor: '5000',
-			changeMinor: '1970'
+			changeMinor: '1970',
+			paymentMethodId: 'pm-cash',
+			paymentMethodName: 'Cash'
 		});
 	});
 
@@ -368,7 +519,12 @@ describe('completeSale', () => {
 		const cart = await buildCart();
 		const result = await completeSale({
 			cart,
-			payment: { method: 'card', tenderedMinor: null },
+			payment: {
+				method: 'card',
+				tenderedMinor: null,
+				paymentMethodId: 'pm-evc',
+				paymentMethodName: 'EVC Plus'
+			},
 			employeeId: 'emp-1',
 			deviceId: 'device-A',
 			deviceCode: 'POS1',
@@ -385,9 +541,13 @@ describe('completeSale', () => {
 		const payments = (entry.envelope.payload as { payments: unknown[] }).payments as {
 			tenderedMinor: unknown;
 			changeMinor: unknown;
+			paymentMethodId: unknown;
+			paymentMethodName: unknown;
 		}[];
 		expect(payments[0].tenderedMinor).toBeNull();
 		expect(payments[0].changeMinor).toBeNull();
+		expect(payments[0].paymentMethodId).toBe('pm-evc');
+		expect(payments[0].paymentMethodName).toBe('EVC Plus');
 	});
 
 	it('cash short rejects before writing', async () => {
@@ -395,7 +555,12 @@ describe('completeSale', () => {
 		await expect(
 			completeSale({
 				cart,
-				payment: { method: 'cash', tenderedMinor: 100n },
+				payment: {
+					method: 'cash',
+					tenderedMinor: 100n,
+					paymentMethodId: null,
+					paymentMethodName: null
+				},
 				employeeId: 'emp-1',
 				deviceId: 'device-A',
 				deviceCode: 'POS1',
@@ -415,10 +580,15 @@ describe('completeSale', () => {
 describe('abandonSale', () => {
 	it('marks the order abandoned, cancels its still-pending entry, queues sale.abandoned', async () => {
 		let c = newCart('device-A', 'takeaway', null, NOW);
-		c = addLine(c, tea, 825);
+		c = addLine(c, tea, VAT);
 		const sale = await completeSale({
 			cart: c,
-			payment: { method: 'card', tenderedMinor: null },
+			payment: {
+				method: 'card',
+				tenderedMinor: null,
+				paymentMethodId: null,
+				paymentMethodName: null
+			},
 			employeeId: 'emp-1',
 			deviceId: 'device-A',
 			deviceCode: 'POS1',
@@ -454,10 +624,15 @@ describe('abandonSale', () => {
 describe('unsynced count follows the queue', () => {
 	it('one sale + one open + one (abandon) = 2 pending net', async () => {
 		let c = newCart('device-A', 'takeaway', null, NOW);
-		c = addLine(c, tea, 825);
+		c = addLine(c, tea, VAT);
 		await completeSale({
 			cart: c,
-			payment: { method: 'cash', tenderedMinor: 1000n },
+			payment: {
+				method: 'cash',
+				tenderedMinor: 1000n,
+				paymentMethodId: null,
+				paymentMethodName: null
+			},
 			employeeId: 'emp-1',
 			deviceId: 'device-A',
 			deviceCode: 'POS1',
@@ -487,19 +662,18 @@ describe('unsynced count follows the queue', () => {
 });
 
 describe('T-33 cart helpers', () => {
-	const tea33: MenuItemForCart = { id: 'item-tea', name: 'Tea', priceMinor: 850n, taxRateBp: null };
+	const tea33: MenuItemForCart = { id: 'item-tea', name: 'Tea', priceMinor: 850n };
 	const coffee33: MenuItemForCart = {
 		id: 'item-coffee',
 		name: 'Coffee',
-		priceMinor: 1000n,
-		taxRateBp: null
+		priceMinor: 1000n
 	};
 	const oat: MenuModifierForCart = { id: 'mod-oat', name: 'Oat', priceDeltaMinor: 50n };
 
 	function doneWhenCart(): Cart {
 		let cart = newCart('device-A', 'dine_in', null, NOW);
-		cart = addLine(cart, tea33, 825);
-		cart = addLine(cart, coffee33, 825, [oat]);
+		cart = addLine(cart, tea33, VAT);
+		cart = addLine(cart, coffee33, VAT, [oat]);
 		return cart;
 	}
 
@@ -526,6 +700,75 @@ describe('T-33 cart helpers', () => {
 		const summed = lineAmounts(cart).reduce((acc, v) => acc + v, 0n);
 		expect(summed).toBe(exclusive.subtotal);
 		expect(summed).toBe(inclusive.total);
+	});
+
+	// settings-tax-payments-receipt T-19. The exact line taxes are 70.125 and
+	// 52.5 exclusive, and 64.78… and 50 inclusive: the rows prove the CUMULATIVE
+	// rounding of the money module's taxBreakdown (70 then 123 − 70 = 53), not a
+	// per-row rounding of 52.5 on its own.
+	it('MANDATORY (spec 29): a two-rate cart: totals and breakdown in both tax modes', async () => {
+		const twoRates = (): Cart => {
+			let cart = newCart('device-A', 'dine_in', null, NOW);
+			cart = addLine(cart, tea33, VAT);
+			cart = addLine(cart, coffee33, REDUCED, [oat]);
+			return cart;
+		};
+
+		const exclusive = cartTotals(twoRates(), 'exclusive');
+		expect([exclusive.subtotal, exclusive.discount, exclusive.tax, exclusive.total]).toEqual([
+			1900n,
+			0n,
+			123n,
+			2023n
+		]);
+		const inclusive = cartTotals(twoRates(), 'inclusive');
+		expect([inclusive.subtotal, inclusive.discount, inclusive.tax, inclusive.total]).toEqual([
+			1785n,
+			0n,
+			115n,
+			1900n
+		]);
+
+		const sold = async (taxMode: TaxMode) => {
+			const cart = twoRates();
+			await completeSale({
+				cart,
+				payment: {
+					method: 'cash',
+					tenderedMinor: 5000n,
+					paymentMethodId: null,
+					paymentMethodName: null
+				},
+				employeeId: 'emp-1',
+				deviceId: 'device-A',
+				deviceCode: 'POS1',
+				posSessionId: 'ses-1',
+				taxMode,
+				currencyCode: 'USD',
+				menuVersion: 1,
+				now: NOW,
+				cashierName: 'Sam',
+				businessDate: '2026-09-28'
+			});
+			const sale = (await readOrder(cart.orderId))?.sale;
+			expect(sale).toBeDefined();
+			return { breakdown: sale!.taxBreakdown!, taxMinor: sale!.payload.totals.taxMinor };
+		};
+
+		const soldExclusive = await sold('exclusive');
+		expect(soldExclusive.breakdown).toEqual([
+			{ name: 'VAT', rateBp: 825, taxMinor: '70' },
+			{ name: 'Reduced', rateBp: 500, taxMinor: '53' }
+		]);
+		const soldInclusive = await sold('inclusive');
+		expect(soldInclusive.breakdown).toEqual([
+			{ name: 'VAT', rateBp: 825, taxMinor: '65' },
+			{ name: 'Reduced', rateBp: 500, taxMinor: '50' }
+		]);
+		for (const { breakdown, taxMinor } of [soldExclusive, soldInclusive]) {
+			const rows = breakdown.reduce((acc, row) => acc + BigInt(row.taxMinor), 0n);
+			expect(rows).toBe(BigInt(taxMinor));
+		}
 	});
 
 	// menu-and-printing T-17.
@@ -567,8 +810,8 @@ describe('T-33 cart helpers', () => {
 
 	it('two taps are two lines; quantity is absolute; removal renumbers', () => {
 		let cart = newCart('device-A', 'dine_in', null, NOW);
-		cart = addLine(cart, tea33, 825);
-		cart = addLine(cart, tea33, 825);
+		cart = addLine(cart, tea33, VAT);
+		cart = addLine(cart, tea33, VAT);
 		expect(cart.lines.map((l) => l.lineNo)).toEqual([1, 2]);
 
 		cart = doneWhenCart();
@@ -578,7 +821,7 @@ describe('T-33 cart helpers', () => {
 		expect(lineAmounts(cart)).toEqual([2550n, 1050n]);
 		expect(() => changeQuantity(cart, teaLineId, 0)).toThrow();
 
-		cart = addLine(cart, tea33, 825);
+		cart = addLine(cart, tea33, VAT);
 		cart = removeLine(cart, cart.lines[0].lineId);
 		expect(cart.lines.map((l) => l.lineNo)).toEqual([1, 2]);
 	});

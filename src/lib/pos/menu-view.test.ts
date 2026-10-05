@@ -2,7 +2,13 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { formatTaxRate as moneyFormatTaxRate } from '../money/tax';
 import type { LocalMenu } from './store';
-import { formatTaxRate, itemsByCategory, modifierGroupsFor, resolveTaxRate } from './menu-view';
+import {
+	formatTaxRate,
+	itemsByCategory,
+	lineTaxRateText,
+	modifierGroupsFor,
+	resolveTaxRate
+} from './menu-view';
 
 type Item = LocalMenu['items'][number];
 
@@ -201,6 +207,20 @@ describe('formatTaxRate', () => {
 	});
 });
 
+// settings-tax-payments-receipt T-19: the check line's tax text — the stored
+// number first (e2e/pos-sale.spec.ts asserts `@ 8.00 · tax 10.00%`), then the
+// rate's name when the line has one.
+describe('lineTaxRateText', () => {
+	it('prints the stored number, then the name when the line has one', () => {
+		expect(lineTaxRateText({ taxRateBp: 1000, taxRateName: null })).toBe('10.00%');
+		expect(lineTaxRateText({ taxRateBp: 1000, taxRateName: 'VAT' })).toBe('10.00% (VAT)');
+	});
+
+	it('a line saved by the previous build, with no name key, prints the number alone', () => {
+		expect(lineTaxRateText({ taxRateBp: 1000 })).toBe('10.00%');
+	});
+});
+
 describe('MANDATORY (spec 29) — the till screens hold no number conversion of money', () => {
 	const FILES = [
 		'src/routes/(pos)/pos/session/+page.svelte',
@@ -222,7 +242,9 @@ describe('MANDATORY (spec 29) — the till screens hold no number conversion of 
 		'Number(',
 		'roundToMinor(',
 		'taxOnAmount(',
-		'taxOnLine('
+		'taxOnLine(',
+		// T-19: only orders.ts computes the per-rate breakdown; a screen prints it.
+		'taxBreakdown('
 	];
 
 	for (const file of FILES) {

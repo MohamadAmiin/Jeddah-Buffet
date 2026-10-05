@@ -89,6 +89,10 @@ export type SaleSnapshot = {
 	cashierName: string;
 	completedAt: string;
 	businessDate: string | null;
+	/** Per-rate tax, decimal strings, from `taxBreakdown` (the rows sum to
+	 * `payload.totals.taxMinor`). OPTIONAL: sales completed before this plan
+	 * have none, and the receipt then prints one tax line (T-23). */
+	taxBreakdown?: Array<{ name: string | null; rateBp: number; taxMinor: string }>;
 };
 
 /** What has already been printed for an order; the drawer pulse is marked once. */

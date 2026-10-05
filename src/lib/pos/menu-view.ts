@@ -3,6 +3,7 @@
 // the snapshot (spec 5), so a hand-placed key cannot become a second source of
 // truth.
 
+import { formatTaxRate } from '../money/tax';
 import type { LocalMenu } from './store';
 
 export type MenuItem = LocalMenu['items'][number];
@@ -55,6 +56,17 @@ export function resolveTaxRate(
 	}
 	if (typeof menu.taxRateBp === 'number') return { id: null, name: null, rateBp: menu.taxRateBp };
 	throw new TypeError(`No tax rate for "${item.name}" and none set for the restaurant`);
+}
+
+/** The tax text of one check line: the rate STORED on the line, then the
+ *  rate's name when the line has one — `10.00%` or `10.00% (VAT)`. The number
+ *  comes first on purpose: the check reads `@ 8.00 · tax 10.00%`, and
+ *  e2e/pos-sale.spec.ts asserts that text. A line saved by the previous build
+ *  has no name key at all, and prints the number alone. */
+export function lineTaxRateText(line: { taxRateBp: number; taxRateName?: string | null }): string {
+	const text = formatTaxRate(line.taxRateBp);
+	const name = line.taxRateName ?? null;
+	return name === null ? text : `${text} (${name})`;
 }
 
 /** The item's modifier groups in the order of item.modifierGroupIds. */
