@@ -2,7 +2,11 @@ import { json, type RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db/client';
 import { requireDevice } from '$lib/server/auth/pos-context';
 import { listPosEmployees } from '$lib/server/auth/employee-directory';
-import { getRestaurantWithSettings } from '$lib/server/restaurants';
+import {
+	getReceiptLayout,
+	getRestaurantWithSettings,
+	listPaymentMethods
+} from '$lib/server/restaurants';
 import { lastInvoiceSeqForDevice } from '$lib/server/orders/invoice-hint';
 import { openSessionForDevice } from '$lib/server/pos-sessions';
 
@@ -51,7 +55,22 @@ export const GET: RequestHandler = async (event) => {
 		receiptAddress: restaurant?.receiptAddress ?? null,
 		receiptPhone: restaurant?.receiptPhone ?? null,
 		taxRegistrationNumber: restaurant?.taxRegistrationNumber ?? null,
-		receiptFooter: restaurant?.receiptFooter ?? null
+		receiptFooter: restaurant?.receiptFooter ?? null,
+		// tasks/settings-tax-payments-receipt T-20: the owner's payment methods and
+		// the receipt layout ride in the same bundle, so the till can take payment
+		// and print offline from cached copies (spec 4). The legacy acceptsCard,
+		// acceptsMobile and receiptFooter keys above stay until T-33: tills on an
+		// older shell still read them.
+		//
+		// Exactly FOUR keys per method, mapped by name and never spread: enabled,
+		// sortOrder and archivedAt are the dashboard's business, not the till's.
+		// The order is the reader's — cash first, then sort_order.
+		paymentMethods: (await listPaymentMethods(db, device.restaurantId))
+			.filter((m) => m.enabled && m.archivedAt === null)
+			.map((m) => ({ id: m.id, name: m.name, kind: m.kind, merchantNumber: m.merchantNumber })),
+		// The layout carries the logo's FINGERPRINT { sha256, widthDots, heightDots }
+		// or null — never the bitmap (see the comment above `return json(`).
+		receipt: await getReceiptLayout(db, device.restaurantId)
 	};
 
 	// T-28: the till's adoptServerHint (T-23) folds this into
@@ -85,9 +104,12 @@ export const GET: RequestHandler = async (event) => {
 	// device.code is the printed prefix (POS1) formatInvoiceNumber needs on the
 	// till. lastInvoiceSeq is the max of invoices AND pos_sync_ops for this device,
 	// unrecorded ops included. openSession lets the till adopt an existing shift
-	// after a reload without a second open. settings carries the four owner-set
-	// values (idle lock, time zone, accepts_card, accepts_mobile) as their true
-	// nulls when no answer has been chosen.
+	// after a reload without a second open. settings carries the owner-set values
+	// (idle lock, time zone, accepts_card, accepts_mobile, the receipt header) as
+	// their true nulls when no answer has been chosen, and (T-20):
+	//   paymentMethods — the ENABLED, LIVE methods only, cash first, four keys each.
+	//   receipt — the layout with the logo's fingerprint; the logo's bytes come
+	//     from GET /api/pos/receipt-logo, fetched only when the fingerprint changes.
 	return json(
 		{
 			device: { id: device.deviceId, code: device.deviceCode },
