@@ -34,7 +34,12 @@ export type OpKind = (typeof OP_KINDS)[number];
 export const ORDER_TYPES = ['dine_in', 'takeaway', 'delivery'] as const;
 export type OrderType = (typeof ORDER_TYPES)[number];
 
-/** Tenders (CLAUDE.md decision (b), 2026-09-28). */
+/** Tender KINDS (CLAUDE.md decision (b); settings-tax-payments-receipt
+ * decision 2). A payment method the owner names (`payment_methods`) has
+ * exactly one kind, fixed at creation; `cash` belongs to the built-in Cash row
+ * only. The database CHECKs `payments_method_valid` and
+ * `payment_methods_kind_valid` spell the same three literals. Append only: a
+ * queued sale carries these strings. */
 export const PAYMENT_METHODS = ['cash', 'card', 'mobile'] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
@@ -119,6 +124,15 @@ export type SaleLine = {
 	// DECIMAL STRING of the integer minor value ("850" is $8.50) — never a number, never a bigint
 	unitPriceMinor: string;
 	taxRateBp: number;
+	/** OPTIONAL (settings-tax-payments-receipt T-14): the named tax rate this line
+	 * was taxed under, as the till's cached menu resolved it. Tills queued before
+	 * this plan omit the key; the server then attributes the line to the item's
+	 * current rate only when that rate's number equals taxRateBp, else stores
+	 * null. taxRateBp stays the number that was taxed. */
+	taxRateId?: string | null;
+	/** OPTIONAL: that rate's name as printed on the receipt ("VAT"), 1–40
+	 * characters, no control characters. */
+	taxRateName?: string | null;
 	// decimal string
 	discountMinor: string;
 	modifiers: SaleLineModifier[];
@@ -128,7 +142,21 @@ export type SaleLine = {
  * meaningful for cash only; for card/mobile they are `null`. */
 export type SalePayment = {
 	paymentId: string;
+	// the KIND, never a method name
 	method: PaymentMethod;
+	/** OPTIONAL (settings-tax-payments-receipt T-14): the owner-named payment
+	 * method (payment_methods.id) that took this payment. `method` stays the KIND
+	 * and alone decides the ledger account and the offline rule; the server checks
+	 * the method row has that kind. Tills queued before this plan omit the key:
+	 * the server uses the restaurant's Cash row for cash, and the first live,
+	 * enabled method of the kind for card or mobile. The server refuses
+	 * (HARD invalid_payload) with detail unknown_payment_method,
+	 * payment_method_kind_mismatch or tender_not_accepted; a line's unknown rate
+	 * id is unknown_tax_rate. */
+	paymentMethodId?: string | null;
+	/** OPTIONAL: the method's name as the till showed it ("EVC Plus"), 1–40
+	 * characters, no control characters. */
+	paymentMethodName?: string | null;
 	// decimal string
 	amountMinor: string;
 	// decimal string | null
