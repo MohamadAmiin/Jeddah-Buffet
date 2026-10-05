@@ -1,7 +1,8 @@
 // Shared fixture for the reports/ integration tests.
 //
 // seedSalesRestaurant builds a full restaurant (settings, roles, chart of
-// accounts, owner, one staff, one device, a small menu with a modifier); the
+// accounts, the built-in Cash plus one card and one mobile payment method,
+// owner, one staff, one device, a small menu with a modifier); the
 // three helpers below drive T-20's session and T-21's sale.complete envelope
 // through recordSale, exactly the way the server sync path does. All money on
 // the wire is a decimal string, in bigint after that.
@@ -22,7 +23,7 @@ import {
 	linkModifierGroup
 } from '../../menu';
 import { seedStaff } from './seed';
-import { seedTaxRate } from './settings';
+import { cashMethodId, seedPaymentMethod, seedTaxRate } from './settings';
 import { openSession, closeSession, type SessionContext } from '../../pos-sessions';
 import { validateSale, type SyncContext } from '../../orders/validate';
 import { recordSale } from '../../orders/pay';
@@ -52,6 +53,8 @@ export type SalesFixture = {
 	/** The default rate's number — what the line builder below charges (T-13). */
 	taxRateBp: number;
 	currencyCode: 'USD';
+	/** One method per KIND (T-15): the built-in Cash row, 'Card' and 'Mobile money'. */
+	paymentMethods: Record<'cash' | 'card' | 'mobile', { id: string; name: string }>;
 	items: { burger: string; tea: string; special: string };
 	modifiers: { extraCheese: string };
 };
@@ -99,15 +102,27 @@ export async function seedSalesRestaurant(
 			{
 				taxMode,
 				currencyCode: 'USD',
-				posIdleLockSeconds: 120,
-				acceptsCard: true,
-				acceptsMobile: true
+				posIdleLockSeconds: 120
 			},
 			ctx
 		);
 		if (!settingsResult.ok) {
 			throw new Error(`updateSettings failed: ${settingsResult.reason}`);
 		}
+		// T-15: card and mobile are named payment methods now, not the retired
+		// accepts_card / accepts_mobile switches; Cash is built in (seedCashMethod).
+		const cardMethodId = await seedPaymentMethod(
+			tx,
+			restaurantId,
+			{ name: 'Card', kind: 'card' },
+			ctx
+		);
+		const mobileMethodId = await seedPaymentMethod(
+			tx,
+			restaurantId,
+			{ name: 'Mobile money', kind: 'mobile' },
+			ctx
+		);
 
 		const [owner] = await tx
 			.insert(users)
@@ -173,6 +188,11 @@ export async function seedSalesRestaurant(
 			taxMode,
 			taxRateBp,
 			currencyCode: 'USD' as const,
+			paymentMethods: {
+				cash: { id: await cashMethodId(tx, restaurantId), name: 'Cash' },
+				card: { id: cardMethodId, name: 'Card' },
+				mobile: { id: mobileMethodId, name: 'Mobile money' }
+			},
 			items: { burger: burgerId, tea: teaId, special: specialId },
 			modifiers: { extraCheese: extraCheeseId }
 		};

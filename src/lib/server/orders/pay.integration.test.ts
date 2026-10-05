@@ -6,12 +6,13 @@ import { onRestaurantCreated, updateSettings } from '../restaurants';
 import { registerDevice } from '../auth/pos-device';
 import { createCategory, createItem, getMenuVersion, updateTaxRate } from '../menu';
 import { seedStaff } from '../db/test/seed';
-import { seedTaxRate } from '../db/test/settings';
+import { seedPaymentMethod, seedTaxRate } from '../db/test/settings';
 import { closeTestDb, testDb } from '../db/test/db';
 import { restaurants } from '../db/schema/restaurants';
 import { users } from '../db/schema/users';
 import { posSessions } from '../db/schema/pos-sessions';
 import { restaurantSettings } from '../db/schema/restaurant-settings';
+import { paymentMethods } from '../db/schema/payment-methods';
 import { orders, orderLines, payments, invoices } from '../db/schema/orders';
 import { accounts, journalEntries, journalEntryLines } from '../db/schema/accounting';
 import { auditLog } from '../db/schema/audit';
@@ -78,12 +79,12 @@ async function makeFixture(email: string): Promise<Fixture> {
 		);
 		return id;
 	});
-	// Both card and mobile enabled directly, so the same fixture serves all three
-	// tenders without a separate updateSettings call per test.
-	await testDb()
-		.update(restaurantSettings)
-		.set({ acceptsCard: true, acceptsMobile: true })
-		.where(eq(restaurantSettings.restaurantId, restaurantId));
+	// Card and mobile methods seeded so the same fixture serves all three tenders.
+	await db.transaction(async (tx) => {
+		const ctx = { actorUserId: ownerId, ip: null, userAgent: null };
+		await seedPaymentMethod(tx, restaurantId, { name: 'Card', kind: 'card' }, ctx);
+		await seedPaymentMethod(tx, restaurantId, { name: 'Mobile money', kind: 'mobile' }, ctx);
+	});
 	const device = await db.transaction((tx) =>
 		registerDevice(tx, { restaurantId, actorUserId: ownerId, label: 'Counter' })
 	);
@@ -441,9 +442,7 @@ describe('recordSale (T-19) — soft flags and rollback', () => {
 			restaurantId,
 			timeZone: 'UTC',
 			taxMode: 'exclusive',
-			currencyCode: 'USD',
-			acceptsCard: false,
-			acceptsMobile: false
+			currencyCode: 'USD'
 		});
 		// T-13: the named default rate, through the real writers. Neither touches
 		// accounts, so the missing chart stays the ONLY failure left. Before
@@ -456,6 +455,12 @@ describe('recordSale (T-19) — soft flags and rollback', () => {
 				{ actorUserId: null, ip: null, userAgent: null }
 			)
 		);
+		// T-15: the built-in Cash row, which onRestaurantCreated (seedCashMethod)
+		// would have given it. Without it the cash sale fails validateSale's Step 7
+		// as invalid_payload (cash_method_missing), short of the chart.
+		await testDb()
+			.insert(paymentMethods)
+			.values({ restaurantId, name: 'Cash', kind: 'cash', enabled: true, sortOrder: 0 });
 		const [owner] = await testDb()
 			.insert(users)
 			.values({
@@ -554,7 +559,8 @@ describe('recordSale (T-19) — soft flags and rollback', () => {
 		};
 
 		// The SPECIFIC error: accountIdByCode's "…; run ensureChart". A bare
-		// toThrow() would also pass on a price_tamper, never reaching the chart.
+		// toThrow() would also pass on a price_tamper or an invalid_payload
+		// (cash_method_missing), never reaching the chart.
 		await expect(recordThrough(noChartFx, env, cashier.id)).rejects.toThrow(/run ensureChart/);
 
 		const orderCount = await testDb()
