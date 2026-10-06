@@ -125,16 +125,14 @@ function messageOf(result: unknown): string | undefined {
 	return (result as { data?: { message?: string } }).data?.message;
 }
 
-/** The three columns this page owns, and the four it must never touch again. */
+/** The three columns this page owns, and the two it must never touch again. */
 async function settingsRow(restaurantId: string) {
 	const [row] = await db
 		.select({
 			timeZone: restaurantSettings.timeZone,
 			currencyCode: restaurantSettings.currencyCode,
 			taxMode: restaurantSettings.taxMode,
-			acceptsCard: restaurantSettings.acceptsCard,
-			receiptAddress: restaurantSettings.receiptAddress,
-			receiptFooter: restaurantSettings.receiptFooter
+			receiptAddress: restaurantSettings.receiptAddress
 		})
 		.from(restaurantSettings)
 		.where(eq(restaurantSettings.restaurantId, restaurantId));
@@ -229,9 +227,7 @@ describe('general settings page', () => {
 				['name', 'Cafe Renamed'],
 				['timeZone', 'Africa/Mogadishu'],
 				['taxMode', 'inclusive'],
-				['acceptsCard', 'yes'],
-				['receiptAddress', 'Km4'],
-				['receiptFooter', 'Thanks']
+				['receiptAddress', 'Km4']
 			])
 		);
 
@@ -240,9 +236,7 @@ describe('general settings page', () => {
 		// Each moved column is untouched: still NULL, exactly as registration left it.
 		expect(await settingsRow(restaurantId)).toMatchObject({
 			taxMode: null,
-			acceptsCard: null,
-			receiptAddress: null,
-			receiptFooter: null
+			receiptAddress: null
 		});
 	});
 

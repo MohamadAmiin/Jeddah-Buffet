@@ -54,9 +54,10 @@ export const RECEIPT_LAYOUT_SETTING = 'receiptLayout';
 export const RECEIPT_LOGO_SETTING = 'receiptLogo';
 
 /**
- * The pre-plan footer the landing screen still caches from the bundle's legacy
- * `receiptFooter` key (until T-33). Read ONLY when no layout is cached: a till
- * whose shell is from before this plan has a footer and nothing else.
+ * The pre-plan footer an older landing screen cached from the bundle's legacy
+ * `receiptFooter` key, which migration 0018 RETIRED with its column (T-33); no
+ * build writes it any more. Read ONLY when no layout is cached: a till whose
+ * cache is from before this plan has a footer and nothing else.
  */
 const LEGACY_RECEIPT_FOOTER_SETTING = 'receiptFooter';
 
@@ -178,8 +179,8 @@ function isLogoMeta(value: unknown): value is ReceiptLogoMeta {
  * - Otherwise, the pre-plan cache: the default layout with the legacy
  *   `receiptFooter` as footer line 1 when it holds a non-blank string, else no
  *   footer. When a layout IS cached, the legacy key is ignored even if it is
- *   still present: until T-33 the server keeps sending a `receiptFooter` that
- *   /settings/receipt no longer edits.
+ *   still present: a build from before T-33 cached both, and the legacy value
+ *   is one /settings/receipt never edited.
  */
 export async function readReceiptLayout(): Promise<ReceiptLayout> {
 	const cached = await readCachedSetting(RECEIPT_LAYOUT_SETTING);

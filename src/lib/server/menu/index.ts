@@ -273,8 +273,7 @@ export async function createItem(
 				name: input.name,
 				priceMinor: input.priceMinor,
 				// Not given = the restaurant's default rate, which is what null means.
-				// The retired number column menu_items.tax_rate_bp is never written:
-				// it stays NULL on every new row until T-33 drops it.
+				// The old number column menu_items.tax_rate_bp was RETIRED by 0018.
 				taxRateId: input.taxRateId ?? null,
 				isAvailable: input.isAvailable ?? true,
 				sortOrder: input.sortOrder ?? 0

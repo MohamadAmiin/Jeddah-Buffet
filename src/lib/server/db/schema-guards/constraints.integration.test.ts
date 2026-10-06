@@ -262,15 +262,6 @@ describe('restaurant_settings constraints', () => {
 		expect(error.constraint).toBe('restaurant_settings_tax_mode_valid');
 	});
 
-	it.each([-1, 10001])('rejects a tax rate of %i basis points', async (bp) => {
-		const id = await makeSettings();
-		const error = await expectError(
-			`update restaurant_settings set tax_rate_bp = $2 where restaurant_id = $1`,
-			[id, bp]
-		);
-		expect(error.constraint).toBe('restaurant_settings_tax_rate_bp_range');
-	});
-
 	it('rejects a currency code that is not three uppercase letters', async () => {
 		const id = await makeSettings();
 		const error = await expectError(
@@ -280,25 +271,29 @@ describe('restaurant_settings constraints', () => {
 		expect(error.constraint).toBe('restaurant_settings_currency_code_format');
 	});
 
-	it('lets all three be unset, and accepts valid values at both ends of the range', async () => {
+	it('lets both be unset, and accepts valid values', async () => {
 		const id = await makeSettings();
 		await pool.query(
-			`update restaurant_settings set tax_mode = null, tax_rate_bp = null, currency_code = null
+			`update restaurant_settings set tax_mode = null, currency_code = null
 			 where restaurant_id = $1`,
 			[id]
 		);
-		for (const bp of [0, 825, 10000]) {
-			await pool.query(
-				`update restaurant_settings set tax_mode = 'inclusive', tax_rate_bp = $2, currency_code = 'USD'
-				 where restaurant_id = $1`,
-				[id, bp]
-			);
-		}
-		const { rows } = await pool.query(
-			`select tax_mode, tax_rate_bp, currency_code from restaurant_settings where restaurant_id = $1`,
+		const unset = await pool.query(
+			`select tax_mode, currency_code from restaurant_settings where restaurant_id = $1`,
 			[id]
 		);
-		expect(rows[0]).toEqual({ tax_mode: 'inclusive', tax_rate_bp: 10000, currency_code: 'USD' });
+		expect(unset.rows[0]).toEqual({ tax_mode: null, currency_code: null });
+
+		await pool.query(
+			`update restaurant_settings set tax_mode = 'inclusive', currency_code = 'USD'
+			 where restaurant_id = $1`,
+			[id]
+		);
+		const { rows } = await pool.query(
+			`select tax_mode, currency_code from restaurant_settings where restaurant_id = $1`,
+			[id]
+		);
+		expect(rows[0]).toEqual({ tax_mode: 'inclusive', currency_code: 'USD' });
 	});
 
 	it('allows exactly the tax modes the money module knows', async () => {
@@ -326,8 +321,7 @@ describe('receipt header and kitchen note (menu-and-printing T-20)', () => {
 	const RECEIPT_COLUMNS = [
 		['receipt_address', 120, 'restaurant_settings_receipt_address_length'],
 		['receipt_phone', 40, 'restaurant_settings_receipt_phone_length'],
-		['tax_registration_number', 40, 'restaurant_settings_tax_registration_number_length'],
-		['receipt_footer', 120, 'restaurant_settings_receipt_footer_length']
+		['tax_registration_number', 40, 'restaurant_settings_tax_registration_number_length']
 	] as const;
 
 	it.each(RECEIPT_COLUMNS)(
@@ -416,17 +410,6 @@ describe('menu constraints (T-37)', () => {
 			[r, c]
 		);
 		expect(error.constraint).toBe('menu_items_price_minor_non_negative');
-	});
-
-	it('rejects an item tax rate above 10000 basis points', async () => {
-		const r = await makeRestaurant();
-		const c = await makeCategory(r);
-		const error = await expectError(
-			`insert into menu_items (restaurant_id, category_id, name, price_minor, tax_rate_bp)
-			 values ($1, $2, 'Tea', 850, 10001)`,
-			[r, c]
-		);
-		expect(error.constraint).toBe('menu_items_tax_rate_bp_range');
 	});
 
 	it("rejects an item in another restaurant's category", async () => {
@@ -2026,35 +2009,6 @@ describe('pos_sync_ops constraints (T-08)', () => {
 		);
 		expect(rowCount).toBe(1);
 	});
-
-	it('accepts_card and accepts_mobile land null with no default, and toggle freely', async () => {
-		const r = await makeRestaurant('sync-ops-settings');
-		await pool.query(
-			`insert into restaurant_settings (restaurant_id, time_zone) values ($1, 'UTC')`,
-			[r]
-		);
-		const { rows } = await pool.query<{
-			accepts_card: boolean | null;
-			accepts_mobile: boolean | null;
-		}>(`select accepts_card, accepts_mobile from restaurant_settings where restaurant_id = $1`, [
-			r
-		]);
-		expect(rows[0].accepts_card).toBeNull();
-		expect(rows[0].accepts_mobile).toBeNull();
-
-		const on = await pool.query(
-			`update restaurant_settings set accepts_card = true, accepts_mobile = false
-			 where restaurant_id = $1`,
-			[r]
-		);
-		expect(on.rowCount).toBe(1);
-		const off = await pool.query(
-			`update restaurant_settings set accepts_card = null, accepts_mobile = null
-			 where restaurant_id = $1`,
-			[r]
-		);
-		expect(off.rowCount).toBe(1);
-	});
 });
 
 describe('accounting constraints (T-08)', () => {
@@ -3138,5 +3092,45 @@ describe('named tax rates, payment methods and receipt layout (settings-tax-paym
 			expect(statement).not.toMatch(/NOT NULL/);
 			expect(statement).not.toMatch(/DEFAULT/);
 		}
+	});
+});
+
+describe('retired columns (settings-tax-payments-receipt T-33)', () => {
+	// Migration 0018 dropped the five columns that named tax rates, payment methods
+	// and receipt lines replaced, together with their three CHECKs (CLAUDE.md,
+	// "Settings 9"). order_lines.tax_rate_bp is NOT one of them: it is the number
+	// each past sale line was taxed at (invariant 7), and the positive control
+	// proves 0018 left it exactly as it was.
+	it('the five replaced columns no longer exist', async () => {
+		const { rows } = await pool.query(
+			`select table_name, column_name from information_schema.columns
+			 where (table_name = 'restaurant_settings'
+			        and column_name in ('tax_rate_bp', 'accepts_card', 'accepts_mobile', 'receipt_footer'))
+			    or (table_name = 'menu_items' and column_name = 'tax_rate_bp')`
+		);
+		expect(rows).toEqual([]);
+	});
+
+	it('their three CHECKs no longer exist', async () => {
+		const { rows } = await pool.query(
+			`select conname from pg_constraint
+			 where conname in ('restaurant_settings_tax_rate_bp_range',
+			                   'restaurant_settings_receipt_footer_length',
+			                   'menu_items_tax_rate_bp_range')`
+		);
+		expect(rows).toEqual([]);
+	});
+
+	it('positive control: order_lines.tax_rate_bp stays integer NOT NULL, with its range CHECK', async () => {
+		const { rows } = await pool.query(
+			`select is_nullable, data_type from information_schema.columns
+			 where table_name = 'order_lines' and column_name = 'tax_rate_bp'`
+		);
+		expect(rows).toEqual([{ is_nullable: 'NO', data_type: 'integer' }]);
+
+		const checks = await pool.query(
+			`select conname from pg_constraint where conname = 'order_lines_tax_rate_bp_range'`
+		);
+		expect(checks.rows).toEqual([{ conname: 'order_lines_tax_rate_bp_range' }]);
 	});
 });

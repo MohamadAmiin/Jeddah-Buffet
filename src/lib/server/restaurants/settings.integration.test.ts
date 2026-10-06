@@ -521,58 +521,16 @@ describe('accepted tenders and the menu-version bump (T-29)', () => {
 		expect(await menuVersionOf(id)).toBe(before + 1);
 	});
 
-	it('saving only the name, the time zone, the idle lock or a tender does not bump', async () => {
+	it('saving only the name, the time zone or the idle lock does not bump', async () => {
 		const id = await makeRestaurant('Cafe T29c');
 		for (const changes of [
 			{ name: 'Renamed' },
 			{ timeZone: 'Asia/Riyadh' },
-			{ posIdleLockSeconds: 120 },
-			{ acceptsCard: true }
+			{ posIdleLockSeconds: 120 }
 		] as const) {
 			await db.transaction((tx) => updateSettings(tx, id, changes, ctx));
 			expect(await menuVersionOf(id)).toBe(1);
 		}
-	});
-
-	it('saving acceptsCard true writes the column with one audit row; false is a chosen answer distinct from null', async () => {
-		const id = await makeRestaurant('Cafe T29d');
-		const first = await db.transaction((tx) => updateSettings(tx, id, { acceptsCard: true }, ctx));
-		expect(first).toEqual({
-			ok: true,
-			changed: true,
-			changes: { acceptsCard: { old: null, new: true } }
-		});
-		const [after] = await db
-			.select({
-				acceptsCard: restaurantSettings.acceptsCard,
-				acceptsMobile: restaurantSettings.acceptsMobile
-			})
-			.from(restaurantSettings)
-			.where(eq(restaurantSettings.restaurantId, id));
-		expect(after.acceptsCard).toBe(true);
-		expect(after.acceptsMobile).toBeNull();
-
-		const second = await db.transaction((tx) =>
-			updateSettings(tx, id, { acceptsMobile: false }, ctx)
-		);
-		expect(second).toMatchObject({
-			ok: true,
-			changed: true,
-			changes: { acceptsMobile: { old: null, new: false } }
-		});
-	});
-
-	it('rejects a non-boolean tender and writes nothing', async () => {
-		const id = await makeRestaurant('Cafe T29e');
-		const result = await db.transaction((tx) =>
-			updateSettings(tx, id, { acceptsCard: 'yes' as unknown as boolean }, ctx)
-		);
-		expect(result).toEqual({ ok: false, reason: 'invalid_tender' });
-		const [after] = await db
-			.select({ acceptsCard: restaurantSettings.acceptsCard })
-			.from(restaurantSettings)
-			.where(eq(restaurantSettings.restaurantId, id));
-		expect(after.acceptsCard).toBeNull();
 	});
 
 	it('the tenders are not part of settingsComplete', async () => {
@@ -613,8 +571,7 @@ describe('the receipt header (menu-and-printing T-21)', () => {
 	const header = {
 		receiptAddress: 'Makka Al-Mukarama Rd, Km4',
 		receiptPhone: '61 555 0142',
-		taxRegistrationNumber: 'TIN-0001',
-		receiptFooter: 'Mahadsanid! Thank you!'
+		taxRegistrationNumber: 'TIN-0001'
 	};
 	const settingsUpdates = () =>
 		db.select().from(auditLog).where(eq(auditLog.event, 'settings.updated'));
@@ -626,7 +583,7 @@ describe('the receipt header (menu-and-printing T-21)', () => {
 		return row.v;
 	};
 
-	it('writes all four with ONE audit row naming them, re-saving writes nothing', async () => {
+	it('writes all three with ONE audit row naming them, re-saving writes nothing', async () => {
 		const id = await makeRestaurant();
 		const result = await db.transaction((tx) => updateSettings(tx, id, header, ctx));
 		expect(result.ok).toBe(true);
@@ -651,12 +608,12 @@ describe('the receipt header (menu-and-printing T-21)', () => {
 		const id = await makeRestaurant();
 		await db.transaction((tx) => updateSettings(tx, id, header, ctx));
 		const cleared = await db.transaction((tx) =>
-			updateSettings(tx, id, { receiptPhone: '', receiptFooter: '  Thanks  ' }, ctx)
+			updateSettings(tx, id, { receiptPhone: '', taxRegistrationNumber: '  TIN-0002  ' }, ctx)
 		);
 		expect(cleared.ok).toBe(true);
 		const after = await getRestaurantWithSettings(db, id);
 		expect(after!.receiptPhone).toBeNull();
-		expect(after!.receiptFooter).toBe('Thanks');
+		expect(after!.taxRegistrationNumber).toBe('TIN-0002');
 		expect(after!.receiptAddress).toBe(header.receiptAddress);
 	});
 
@@ -677,7 +634,7 @@ describe('the receipt header (menu-and-printing T-21)', () => {
 	it('does not bump menu_version: the header is not in the menu snapshot', async () => {
 		const id = await makeRestaurant();
 		const before = await menuVersion(id);
-		await db.transaction((tx) => updateSettings(tx, id, { receiptFooter: 'Thank you' }, ctx));
+		await db.transaction((tx) => updateSettings(tx, id, { receiptAddress: 'Km4' }, ctx));
 		expect(await menuVersion(id)).toBe(before);
 	});
 
@@ -687,6 +644,5 @@ describe('the receipt header (menu-and-printing T-21)', () => {
 		await db.transaction((tx) => updateSettings(tx, a, header, ctx));
 		const other = await getRestaurantWithSettings(db, b);
 		expect(other!.receiptAddress).toBeNull();
-		expect(other!.receiptFooter).toBeNull();
 	});
 });

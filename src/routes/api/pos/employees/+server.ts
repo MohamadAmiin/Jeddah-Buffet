@@ -49,18 +49,13 @@ export const GET: RequestHandler = async (event) => {
 		restaurantName: restaurant?.name ?? null,
 		posIdleLockSeconds: restaurant?.posIdleLockSeconds ?? null,
 		timeZone: restaurant?.timeZone ?? null,
-		acceptsCard: restaurant?.acceptsCard ?? null,
-		acceptsMobile: restaurant?.acceptsMobile ?? null,
 		// T-21: the receipt header, so the till prints a correct header offline.
 		receiptAddress: restaurant?.receiptAddress ?? null,
 		receiptPhone: restaurant?.receiptPhone ?? null,
 		taxRegistrationNumber: restaurant?.taxRegistrationNumber ?? null,
-		receiptFooter: restaurant?.receiptFooter ?? null,
 		// tasks/settings-tax-payments-receipt T-20: the owner's payment methods and
 		// the receipt layout ride in the same bundle, so the till can take payment
-		// and print offline from cached copies (spec 4). The legacy acceptsCard,
-		// acceptsMobile and receiptFooter keys above stay until T-33: tills on an
-		// older shell still read them.
+		// and print offline from cached copies (spec 4).
 		//
 		// Exactly FOUR keys per method, mapped by name and never spread: enabled,
 		// sortOrder and archivedAt are the dashboard's business, not the till's.
@@ -105,8 +100,9 @@ export const GET: RequestHandler = async (event) => {
 	// till. lastInvoiceSeq is the max of invoices AND pos_sync_ops for this device,
 	// unrecorded ops included. openSession lets the till adopt an existing shift
 	// after a reload without a second open. settings carries the owner-set values
-	// (idle lock, time zone, accepts_card, accepts_mobile, the receipt header) as
-	// their true nulls when no answer has been chosen, and (T-20):
+	// (idle lock and time zone, and the receipt header) as their true nulls when no
+	// answer has been chosen, the enabled payment methods and the receipt layout
+	// (T-20):
 	//   paymentMethods — the ENABLED, LIVE methods only, cash first, four keys each.
 	//   receipt — the layout with the logo's fingerprint; the logo's bytes come
 	//     from GET /api/pos/receipt-logo, fetched only when the fingerprint changes.

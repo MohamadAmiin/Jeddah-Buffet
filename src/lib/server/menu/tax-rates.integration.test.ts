@@ -483,8 +483,6 @@ describe('item rates, the default and the locks (T-13)', () => {
 		expect(created.ok).toBe(true);
 		const [wine] = await itemRows(a.restaurantId);
 		expect(wine.taxRateId).toBe(reduced);
-		// The retired number column is never written (T-33 drops it).
-		expect(wine.taxRateBp).toBeNull();
 
 		const before = await version(a.restaurantId);
 		await db.transaction(async (tx) => {

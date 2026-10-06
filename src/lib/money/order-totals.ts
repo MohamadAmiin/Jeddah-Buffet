@@ -11,8 +11,8 @@
 // and the report (T-35). Its ONLY imports are `./index` and `./tax`; not
 // `$lib/...`, not `../sync-ops`, no path under `$lib/server` (ESLint errors
 // on it in this directory), not a `node:` builtin, not a package. Reads no
-// setting, resolves no null rate (menu_items.tax_rate_bp = null "inherit the
-// restaurant rate" is the caller's job).
+// setting, resolves no null rate (choosing the line's rate — the item's own or
+// the restaurant default — is the caller's job).
 //
 // This file rounds through roundToMinor only: computeOrderTotals rounds three
 // times per order (total, tax, discount); taxBreakdown rounds once per rate

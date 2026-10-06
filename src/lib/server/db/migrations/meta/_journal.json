@@ -127,6 +127,13 @@
       "when": 1790865191050,
       "tag": "0017_named_rates_and_methods",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791264585042,
+      "tag": "0018_retire_replaced_columns",
+      "breakpoints": true
     }
   ]
 }

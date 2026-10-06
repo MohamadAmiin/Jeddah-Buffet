@@ -56,15 +56,10 @@ export type RestaurantWithSettings = {
 	defaultTaxRateId: string | null;
 	/** An ISO 4217 code the money formatter supports, or null. */
 	currencyCode: string | null;
-	/** null until the owner chooses on /settings; no default anywhere. */
-	acceptsCard: boolean | null;
-	/** null until the owner chooses on /settings; no default anywhere. */
-	acceptsMobile: boolean | null;
 	/** Receipt header text (menu-and-printing T-21): optional, null until set. */
 	receiptAddress: string | null;
 	receiptPhone: string | null;
 	taxRegistrationNumber: string | null;
-	receiptFooter: string | null;
 	/**
 	 * The nine receipt display switches (tasks/settings-tax-payments-receipt
 	 * T-12), as ONE nested object built by receiptShowFrom — never the nine flat
@@ -96,12 +91,9 @@ export async function getRestaurantWithSettings(
 			taxMode: restaurantSettings.taxMode,
 			defaultTaxRateId: restaurantSettings.defaultTaxRateId,
 			currencyCode: restaurantSettings.currencyCode,
-			acceptsCard: restaurantSettings.acceptsCard,
-			acceptsMobile: restaurantSettings.acceptsMobile,
 			receiptAddress: restaurantSettings.receiptAddress,
 			receiptPhone: restaurantSettings.receiptPhone,
 			taxRegistrationNumber: restaurantSettings.taxRegistrationNumber,
-			receiptFooter: restaurantSettings.receiptFooter,
 			// T-12: the nine switches arrive nested and leave as ONE receiptShow
 			// object; the logo's bitmap is never selected here.
 			receiptShowColumns: RECEIPT_SHOW_SELECTION,
@@ -136,14 +128,11 @@ export type SettingsChanges = {
 	// to null: once chosen, the default can be replaced but not unset.
 	defaultTaxRateId?: string;
 	currencyCode?: string;
-	acceptsCard?: boolean;
-	acceptsMobile?: boolean;
 	// Receipt header text (T-21): a string is trimmed, '' clears the field to
 	// null; undefined means "not submitted, leave it alone".
 	receiptAddress?: string | null;
 	receiptPhone?: string | null;
 	taxRegistrationNumber?: string | null;
-	receiptFooter?: string | null;
 	// tasks/settings-tax-payments-receipt T-12: the receipt display switches —
 	// only the submitted keys, each a boolean — and the payment-numbers heading,
 	// trimmed like the receipt header text ('' clears it to null).
@@ -169,7 +158,6 @@ export type UpdateSettingsResult =
 				| 'invalid_tax_mode'
 				| 'invalid_tax_rate'
 				| 'invalid_currency'
-				| 'invalid_tender'
 				| 'invalid_receipt_field';
 	  };
 
@@ -194,7 +182,6 @@ const RECEIPT_LIMITS = {
 	receiptAddress: 120,
 	receiptPhone: 40,
 	taxRegistrationNumber: 40,
-	receiptFooter: 120,
 	receiptPaymentNumbersHeading: 40
 } as const;
 type ReceiptField = keyof typeof RECEIPT_LIMITS;
@@ -317,17 +304,6 @@ export async function updateSettings(
 		}
 	}
 
-	// T-29: accepted tenders. `false` is a chosen answer ("not accepted") and
-	// diffs against null ("not chosen"); undefined means "not submitted, leave
-	// it alone", like every other optional field here. NO default anywhere:
-	// nothing in this module, the schema or the page turns null into false.
-	for (const key of ['acceptsCard', 'acceptsMobile'] as const) {
-		const value = changes[key];
-		if (value === undefined) continue;
-		if (typeof value !== 'boolean') return { ok: false, reason: 'invalid_tender' };
-		if (value !== current[key]) diff[key] = { old: current[key], new: value };
-	}
-
 	// T-21: receipt header text. A string is trimmed; '' clears the field (null);
 	// a control character or a length over the column's bound is refused before
 	// anything is written. NEVER bumps menu_version — the receipt header is not in
@@ -422,12 +398,9 @@ export async function updateSettings(
 		diff.taxMode ||
 		diff.defaultTaxRateId ||
 		diff.currencyCode ||
-		diff.acceptsCard ||
-		diff.acceptsMobile ||
 		diff.receiptAddress ||
 		diff.receiptPhone ||
 		diff.taxRegistrationNumber ||
-		diff.receiptFooter ||
 		Object.keys(diff).some((k) => k.startsWith('receiptShow.')) ||
 		diff.receiptPaymentNumbersHeading
 	) {
@@ -439,15 +412,12 @@ export async function updateSettings(
 				...(diff.taxMode ? { taxMode: changes.taxMode! } : {}),
 				...(diff.defaultTaxRateId ? { defaultTaxRateId: defaultTaxRateId! } : {}),
 				...(diff.currencyCode ? { currencyCode: changes.currencyCode! } : {}),
-				...(diff.acceptsCard ? { acceptsCard: changes.acceptsCard! } : {}),
-				...(diff.acceptsMobile ? { acceptsMobile: changes.acceptsMobile! } : {}),
 				// T-21: each receipt field only when it changed; null clears it.
 				...(diff.receiptAddress ? { receiptAddress: receipt.receiptAddress ?? null } : {}),
 				...(diff.receiptPhone ? { receiptPhone: receipt.receiptPhone ?? null } : {}),
 				...(diff.taxRegistrationNumber
 					? { taxRegistrationNumber: receipt.taxRegistrationNumber ?? null }
 					: {}),
-				...(diff.receiptFooter ? { receiptFooter: receipt.receiptFooter ?? null } : {}),
 				// T-12: only the switch columns that changed, through RECEIPT_SHOW_COLUMNS,
 				// and the heading when it changed (null clears it).
 				...showColumns,

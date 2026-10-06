@@ -1,8 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, it, expect, afterAll } from 'vitest';
 import pg from 'pg';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import type { Executor } from '../../auth/session';
 import { settingsComplete } from '../../restaurants';
-import { testDb, closeTestDb } from '../test/db';
+import { closeTestDb } from '../test/db';
 
 // Migration 0017 (tasks/settings-tax-payments-receipt T-07), proved against the
 // real database: its backfill carries every restaurant's existing answers into
@@ -59,24 +61,18 @@ function onlyCommentsOrWhitespace(chunk: string): boolean {
 	return chunk.split('\n').every((line) => /^\s*(--.*)?$/.test(line));
 }
 
-/** Run the migration's own backfill statements, in order, on one client, in one transaction. */
-async function runBackfill(): Promise<void> {
+/**
+ * Run the migration's own backfill statements, in order, on `client` and INSIDE
+ * the caller's transaction: no BEGIN and no COMMIT of its own (T-33). A COMMIT
+ * here would end the case's transaction — the re-added columns would be
+ * committed into the shared matcami_test, and the case's ROLLBACK would undo
+ * nothing.
+ */
+async function runBackfill(client: pg.PoolClient): Promise<void> {
 	const statements = backfillSection(migrationText())
 		.split('--> statement-breakpoint')
 		.filter((chunk) => !onlyCommentsOrWhitespace(chunk));
-	const client = await pool.connect();
-	try {
-		await client.query('BEGIN');
-		try {
-			for (const statement of statements) await client.query(statement);
-			await client.query('COMMIT');
-		} catch (error) {
-			await client.query('ROLLBACK');
-			throw error;
-		}
-	} finally {
-		client.release();
-	}
+	for (const statement of statements) await client.query(statement);
 }
 
 /** Run SQL and return the PostgreSQL error, failing if it unexpectedly succeeded. */
@@ -91,17 +87,31 @@ async function expectError(sql: string, params: unknown[] = []): Promise<pg.Data
 
 // ── Raw-SQL helpers, copied from constraints.integration.test.ts (another test
 // file is not a module). ─────────────────────────────────────────────────────
+//
+// T-33: each takes the connection it runs on as its FIRST parameter. A backfill
+// case passes its one dedicated client, never the pool: inside the case's
+// transaction a query on another connection would wait forever behind ALTER
+// TABLE's ACCESS EXCLUSIVE lock, and could not see the uncommitted seed anyway.
+// Only makeRestaurant is shared with the trigger cases, which re-add nothing and
+// pass the pool.
 
-async function makeRestaurant(name = 'Cafe One'): Promise<string> {
-	const { rows } = await pool.query<{ id: string }>(
+/** A connection to run one query on: a case's client, or the pool. */
+type Queryable = Pick<pg.ClientBase, 'query'>;
+
+async function makeRestaurant(client: Queryable, name = 'Cafe One'): Promise<string> {
+	const { rows } = await client.query<{ id: string }>(
 		'insert into restaurants (name) values ($1) returning id',
 		[name]
 	);
 	return rows[0].id;
 }
 
-async function makeOwner(restaurantId: string, email: string): Promise<string> {
-	const { rows } = await pool.query<{ id: string }>(
+async function makeOwner(
+	client: pg.PoolClient,
+	restaurantId: string,
+	email: string
+): Promise<string> {
+	const { rows } = await client.query<{ id: string }>(
 		`insert into users (restaurant_id, role, display_name, email, password_hash)
 		 values ($1, 'owner', 'Owner', $2, 'not-a-real-hash') returning id`,
 		[restaurantId, email]
@@ -110,12 +120,13 @@ async function makeOwner(restaurantId: string, email: string): Promise<string> {
 }
 
 async function makeDevice(
+	client: pg.PoolClient,
 	restaurantId: string,
 	ownerId: string,
 	code = 'POS1',
 	tokenHash = 'a'.repeat(64)
 ): Promise<string> {
-	const { rows } = await pool.query<{ id: string }>(
+	const { rows } = await client.query<{ id: string }>(
 		`insert into pos_devices (restaurant_id, device_code, label, token_hash, registered_by_user_id)
 		 values ($1, $2, 'Counter tablet', $3, $4) returning id`,
 		[restaurantId, code, tokenHash, ownerId]
@@ -135,6 +146,7 @@ type MakeSessionOverrides = {
 };
 
 async function makeSession(
+	client: pg.PoolClient,
 	restaurantId: string,
 	deviceId: string,
 	userId: string,
@@ -149,7 +161,7 @@ async function makeSession(
 	const expectedCashMinor = overrides.expectedCashMinor ?? null;
 	const differenceMinor = overrides.differenceMinor ?? null;
 
-	const { rows } = await pool.query<{ id: string }>(
+	const { rows } = await client.query<{ id: string }>(
 		`insert into pos_sessions (
 			restaurant_id, device_id, opened_by_user_id, opened_at, business_date,
 			opening_cash_minor, status, closed_at, closed_by_user_id, closed_from_device_id,
@@ -186,6 +198,7 @@ type MakeOrderOverrides = {
 };
 
 async function makeOrder(
+	client: pg.PoolClient,
 	restaurantId: string,
 	sessionId: string,
 	deviceId: string,
@@ -202,7 +215,7 @@ async function makeOrder(
 	const tax = overrides.taxMinor ?? 100;
 	const total = overrides.totalMinor ?? 1100;
 
-	const { rows } = await pool.query<{ id: string }>(
+	const { rows } = await client.query<{ id: string }>(
 		`insert into orders (
 			restaurant_id, pos_session_id, device_id, employee_user_id, order_type, table_label,
 			status, tax_mode, currency_code, menu_version, subtotal_minor, discount_minor,
@@ -229,6 +242,7 @@ async function makeOrder(
 }
 
 async function makeLine(
+	client: pg.PoolClient,
 	restaurantId: string,
 	orderId: string,
 	menuItemId: string,
@@ -248,7 +262,7 @@ async function makeLine(
 	const status = overrides.status ?? 'new';
 	const discountMinor = overrides.discountMinor ?? 0;
 
-	const { rows } = await pool.query<{ id: string }>(
+	const { rows } = await client.query<{ id: string }>(
 		`insert into order_lines (
 			restaurant_id, order_id, line_no, menu_item_id, item_name, quantity,
 			unit_price_minor, tax_rate_bp, discount_minor, status
@@ -270,6 +284,7 @@ async function makeLine(
 }
 
 async function makePayment(
+	client: pg.PoolClient,
 	restaurantId: string,
 	orderId: string,
 	method: 'cash' | 'card' | 'mobile' = 'cash',
@@ -277,7 +292,7 @@ async function makePayment(
 	tendered: number | bigint | null = 2000,
 	change: number | bigint | null = 900
 ): Promise<string> {
-	const { rows } = await pool.query<{ id: string }>(
+	const { rows } = await client.query<{ id: string }>(
 		`insert into payments (
 			restaurant_id, order_id, method, amount_minor, tendered_minor, change_minor, paid_at
 		) values ($1, $2, $3, $4, $5, $6, now()) returning id`,
@@ -287,13 +302,14 @@ async function makePayment(
 }
 
 async function makeInvoice(
+	client: pg.PoolClient,
 	restaurantId: string,
 	orderId: string,
 	deviceId: string,
 	seq = 1,
 	number = 'POS1-000001'
 ): Promise<string> {
-	const { rows } = await pool.query<{ id: string }>(
+	const { rows } = await client.query<{ id: string }>(
 		`insert into invoices (
 			restaurant_id, order_id, device_id, invoice_seq, invoice_number, total_minor, issued_at
 		) values ($1, $2, $3, $4, $5, 1100, now()) returning id`,
@@ -303,11 +319,60 @@ async function makeInvoice(
 }
 
 describe('0017 backfill carries every existing answer and invents none (settings-tax-payments-receipt T-07)', () => {
-	// T-33 converts this describe in the same commit as migration 0018: it seeds and
-	// reads tax_rate_bp, accepts_card, accepts_mobile and receipt_footer, which 0018
-	// drops, so T-33 re-adds those columns inside one rolled-back transaction on a
-	// single client and runs runBackfill on that client. The trigger and static
-	// describes stay unchanged.
+	// Converted by T-33: 0018 dropped tax_rate_bp, accepts_card, accepts_mobile and
+	// receipt_footer. Each case re-adds them inside one transaction on one client
+	// and rolls back, so the shared test database never keeps them.
+
+	/**
+	 * The retired columns, re-added exactly as they stood before migration 0018
+	 * dropped them. DDL is transactional in PostgreSQL, so the case's ROLLBACK
+	 * removes them again.
+	 */
+	async function reAddRetiredColumns(client: pg.PoolClient): Promise<void> {
+		await client.query(
+			`ALTER TABLE restaurant_settings ADD COLUMN tax_rate_bp integer, ADD COLUMN accepts_card boolean,
+			 ADD COLUMN accepts_mobile boolean, ADD COLUMN receipt_footer text`
+		);
+		await client.query('ALTER TABLE menu_items ADD COLUMN tax_rate_bp integer');
+	}
+
+	/**
+	 * The retired columns as information_schema shows them, read on the POOL —
+	 * another connection than the case's. The query is the one in the `retired
+	 * columns` describe of constraints.integration.test.ts.
+	 */
+	async function retiredColumnsOnThePool(): Promise<unknown[]> {
+		const { rows } = await pool.query(
+			`select table_name, column_name from information_schema.columns
+			 where (table_name = 'restaurant_settings'
+			        and column_name in ('tax_rate_bp', 'accepts_card', 'accepts_mobile', 'receipt_footer'))
+			    or (table_name = 'menu_items' and column_name = 'tax_rate_bp')`
+		);
+		return rows;
+	}
+
+	/**
+	 * Run one case on ONE dedicated client of the owner pool: BEGIN, re-add the
+	 * retired columns, run the case, and ROLLBACK in `finally` — a failed
+	 * assertion must not leave the columns or an open transaction behind. Then,
+	 * on the pool, the columns must be gone again: the guard that the ROLLBACK
+	 * really removed them.
+	 */
+	async function withRetiredColumns(run: (client: pg.PoolClient) => Promise<void>): Promise<void> {
+		const client = await pool.connect();
+		try {
+			await client.query('BEGIN');
+			await reAddRetiredColumns(client);
+			await run(client);
+		} finally {
+			try {
+				await client.query('ROLLBACK');
+			} finally {
+				client.release();
+			}
+		}
+		expect(await retiredColumnsOnThePool()).toEqual([]);
+	}
 
 	type LegacySettings = {
 		taxMode: 'exclusive' | 'inclusive' | null;
@@ -319,8 +384,12 @@ describe('0017 backfill carries every existing answer and invents none (settings
 	};
 
 	/** A settings row shaped like one written before this plan: only the legacy columns. */
-	async function makeLegacySettings(restaurantId: string, legacy: LegacySettings): Promise<void> {
-		await pool.query(
+	async function makeLegacySettings(
+		client: pg.PoolClient,
+		restaurantId: string,
+		legacy: LegacySettings
+	): Promise<void> {
+		await client.query(
 			`insert into restaurant_settings (
 				restaurant_id, time_zone, tax_mode, tax_rate_bp, currency_code,
 				accepts_card, accepts_mobile, receipt_footer
@@ -339,12 +408,13 @@ describe('0017 backfill carries every existing answer and invents none (settings
 
 	/** A menu item shaped like one written before this plan: a raw rate, no rate id. */
 	async function makeLegacyItem(
+		client: pg.PoolClient,
 		restaurantId: string,
 		name: string,
 		taxRateBp: number | null,
 		{ archived = false }: { archived?: boolean } = {}
 	): Promise<string> {
-		const { rows } = await pool.query<{ id: string }>(
+		const { rows } = await client.query<{ id: string }>(
 			`insert into menu_items (restaurant_id, category_id, name, price_minor, tax_rate_bp, archived_at)
 			 values ($1, null, $2, 500, $3, $4) returning id`,
 			[restaurantId, name, taxRateBp, archived ? new Date() : null]
@@ -369,9 +439,9 @@ describe('0017 backfill carries every existing answer and invents none (settings
 	};
 
 	/** Restaurants A, B and C as they stood before this plan, with one paid sale in A. */
-	async function seedLegacy(): Promise<Legacy> {
-		const a = await makeRestaurant('Legacy A');
-		await makeLegacySettings(a, {
+	async function seedLegacy(client: pg.PoolClient): Promise<Legacy> {
+		const a = await makeRestaurant(client, 'Legacy A');
+		await makeLegacySettings(client, a, {
 			taxMode: 'exclusive',
 			taxRateBp: 825,
 			currencyCode: 'USD',
@@ -379,22 +449,22 @@ describe('0017 backfill carries every existing answer and invents none (settings
 			acceptsMobile: false,
 			receiptFooter: 'Thanks for visiting'
 		});
-		const burger = await makeLegacyItem(a, 'Burger', null);
-		const tea = await makeLegacyItem(a, 'Tea', 825);
-		const juice = await makeLegacyItem(a, 'Juice', 500);
-		const oldJuice = await makeLegacyItem(a, 'Old juice', 500, { archived: true });
-		const water = await makeLegacyItem(a, 'Water', 0);
+		const burger = await makeLegacyItem(client, a, 'Burger', null);
+		const tea = await makeLegacyItem(client, a, 'Tea', 825);
+		const juice = await makeLegacyItem(client, a, 'Juice', 500);
+		const oldJuice = await makeLegacyItem(client, a, 'Old juice', 500, { archived: true });
+		const water = await makeLegacyItem(client, a, 'Water', 0);
 
-		const owner = await makeOwner(a, 'owner-a@example.com');
-		const device = await makeDevice(a, owner);
-		const session = await makeSession(a, device, owner);
-		const order = await makeOrder(a, session, device, owner);
-		const teaLine = await makeLine(a, order, tea, { taxRateBp: 825 });
-		const payment = await makePayment(a, order, 'cash', 1100, 2000, 900);
-		await makeInvoice(a, order, device, 1, 'POS1-000001');
+		const owner = await makeOwner(client, a, 'owner-a@example.com');
+		const device = await makeDevice(client, a, owner);
+		const session = await makeSession(client, a, device, owner);
+		const order = await makeOrder(client, a, session, device, owner);
+		const teaLine = await makeLine(client, a, order, tea, { taxRateBp: 825 });
+		const payment = await makePayment(client, a, order, 'cash', 1100, 2000, 900);
+		await makeInvoice(client, a, order, device, 1, 'POS1-000001');
 
-		const b = await makeRestaurant('Legacy B');
-		await makeLegacySettings(b, {
+		const b = await makeRestaurant(client, 'Legacy B');
+		await makeLegacySettings(client, b, {
 			taxMode: null,
 			taxRateBp: null,
 			currencyCode: null,
@@ -403,8 +473,8 @@ describe('0017 backfill carries every existing answer and invents none (settings
 			receiptFooter: null
 		});
 
-		const c = await makeRestaurant('Legacy C');
-		await makeLegacySettings(c, {
+		const c = await makeRestaurant(client, 'Legacy C');
+		await makeLegacySettings(client, c, {
 			taxMode: null,
 			taxRateBp: null,
 			currencyCode: null,
@@ -412,7 +482,7 @@ describe('0017 backfill carries every existing answer and invents none (settings
 			acceptsMobile: true,
 			receiptFooter: null
 		});
-		const soda = await makeLegacyItem(c, 'Soda', 700);
+		const soda = await makeLegacyItem(client, c, 'Soda', 700);
 
 		return {
 			a,
@@ -427,10 +497,13 @@ describe('0017 backfill carries every existing answer and invents none (settings
 	const POSTED_TABLES = ['orders', 'order_lines', 'payments', 'invoices'] as const;
 
 	/** Every posted row of the restaurant, as PostgreSQL's own text form of the whole row. */
-	async function postedRows(restaurantId: string): Promise<Record<string, string[]>> {
+	async function postedRows(
+		client: pg.PoolClient,
+		restaurantId: string
+	): Promise<Record<string, string[]>> {
 		const snapshot: Record<string, string[]> = {};
 		for (const table of POSTED_TABLES) {
-			const { rows } = await pool.query<{ row: string }>(
+			const { rows } = await client.query<{ row: string }>(
 				`select t::text as row from ${table} t where t.restaurant_id = $1 order by t.id`,
 				[restaurantId]
 			);
@@ -440,9 +513,10 @@ describe('0017 backfill carries every existing answer and invents none (settings
 	}
 
 	async function versionAndStamp(
+		client: pg.PoolClient,
 		restaurantId: string
 	): Promise<{ menu_version: number; updated_at: string }> {
-		const { rows } = await pool.query<{ menu_version: number; updated_at: string }>(
+		const { rows } = await client.query<{ menu_version: number; updated_at: string }>(
 			`select menu_version, updated_at::text as updated_at
 			 from restaurant_settings where restaurant_id = $1`,
 			[restaurantId]
@@ -450,8 +524,11 @@ describe('0017 backfill carries every existing answer and invents none (settings
 		return rows[0];
 	}
 
-	async function legacyColumns(restaurantId: string): Promise<Record<string, unknown>> {
-		const { rows } = await pool.query(
+	async function legacyColumns(
+		client: pg.PoolClient,
+		restaurantId: string
+	): Promise<Record<string, unknown>> {
+		const { rows } = await client.query(
 			`select tax_mode, tax_rate_bp, currency_code, accepts_card, accepts_mobile, receipt_footer
 			 from restaurant_settings where restaurant_id = $1`,
 			[restaurantId]
@@ -460,11 +537,12 @@ describe('0017 backfill carries every existing answer and invents none (settings
 	}
 
 	async function ratesOf(
+		client: pg.PoolClient,
 		restaurantId: string
 	): Promise<
 		{ id: string; name: string; rate_bp: number; sort_order: number; archived_at: Date | null }[]
 	> {
-		const { rows } = await pool.query(
+		const { rows } = await client.query(
 			`select id, name, rate_bp, sort_order, archived_at
 			 from tax_rates where restaurant_id = $1 order by sort_order, name`,
 			[restaurantId]
@@ -472,16 +550,19 @@ describe('0017 backfill carries every existing answer and invents none (settings
 		return rows;
 	}
 
-	async function defaultRateOf(restaurantId: string): Promise<string | null> {
-		const { rows } = await pool.query<{ default_tax_rate_id: string | null }>(
+	async function defaultRateOf(
+		client: pg.PoolClient,
+		restaurantId: string
+	): Promise<string | null> {
+		const { rows } = await client.query<{ default_tax_rate_id: string | null }>(
 			'select default_tax_rate_id from restaurant_settings where restaurant_id = $1',
 			[restaurantId]
 		);
 		return rows[0].default_tax_rate_id;
 	}
 
-	async function itemRateId(itemId: string): Promise<string | null> {
-		const { rows } = await pool.query<{ tax_rate_id: string | null }>(
+	async function itemRateId(client: pg.PoolClient, itemId: string): Promise<string | null> {
+		const { rows } = await client.query<{ tax_rate_id: string | null }>(
 			'select tax_rate_id from menu_items where id = $1',
 			[itemId]
 		);
@@ -489,7 +570,7 @@ describe('0017 backfill carries every existing answer and invents none (settings
 	}
 
 	/** Every row the backfill writes, whole, for the idempotence comparison. */
-	async function catalogueRows(): Promise<Record<string, string[]>> {
+	async function catalogueRows(client: pg.PoolClient): Promise<Record<string, string[]>> {
 		const queries = {
 			tax_rates: 'select t::text as row from tax_rates t order by t.restaurant_id, t.id',
 			payment_methods:
@@ -500,172 +581,211 @@ describe('0017 backfill carries every existing answer and invents none (settings
 		};
 		const snapshot: Record<string, string[]> = {};
 		for (const [table, sql] of Object.entries(queries)) {
-			const { rows } = await pool.query<{ row: string }>(sql);
+			const { rows } = await client.query<{ row: string }>(sql);
 			snapshot[table] = rows.map((r) => r.row);
 		}
 		return snapshot;
 	}
 
-	it('A: "Tax" becomes the default rate, and each distinct item rate becomes its own named rate', async () => {
-		const legacy = await seedLegacy();
-		await runBackfill();
+	/**
+	 * `read` for each restaurant, ONE AT A TIME on the case's single client:
+	 * overlapping queries on one pg client are deprecated (pg@9 refuses them).
+	 * The pool version ran these with Promise.all, one connection per read.
+	 */
+	async function eachRestaurant<T>(
+		client: pg.PoolClient,
+		restaurantIds: readonly string[],
+		read: (client: pg.PoolClient, restaurantId: string) => Promise<T>
+	): Promise<T[]> {
+		const results: T[] = [];
+		for (const restaurantId of restaurantIds) results.push(await read(client, restaurantId));
+		return results;
+	}
 
-		const rates = await ratesOf(legacy.a);
-		expect(rates.map(({ name, rate_bp, sort_order }) => ({ name, rate_bp, sort_order }))).toEqual([
-			{ name: 'Tax', rate_bp: 825, sort_order: 0 },
-			{ name: 'Tax 0.00%', rate_bp: 0, sort_order: 1 },
-			{ name: 'Tax 5.00%', rate_bp: 500, sort_order: 2 }
-		]);
-		expect(rates.every((rate) => rate.archived_at === null)).toBe(true);
-		expect(await defaultRateOf(legacy.a)).toBe(rates[0].id);
+	it('A: "Tax" becomes the default rate, and each distinct item rate becomes its own named rate', async () => {
+		await withRetiredColumns(async (client) => {
+			const legacy = await seedLegacy(client);
+			await runBackfill(client);
+
+			const rates = await ratesOf(client, legacy.a);
+			expect(rates.map(({ name, rate_bp, sort_order }) => ({ name, rate_bp, sort_order }))).toEqual(
+				[
+					{ name: 'Tax', rate_bp: 825, sort_order: 0 },
+					{ name: 'Tax 0.00%', rate_bp: 0, sort_order: 1 },
+					{ name: 'Tax 5.00%', rate_bp: 500, sort_order: 2 }
+				]
+			);
+			expect(rates.every((rate) => rate.archived_at === null)).toBe(true);
+			expect(await defaultRateOf(client, legacy.a)).toBe(rates[0].id);
+		});
 	});
 
 	it('A: items point at their rate by id; an item with no rate keeps NULL; tax_rate_bp is unchanged', async () => {
-		const legacy = await seedLegacy();
-		const itemsBefore = await pool.query(
-			`select id, tax_rate_bp, updated_at::text as updated_at
-			 from menu_items order by id`
-		);
-		await runBackfill();
+		await withRetiredColumns(async (client) => {
+			const legacy = await seedLegacy(client);
+			const itemsBefore = await client.query(
+				`select id, tax_rate_bp, updated_at::text as updated_at
+				 from menu_items order by id`
+			);
+			await runBackfill(client);
 
-		const byName = Object.fromEntries(
-			(await ratesOf(legacy.a)).map((rate) => [rate.name, rate.id])
-		);
-		expect(await itemRateId(legacy.items.burger)).toBeNull();
-		expect(await itemRateId(legacy.items.tea)).toBe(byName['Tax']);
-		expect(await itemRateId(legacy.items.juice)).toBe(byName['Tax 5.00%']);
-		expect(await itemRateId(legacy.items.oldJuice)).toBe(byName['Tax 5.00%']);
-		expect(await itemRateId(legacy.items.water)).toBe(byName['Tax 0.00%']);
+			const byName = Object.fromEntries(
+				(await ratesOf(client, legacy.a)).map((rate) => [rate.name, rate.id])
+			);
+			expect(await itemRateId(client, legacy.items.burger)).toBeNull();
+			expect(await itemRateId(client, legacy.items.tea)).toBe(byName['Tax']);
+			expect(await itemRateId(client, legacy.items.juice)).toBe(byName['Tax 5.00%']);
+			expect(await itemRateId(client, legacy.items.oldJuice)).toBe(byName['Tax 5.00%']);
+			expect(await itemRateId(client, legacy.items.water)).toBe(byName['Tax 0.00%']);
 
-		const itemsAfter = await pool.query(
-			`select id, tax_rate_bp, updated_at::text as updated_at
-			 from menu_items order by id`
-		);
-		expect(itemsAfter.rows).toEqual(itemsBefore.rows);
+			const itemsAfter = await client.query(
+				`select id, tax_rate_bp, updated_at::text as updated_at
+				 from menu_items order by id`
+			);
+			expect(itemsAfter.rows).toEqual(itemsBefore.rows);
+		});
 	});
 
 	it("MANDATORY (Risk 5 — no rate invented): a restaurant with no rate gets no rate and no default, and settingsComplete still reports 'tax rate'", async () => {
-		const legacy = await seedLegacy();
-		await runBackfill();
+		await withRetiredColumns(async (client) => {
+			const legacy = await seedLegacy(client);
+			await runBackfill(client);
 
-		expect(await ratesOf(legacy.b)).toEqual([]);
-		expect(await defaultRateOf(legacy.b)).toBeNull();
-		expect((await settingsComplete(testDb(), legacy.b)).missing).toContain('tax rate');
-		expect((await settingsComplete(testDb(), legacy.a)).missing).not.toContain('tax rate');
+			expect(await ratesOf(client, legacy.b)).toEqual([]);
+			expect(await defaultRateOf(client, legacy.b)).toBeNull();
+			// settingsComplete runs on the SAME client, through Drizzle: another
+			// connection could not see the uncommitted seed, and would wait behind
+			// the ALTER TABLE lock.
+			const executor = drizzle(client) as unknown as Executor;
+			expect((await settingsComplete(executor, legacy.b)).missing).toContain('tax rate');
+			expect((await settingsComplete(executor, legacy.a)).missing).not.toContain('tax rate');
+		});
 	});
 
 	it('C: an item rate with no restaurant rate becomes its own rate, and there is still no default', async () => {
-		const legacy = await seedLegacy();
-		await runBackfill();
+		await withRetiredColumns(async (client) => {
+			const legacy = await seedLegacy(client);
+			await runBackfill(client);
 
-		const rates = await ratesOf(legacy.c);
-		expect(rates.map(({ name, rate_bp, sort_order }) => ({ name, rate_bp, sort_order }))).toEqual([
-			{ name: 'Tax 7.00%', rate_bp: 700, sort_order: 1 }
-		]);
-		expect(await defaultRateOf(legacy.c)).toBeNull();
-		expect(await itemRateId(legacy.items.soda)).toBe(rates[0].id);
+			const rates = await ratesOf(client, legacy.c);
+			expect(rates.map(({ name, rate_bp, sort_order }) => ({ name, rate_bp, sort_order }))).toEqual(
+				[{ name: 'Tax 7.00%', rate_bp: 700, sort_order: 1 }]
+			);
+			expect(await defaultRateOf(client, legacy.c)).toBeNull();
+			expect(await itemRateId(client, legacy.items.soda)).toBe(rates[0].id);
+		});
 	});
 
 	it('payment methods: Cash for every restaurant; accepts_card / accepts_mobile = true becomes one enabled method of that kind', async () => {
-		const legacy = await seedLegacy();
-		await runBackfill();
+		await withRetiredColumns(async (client) => {
+			const legacy = await seedLegacy(client);
+			await runBackfill(client);
 
-		const methodsOf = async (restaurantId: string) =>
-			(
-				await pool.query(
-					`select name, kind, enabled, merchant_number
-					 from payment_methods where restaurant_id = $1 order by sort_order`,
-					[restaurantId]
-				)
-			).rows;
-		expect(await methodsOf(legacy.a)).toEqual([
-			{ name: 'Cash', kind: 'cash', enabled: true, merchant_number: null },
-			{ name: 'Card', kind: 'card', enabled: true, merchant_number: null }
-		]);
-		expect(await methodsOf(legacy.b)).toEqual([
-			{ name: 'Cash', kind: 'cash', enabled: true, merchant_number: null }
-		]);
-		expect(await methodsOf(legacy.c)).toEqual([
-			{ name: 'Cash', kind: 'cash', enabled: true, merchant_number: null },
-			{ name: 'Mobile money', kind: 'mobile', enabled: true, merchant_number: null }
-		]);
+			const methodsOf = async (restaurantId: string) =>
+				(
+					await client.query(
+						`select name, kind, enabled, merchant_number
+						 from payment_methods where restaurant_id = $1 order by sort_order`,
+						[restaurantId]
+					)
+				).rows;
+			expect(await methodsOf(legacy.a)).toEqual([
+				{ name: 'Cash', kind: 'cash', enabled: true, merchant_number: null },
+				{ name: 'Card', kind: 'card', enabled: true, merchant_number: null }
+			]);
+			expect(await methodsOf(legacy.b)).toEqual([
+				{ name: 'Cash', kind: 'cash', enabled: true, merchant_number: null }
+			]);
+			expect(await methodsOf(legacy.c)).toEqual([
+				{ name: 'Cash', kind: 'cash', enabled: true, merchant_number: null },
+				{ name: 'Mobile money', kind: 'mobile', enabled: true, merchant_number: null }
+			]);
+		});
 	});
 
 	it('receipt lines: the footer becomes footer line 1; the nine receipt switches stay on', async () => {
-		const legacy = await seedLegacy();
-		await runBackfill();
+		await withRetiredColumns(async (client) => {
+			const legacy = await seedLegacy(client);
+			await runBackfill(client);
 
-		const linesOf = async (restaurantId: string) =>
-			(
-				await pool.query(
-					`select section, position, body
-					 from receipt_lines where restaurant_id = $1 order by section, position`,
-					[restaurantId]
-				)
-			).rows;
-		expect(await linesOf(legacy.a)).toEqual([
-			{ section: 'footer', position: 1, body: 'Thanks for visiting' }
-		]);
-		expect(await linesOf(legacy.b)).toEqual([]);
-		expect(await linesOf(legacy.c)).toEqual([]);
+			const linesOf = async (restaurantId: string) =>
+				(
+					await client.query(
+						`select section, position, body
+						 from receipt_lines where restaurant_id = $1 order by section, position`,
+						[restaurantId]
+					)
+				).rows;
+			expect(await linesOf(legacy.a)).toEqual([
+				{ section: 'footer', position: 1, body: 'Thanks for visiting' }
+			]);
+			expect(await linesOf(legacy.b)).toEqual([]);
+			expect(await linesOf(legacy.c)).toEqual([]);
 
-		const { rows } = await pool.query(
-			`select receipt_show_cashier, receipt_show_table, receipt_show_business_date,
-			        receipt_show_order_type, receipt_show_unit_price, receipt_show_currency_line,
-			        receipt_show_device_line, receipt_show_payment_numbers, receipt_tax_breakdown
-			 from restaurant_settings where restaurant_id = $1`,
-			[legacy.a]
-		);
-		expect(Object.values(rows[0])).toHaveLength(9);
-		expect(Object.values(rows[0]).every((value) => value === true)).toBe(true);
+			const { rows } = await client.query(
+				`select receipt_show_cashier, receipt_show_table, receipt_show_business_date,
+				        receipt_show_order_type, receipt_show_unit_price, receipt_show_currency_line,
+				        receipt_show_device_line, receipt_show_payment_numbers, receipt_tax_breakdown
+				 from restaurant_settings where restaurant_id = $1`,
+				[legacy.a]
+			);
+			expect(Object.values(rows[0])).toHaveLength(9);
+			expect(Object.values(rows[0]).every((value) => value === true)).toBe(true);
+		});
 	});
 
 	it('menu_version goes up by exactly 1; updated_at and the legacy settings columns are unchanged', async () => {
-		const legacy = await seedLegacy();
-		const restaurants = [legacy.a, legacy.b, legacy.c];
-		const stampsBefore = await Promise.all(restaurants.map(versionAndStamp));
-		const legacyBefore = await Promise.all(restaurants.map(legacyColumns));
-		await runBackfill();
+		await withRetiredColumns(async (client) => {
+			const legacy = await seedLegacy(client);
+			const restaurants = [legacy.a, legacy.b, legacy.c];
+			const stampsBefore = await eachRestaurant(client, restaurants, versionAndStamp);
+			const legacyBefore = await eachRestaurant(client, restaurants, legacyColumns);
+			await runBackfill(client);
 
-		const stampsAfter = await Promise.all(restaurants.map(versionAndStamp));
-		stampsAfter.forEach((after, i) => {
-			expect(after.menu_version).toBe(stampsBefore[i].menu_version + 1);
-			expect(after.updated_at).toBe(stampsBefore[i].updated_at);
+			const stampsAfter = await eachRestaurant(client, restaurants, versionAndStamp);
+			stampsAfter.forEach((after, i) => {
+				expect(after.menu_version).toBe(stampsBefore[i].menu_version + 1);
+				expect(after.updated_at).toBe(stampsBefore[i].updated_at);
+			});
+			expect(await eachRestaurant(client, restaurants, legacyColumns)).toEqual(legacyBefore);
 		});
-		expect(await Promise.all(restaurants.map(legacyColumns))).toEqual(legacyBefore);
 	});
 
 	it('MANDATORY (invariant 2 — posted records are permanent; Risk 3): the paid sale is byte-for-byte unchanged', async () => {
-		const legacy = await seedLegacy();
-		const before = await postedRows(legacy.a);
-		// Not vacuous: the sale really is there — one order, one line, one payment, one invoice.
-		for (const table of POSTED_TABLES) expect(before[table]).toHaveLength(1);
-		await runBackfill();
+		await withRetiredColumns(async (client) => {
+			const legacy = await seedLegacy(client);
+			const before = await postedRows(client, legacy.a);
+			// Not vacuous: the sale really is there — one order, one line, one payment, one invoice.
+			for (const table of POSTED_TABLES) expect(before[table]).toHaveLength(1);
+			await runBackfill(client);
 
-		expect(await postedRows(legacy.a)).toEqual(before);
-		const line = await pool.query(
-			'select tax_rate_id, tax_rate_name from order_lines where id = $1',
-			[legacy.teaLine]
-		);
-		expect(line.rows[0]).toEqual({ tax_rate_id: null, tax_rate_name: null });
-		const payment = await pool.query(
-			'select payment_method_id, payment_method_name from payments where id = $1',
-			[legacy.payment]
-		);
-		expect(payment.rows[0]).toEqual({ payment_method_id: null, payment_method_name: null });
+			expect(await postedRows(client, legacy.a)).toEqual(before);
+			const line = await client.query(
+				'select tax_rate_id, tax_rate_name from order_lines where id = $1',
+				[legacy.teaLine]
+			);
+			expect(line.rows[0]).toEqual({ tax_rate_id: null, tax_rate_name: null });
+			const payment = await client.query(
+				'select payment_method_id, payment_method_name from payments where id = $1',
+				[legacy.payment]
+			);
+			expect(payment.rows[0]).toEqual({ payment_method_id: null, payment_method_name: null });
+		});
 	});
 
 	it('is idempotent: a second run changes nothing but menu_version', async () => {
-		const legacy = await seedLegacy();
-		const restaurants = [legacy.a, legacy.b, legacy.c];
-		const start = await Promise.all(restaurants.map(versionAndStamp));
-		await runBackfill();
-		const once = await catalogueRows();
-		await runBackfill();
+		await withRetiredColumns(async (client) => {
+			const legacy = await seedLegacy(client);
+			const restaurants = [legacy.a, legacy.b, legacy.c];
+			const start = await eachRestaurant(client, restaurants, versionAndStamp);
+			await runBackfill(client);
+			const once = await catalogueRows(client);
+			await runBackfill(client);
 
-		expect(await catalogueRows()).toEqual(once);
-		const twice = await Promise.all(restaurants.map(versionAndStamp));
-		twice.forEach((after, i) => expect(after.menu_version).toBe(start[i].menu_version + 2));
+			expect(await catalogueRows(client)).toEqual(once);
+			const twice = await eachRestaurant(client, restaurants, versionAndStamp);
+			twice.forEach((after, i) => expect(after.menu_version).toBe(start[i].menu_version + 2));
+		});
 	});
 });
 
@@ -688,7 +808,7 @@ describe('0017 triggers: archive-only catalogues and a fixed payment kind (setti
 	}
 
 	it('DELETE on tax_rates is refused, referenced or not', async () => {
-		const r = await makeRestaurant('Archive-only rates');
+		const r = await makeRestaurant(pool, 'Archive-only rates');
 		const unreferenced = await makeRate(r, 'Exempt');
 		const referenced = await makeRate(r, 'VAT');
 		await pool.query(
@@ -710,7 +830,7 @@ describe('0017 triggers: archive-only catalogues and a fixed payment kind (setti
 	});
 
 	it('DELETE on payment_methods is refused, the Cash row included', async () => {
-		const r = await makeRestaurant('Archive-only methods');
+		const r = await makeRestaurant(pool, 'Archive-only methods');
 		const card = await makeMethod(r, 'Card terminal', 'card');
 		const cash = await makeMethod(r, 'Cash', 'cash');
 
@@ -727,7 +847,7 @@ describe('0017 triggers: archive-only catalogues and a fixed payment kind (setti
 	});
 
 	it('the kind is fixed; every other column is not', async () => {
-		const r = await makeRestaurant('Fixed kind');
+		const r = await makeRestaurant(pool, 'Fixed kind');
 		const card = await makeMethod(r, 'Card terminal', 'card');
 
 		const error = await expectError(`update payment_methods set kind = 'mobile' where id = $1`, [
@@ -757,7 +877,7 @@ describe('0017 triggers: archive-only catalogues and a fixed payment kind (setti
 	});
 
 	it('archiving a tax rate stays an UPDATE', async () => {
-		const r = await makeRestaurant('Archive a rate');
+		const r = await makeRestaurant(pool, 'Archive a rate');
 		const rate = await makeRate(r, 'VAT');
 		const result = await pool.query('update tax_rates set archived_at = now() where id = $1', [
 			rate

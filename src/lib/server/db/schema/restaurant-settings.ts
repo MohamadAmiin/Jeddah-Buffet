@@ -33,11 +33,16 @@ import { taxRates } from './tax-rates';
 // 4 on 2026-09-15; default_tax_rate_id lands exactly like tax_mode
 // (tasks/settings-tax-payments-receipt T-03): it points at the owner's DEFAULT
 // named rate in tax_rates, NULL means the owner has not chosen, and from T-13
-// settingsComplete() reports 'tax rate' until a default is set.
+// settingsComplete() reports 'tax rate' until a default is set. tax_rate_bp was
+// RETIRED by migration 0018 (tasks/settings-tax-payments-receipt T-33). A rate
+// is a named tax_rates row, and default_tax_rate_id points at the default —
+// NULL until the owner chooses, with no DEFAULT, so settingsComplete() reports
+// 'tax rate'. (Migration 0017 first copied an existing value into the default
+// named rate "Tax".)
 //
-// tax_rate_bp is RETIRED (tasks/settings-tax-payments-receipt): migration 0017
-// copies an existing value into the default named rate "Tax", and T-33 drops the
-// column in migration 0018.
+// accepts_card and accepts_mobile were RETIRED by 0018. The tenders are
+// payment_methods rows: one built-in cash row, plus owner-named card and mobile
+// rows.
 //
 // pos_idle_lock_seconds HAS LANDED, exactly that way (T-08, per the decision
 // recorded on 2026-09-15): NULLABLE, with NO column DEFAULT and no fallback number
@@ -69,10 +74,9 @@ import { taxRates } from './tax-rates';
 // src/lib/pos/receipt.ts and these settings, not the ledger. Nullable, no
 // DEFAULT, bounded by the CHECKs below; written only by updateSettings.
 // tax_registration_number is an identifier, not money: schema.test.ts
-// exempts it from the money-name rule by name. receipt_footer is RETIRED
-// (tasks/settings-tax-payments-receipt): it is REPLACED by footer line 1 in
-// receipt_lines (schema/receipt.ts) — migration 0017 copies it there and T-33
-// drops the column in migration 0018.
+// exempts it from the money-name rule by name. receipt_footer was RETIRED by
+// 0018. Footer text is now receipt_lines rows with section 'footer'
+// (schema/receipt.ts); migration 0017 copied the old value into footer line 1.
 //
 // RECEIPT SWITCHES (tasks/settings-tax-payments-receipt): the nine receipt_*
 // booleans say which optional fields the receipt prints (gate decision 4). They
@@ -106,27 +110,15 @@ export const restaurantSettings = pgTable(
 		// Spec 17 and spec 33 open decision 3: the owner picks 'exclusive' or
 		// 'inclusive'; nothing hardcodes one.
 		taxMode: text('tax_mode'),
-		// RETIRED: the old single rate in integer basis points. 0017 copies an
-		// existing value into the default named rate "Tax"; T-33 drops the column.
-		taxRateBp: integer('tax_rate_bp'),
 		// The owner's DEFAULT named rate (tax_rates). NULL = not chosen yet — no
 		// DEFAULT and no fallback, like tax_mode; see the note above this table.
 		defaultTaxRateId: uuid('default_tax_rate_id'),
 		// Spec 33 open decision 4: an ISO 4217 code the money formatter can render.
 		currencyCode: text('currency_code'),
-		// RETIRED: both columns are REPLACED by payment_methods
-		// (tasks/settings-tax-payments-receipt) — owner-named methods, each with a
-		// fixed kind 'card' or 'mobile', beside one built-in Cash row. Migration
-		// 0017 turns a true into one enabled method of that kind (NULL or false
-		// into nothing), T-33 drops both columns in migration 0018, and no new
-		// code may read them.
-		acceptsCard: boolean('accepts_card'),
-		acceptsMobile: boolean('accepts_mobile'),
 		// Receipt header text (T-20) — optional, nullable, no default; see above.
 		receiptAddress: text('receipt_address'),
 		receiptPhone: text('receipt_phone'),
 		taxRegistrationNumber: text('tax_registration_number'),
-		receiptFooter: text('receipt_footer'),
 		// Receipt display switches (tasks/settings-tax-payments-receipt, gate decision 4) — see
 		// the header. DEFAULT true = exactly today's receipt.
 		receiptShowCashier: boolean('receipt_show_cashier').notNull().default(true),
@@ -158,10 +150,6 @@ export const restaurantSettings = pgTable(
 			sql`${table.taxMode} is null or ${table.taxMode} in ('exclusive', 'inclusive')`
 		),
 		check(
-			'restaurant_settings_tax_rate_bp_range',
-			sql`${table.taxRateBp} is null or (${table.taxRateBp} >= 0 and ${table.taxRateBp} <= 10000)`
-		),
-		check(
 			'restaurant_settings_currency_code_format',
 			sql`${table.currencyCode} is null or ${table.currencyCode} ~ '^[A-Z]{3}$'`
 		),
@@ -177,10 +165,6 @@ export const restaurantSettings = pgTable(
 		check(
 			'restaurant_settings_tax_registration_number_length',
 			sql`${table.taxRegistrationNumber} is null or char_length(${table.taxRegistrationNumber}) between 1 and 40`
-		),
-		check(
-			'restaurant_settings_receipt_footer_length',
-			sql`${table.receiptFooter} is null or char_length(${table.receiptFooter}) between 1 and 120`
 		),
 		check(
 			'restaurant_settings_receipt_payment_numbers_heading_length',

@@ -132,12 +132,9 @@
 				restaurantName: string | null;
 				posIdleLockSeconds: number | null;
 				timeZone: string | null;
-				acceptsCard: boolean | null;
-				acceptsMobile: boolean | null;
 				receiptAddress: string | null;
 				receiptPhone: string | null;
 				taxRegistrationNumber: string | null;
-				receiptFooter: string | null;
 				// tasks/settings-tax-payments-receipt T-20: the enabled, live methods
 				// (cash first) and the receipt layout with the logo's FINGERPRINT only.
 				paymentMethods: CachedPaymentMethod[];
@@ -161,8 +158,6 @@
 			await cacheEmployees(body.employees);
 			await cacheSettings([
 				{ key: 'posIdleLockSeconds', value: body.settings.posIdleLockSeconds },
-				{ key: 'acceptsCard', value: body.settings.acceptsCard },
-				{ key: 'acceptsMobile', value: body.settings.acceptsMobile },
 				{ key: 'timeZone', value: body.settings.timeZone },
 				{ key: 'restaurantName', value: body.settings.restaurantName },
 				{ key: 'deviceCode', value: body.device.code },
@@ -170,11 +165,9 @@
 				{ key: 'receiptAddress', value: body.settings.receiptAddress },
 				{ key: 'receiptPhone', value: body.settings.receiptPhone },
 				{ key: 'taxRegistrationNumber', value: body.settings.taxRegistrationNumber },
-				{ key: 'receiptFooter', value: body.settings.receiptFooter },
 				// tasks/settings-tax-payments-receipt T-21: the payment methods and the
 				// receipt layout, stored AS THEY ARRIVED — the readers in
-				// $lib/pos/settings sanitise them on the way out. The legacy keys above
-				// stay until T-33.
+				// $lib/pos/settings sanitise them on the way out.
 				{ key: PAYMENT_METHODS_SETTING, value: body.settings.paymentMethods },
 				{ key: RECEIPT_LAYOUT_SETTING, value: body.settings.receipt }
 			]);

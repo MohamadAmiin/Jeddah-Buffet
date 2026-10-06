@@ -29,16 +29,13 @@ import { taxRates } from './tax-rates';
 // mode 'number' would hand money to the one type invariant 1 forbids. A negative
 // price_delta_minor is legitimate ("No cheese −$0.50"); a negative price is not.
 //
-// TAX: an item's rate is menu_items.tax_rate_id, a NAMED rate in tax_rates
-// (tasks/settings-tax-payments-receipt). It is NULLABLE, and NULL means "the
-// restaurant default" (restaurant_settings.default_tax_rate_id). The composite
-// (restaurant_id, tax_rate_id) FK keeps a non-NULL id inside the same
-// restaurant; PostgreSQL's default MATCH SIMPLE skips the check when the id is
-// NULL.
-// menu_items.tax_rate_bp — the old per-item override in integer basis points,
-// NULL = inherit — is being REPLACED: the menu module still writes it until T-13
-// switches items to tax_rate_id, migration 0017 copies its values into named
-// rates, and T-33 drops it in migration 0018. No new code may read tax_rate_bp.
+// TAX: menu_items.tax_rate_id → tax_rates through the composite key
+// menu_items_tax_rate_fk. NULL means "the restaurant default"
+// (restaurant_settings.default_tax_rate_id). The integer column tax_rate_bp was
+// RETIRED by migration 0018. An order line still stores the NUMBER it was taxed
+// at (order_lines.tax_rate_bp) beside the rate's id and name (invariant 7).
+// The composite key keeps a non-NULL id inside the same restaurant;
+// PostgreSQL's default MATCH SIMPLE skips the check when the id is NULL.
 //
 // ARCHIVE, NEVER DELETE (invariant 2). archived_at exists so that the sales
 // plan's order lines, which reference menu_items.id and modifiers.id, never
@@ -160,8 +157,6 @@ export const menuItems = pgTable(
 		categoryId: uuid('category_id'),
 		name: text('name').notNull(),
 		priceMinor: bigint('price_minor', { mode: 'bigint' }).notNull(),
-		// NULL = inherit the restaurant's rate.
-		taxRateBp: integer('tax_rate_bp'),
 		// NULL = the restaurant default (restaurant_settings.default_tax_rate_id).
 		taxRateId: uuid('tax_rate_id'),
 		isAvailable: boolean('is_available').notNull().default(true),
@@ -195,11 +190,7 @@ export const menuItems = pgTable(
 		index('menu_items_tax_rate_idx').on(table.taxRateId),
 		// A menu price is never negative; a discount is its own concept with its own
 		// approval rule (spec 14).
-		check('menu_items_price_minor_non_negative', sql`${table.priceMinor} >= 0`),
-		check(
-			'menu_items_tax_rate_bp_range',
-			sql`${table.taxRateBp} is null or (${table.taxRateBp} >= 0 and ${table.taxRateBp} <= 10000)`
-		)
+		check('menu_items_price_minor_non_negative', sql`${table.priceMinor} >= 0`)
 	]
 );
 
