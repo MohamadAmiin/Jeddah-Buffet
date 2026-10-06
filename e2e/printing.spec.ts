@@ -1,11 +1,18 @@
 import { expect, test, type Page } from '@playwright/test';
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
+import type { ChildProcess } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { acquireRunLock, closeResetPool, resetDb } from '../src/lib/server/db/test/reset';
 import { startFakePrinter, type FakePrinter } from './fake-printer';
+import {
+	agentPairingLink,
+	freePort,
+	openAgentPairing,
+	startAgent,
+	stopAgent,
+	writeAgentConfig
+} from './print-agent-harness';
 import {
 	chooseOrderType,
 	closeDbRows,
@@ -38,6 +45,9 @@ import {
 // An internet outage is simulated by aborting the app's /api/ requests, NOT by
 // context.setOffline: Playwright's offline emulation cuts loopback too, and
 // the agent is a loopback service.
+//
+// The agent's config, process and pairing commands come from
+// e2e/print-agent-harness.ts, shared with e2e/settings-receipt.spec.ts.
 
 const OWNER = {
 	name: 'Maqaayadda Hodan',
@@ -56,81 +66,6 @@ let agentPort = 0;
 let configPath = '';
 let workDir = '';
 
-function freePort(): Promise<number> {
-	return new Promise((resolve, reject) => {
-		const probe = createServer();
-		probe.once('error', reject);
-		probe.listen(0, '127.0.0.1', () => {
-			const address = probe.address();
-			const port = typeof address === 'object' && address ? address.port : 0;
-			probe.close(() => resolve(port));
-		});
-	});
-}
-
-/** Spawn the real agent and resolve once it says it is listening. */
-function startAgent(): Promise<ChildProcess> {
-	return new Promise((resolve, reject) => {
-		const child = spawn(
-			process.execPath,
-			['print-agent/src/main.ts', 'run', '--config', configPath],
-			{
-				cwd: process.cwd(),
-				stdio: ['ignore', 'pipe', 'pipe']
-			}
-		);
-		const timer = setTimeout(
-			() => reject(new Error('the print agent never said listening')),
-			20_000
-		);
-		let errors = '';
-		child.stderr?.on('data', (chunk: Buffer) => (errors += chunk.toString()));
-		child.stdout?.on('data', (chunk: Buffer) => {
-			if (chunk.toString().includes('listening')) {
-				clearTimeout(timer);
-				resolve(child);
-			}
-		});
-		child.once('exit', (code) => {
-			clearTimeout(timer);
-			if (code !== null && code !== 0)
-				reject(new Error(`the print agent exited ${code}: ${errors}`));
-		});
-	});
-}
-
-/** The pairing link, from the agent's own `link` command — the line an operator reads. */
-function agentPairingLink(): string {
-	const out = execFileSync(
-		process.execPath,
-		['print-agent/src/main.ts', 'link', '--config', configPath],
-		{ cwd: process.cwd(), encoding: 'utf8' }
-	);
-	const match = /^Pairing link:\s+(\S+)$/m.exec(out);
-	if (!match?.[1]) throw new Error(`the agent printed no pairing link:\n${out}`);
-	return match[1];
-}
-
-/** Run the agent's own `pair` command: opens pairing, prints no secret. */
-function openAgentPairing(): string {
-	return execFileSync(
-		process.execPath,
-		['print-agent/src/main.ts', 'pair', '--config', configPath],
-		{ cwd: process.cwd(), encoding: 'utf8' }
-	);
-}
-
-function stopAgent(): Promise<void> {
-	return new Promise((resolve) => {
-		const child = agent;
-		agent = null;
-		if (!child || child.exitCode !== null) return resolve();
-		child.once('exit', () => resolve());
-		child.kill('SIGINT');
-		setTimeout(() => child.kill('SIGKILL'), 3000).unref();
-	});
-}
-
 test.beforeAll(async () => {
 	await acquireRunLock();
 	await resetDb();
@@ -139,27 +74,18 @@ test.beforeAll(async () => {
 	kitchen = await startFakePrinter();
 	agentPort = await freePort();
 	workDir = mkdtempSync(join(tmpdir(), 'matcami-printing-e2e-'));
-	configPath = join(workDir, 'config.json');
-	writeFileSync(
-		configPath,
-		JSON.stringify({
-			// Playwright's baseURL: what the till's browser sends as Origin.
-			origin: 'http://localhost:4173',
-			token: TOKEN,
-			port: agentPort,
-			printers: {
-				receipt: { host: '127.0.0.1', port: receipt.port, width: 32 },
-				kitchen: { host: '127.0.0.1', port: kitchen.port, width: 48 }
-			},
-			dataDir: join(workDir, 'data')
-		}),
-		{ mode: 0o600 }
-	);
-	agent = await startAgent();
+	configPath = writeAgentConfig(workDir, {
+		agentPort,
+		receiptPort: receipt.port,
+		kitchenPort: kitchen.port,
+		token: TOKEN
+	});
+	agent = await startAgent(configPath);
 });
 
 test.afterAll(async () => {
-	await stopAgent();
+	await stopAgent(agent);
+	agent = null;
 	await receipt?.close();
 	await kitchen?.close();
 	if (workDir) rmSync(workDir, { recursive: true, force: true });
@@ -290,7 +216,7 @@ test('receipts, kitchen tickets and the drawer: cash prints, a reprint is COPY, 
 
 	// 4. The pairing link is opened with nobody signed in: the till asks for the
 	//    owner, pairs itself — nothing typed — and both printers print the test page.
-	const link = agentPairingLink();
+	const link = agentPairingLink(configPath);
 	expect(link).toBe(
 		`http://localhost:4173/pos/printer#agent=${encodeURIComponent(`http://127.0.0.1:${agentPort}`)}&token=${TOKEN}`
 	);
@@ -315,7 +241,7 @@ test('receipts, kitchen tickets and the drawer: cash prints, a reprint is COPY, 
 	await expect(results).toContainText('○ Pairing is closed');
 	await expect(tillPage.getByTestId('paired-agent')).toHaveCount(0);
 	//     The operator opens pairing; the command prints no secret; the key now pairs.
-	const opened = openAgentPairing();
+	const opened = openAgentPairing(configPath);
 	expect(opened).toContain('Pairing is open until one till pairs');
 	expect(opened).not.toContain(TOKEN);
 	await tillPage.getByTestId('pair-here').click();
@@ -488,7 +414,8 @@ test('receipts, kitchen tickets and the drawer: cash prints, a reprint is COPY, 
 	await expect(tillPage.getByText('0 unsynced')).toBeVisible({ timeout: 20_000 });
 
 	// 10. THE AGENT STOPS — the sale still completes; the receipt is reprinted later.
-	await stopAgent();
+	await stopAgent(agent);
+	agent = null;
 	await expect(chip).toContainText('◆', { timeout: 35_000 });
 	await expect(chip).toContainText('Printer unreachable');
 	await newSale(tillPage);
@@ -502,7 +429,7 @@ test('receipts, kitchen tickets and the drawer: cash prints, a reprint is COPY, 
 	expect(receipt.bytes().length).toBe(receiptBeforeDown);
 	await expect(tillPage.getByText('0 unsynced')).toBeVisible({ timeout: 20_000 });
 
-	agent = await startAgent();
+	agent = await startAgent(configPath);
 	await openSales(tillPage);
 	await expect(chip).toContainText('Printer ready', { timeout: 35_000 });
 	const lateSale = tillPage.getByTestId('sale-row').filter({ hasText: 'POS1-000004' });

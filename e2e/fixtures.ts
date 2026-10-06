@@ -217,6 +217,96 @@ export async function completeSettings(
 	await expect(page.getByRole('alert')).toContainText('Auto-lock saved.');
 }
 
+// ── tasks/settings-tax-payments-receipt T-35: named rates, named methods and
+// the item's rate. Reached by the rail's Settings and Menu links and the
+// `Settings sections` sub-navigation, never by typing a URL.
+
+/** Open a settings section: the rail's Settings link, then the sub-nav link. */
+async function openSettingsSection(page: Page, section: 'Tax' | 'Payments'): Promise<void> {
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Settings', exact: true })
+		.click();
+	await expect(page).toHaveURL(/\/settings$/);
+	await page
+		.getByRole('navigation', { name: 'Settings sections' })
+		.getByRole('link', { name: section, exact: true })
+		.click();
+	await expect(page).toHaveURL(section === 'Tax' ? /\/settings\/tax$/ : /\/settings\/payments$/);
+}
+
+/**
+ * Add a named tax rate on /settings/tax. The percent is typed as text, exactly
+ * as an owner types it ('0', '8.25'); the server parses it once, in the money
+ * module. The default box is set either way: it starts ticked only while the
+ * restaurant has no default yet.
+ */
+export async function addTaxRate(
+	page: Page,
+	rate: { name: string; percent: string; makeDefault: boolean }
+): Promise<void> {
+	await openSettingsSection(page, 'Tax');
+	// Scoped to the panel: the per-rate cards carry `Name` and `Percent`, and
+	// getByLabel matches substrings.
+	const panel = page.getByRole('region', { name: 'Add tax rate' });
+	await panel.getByLabel('Rate name').fill(rate.name);
+	await panel.getByLabel('Rate (%)').fill(rate.percent);
+	await panel.getByLabel('Make this the default rate').setChecked(rate.makeDefault);
+	await panel.getByRole('button', { name: 'Add rate' }).click();
+	await expect(page.getByRole('alert')).toContainText(
+		rate.makeDefault ? `${rate.name} added and made the default rate.` : `${rate.name} added.`
+	);
+}
+
+/**
+ * Add an owner-named card or mobile method on /settings/payments, accepted at
+ * the till. The type is chosen by VALUE (`card` | `mobile`): the kind, not the
+ * label, is what decides the ledger account and the offline rule.
+ */
+export async function addPaymentMethod(
+	page: Page,
+	method: { name: string; kind: 'card' | 'mobile'; merchantNumber: string }
+): Promise<void> {
+	await openSettingsSection(page, 'Payments');
+	// Scoped to the panel: the per-method cards carry `Name`, `Number` and
+	// `Offered at the till`, and getByLabel matches substrings.
+	const panel = page.getByRole('region', { name: 'Add payment method' });
+	await panel.getByLabel('Method name').fill(method.name);
+	await panel.getByLabel('Method type').selectOption({ value: method.kind });
+	await panel.getByLabel('Merchant number').fill(method.merchantNumber);
+	await panel.getByLabel('Accepted at the till').check();
+	await panel.getByRole('button', { name: 'Add method' }).click();
+	await expect(page.getByRole('alert')).toContainText(`${method.name} added.`);
+}
+
+/**
+ * Point a menu item at a named rate: its tile's Edit opens the /menu panel in
+ * edit mode, the `Tax rate` option is chosen by its label ('Exempt 0.00%', or
+ * 'Default — …' to follow the restaurant's default), and Save item saves it.
+ */
+export async function setItemTaxRate(
+	page: Page,
+	itemName: string,
+	optionLabel: string
+): Promise<void> {
+	await page
+		.getByRole('navigation', { name: 'Dashboard sections' })
+		.getByRole('link', { name: 'Menu', exact: true })
+		.click();
+	await expect(page).toHaveURL(/\/menu$/);
+	await page
+		.getByRole('listitem')
+		.filter({ hasText: itemName })
+		.filter({ has: page.getByRole('button', { name: 'Edit', exact: true }) })
+		.first()
+		.getByRole('button', { name: 'Edit', exact: true })
+		.click();
+	await expect(page.getByRole('heading', { name: `Edit ${itemName}` })).toBeVisible();
+	await page.getByLabel('Tax rate', { exact: true }).selectOption({ label: optionLabel });
+	await page.getByRole('button', { name: 'Save item' }).click();
+	await expect(page.getByRole('alert')).toContainText(`${itemName} saved.`);
+}
+
 export async function createCategory(page: Page, name: string): Promise<void> {
 	await page
 		.getByRole('navigation', { name: 'Dashboard sections' })
