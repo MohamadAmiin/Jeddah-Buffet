@@ -352,11 +352,12 @@ export function confirmReceiptLogo(sha256: string): Promise<void> {
  * back whenever that printer may no longer be the one in use (Risk 6;
  * invariant 9 — a printer without `GS v 0` could read the raster as a drawer
  * pulse):
- * - WITH a fingerprint ("It did not print correctly" on /pos/printer), only a
- *   confirmation of THAT logo is deleted — the answer is about the logo the
- *   test page carried — and any other value is left as it is;
- * - WITHOUT one (a pairing saved or forgotten, print-client.ts), whatever is
- *   confirmed is deleted.
+ * - WITH a fingerprint, only a confirmation of THAT logo is deleted, and any
+ *   other value is left as it is;
+ * - WITHOUT one, whatever is confirmed is deleted. Every caller uses this mode:
+ *   "It did not print correctly" on /pos/printer (a failed raster print means
+ *   the printer cannot print any logo) and every pairing saved or forgotten
+ *   (print-client.ts).
  * The cached logo stays, so test pages still carry it. One readwrite
  * transaction reads, compares and deletes (bindDevice's shape), so the value
  * compared is the value deleted.
