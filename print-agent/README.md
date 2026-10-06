@@ -203,7 +203,7 @@ The till shows one chip for printing, always with a glyph so colour never carrie
 | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `● Printer ready` (· _n_ waiting)                              | The agent answers and the printer accepts connections; _n_ jobs are queued.                                                                        | —                                                                                                        |
 | `◆ Update the print agent to print the logo` (· _n_ waiting)   | The owner set a receipt logo, but this agent is version 1. Every receipt still prints in full, without the logo.                                   | Section 9 (update the agent).                                                                            |
-| `◆ Test-print the logo before receipts use it` (· _n_ waiting) | The agent is version 2, but nobody has confirmed a test print of this logo on this till yet. Every receipt still prints in full, without the logo. | Section 10.                                                                                              |
+| `◆ Test-print the logo before receipts use it` (· _n_ waiting) | The agent is version 2, but this logo's test print is not confirmed on this till at present. Every receipt still prints in full, without the logo. | Section 10.                                                                                              |
 | `◆ Printer unreachable`                                        | The agent is stopped, or the printer is off or has a different IP.                                                                                 | Section 4 (`systemctl status …`), then check the printer's power, network cable and IP in `config.json`. |
 | `✕ Printing blocked by Chrome`                                 | Chrome denied local network access for the till's address.                                                                                         | Section 5, second paragraph.                                                                             |
 | `✕ Printer pairing is wrong`                                   | The agent was set up again (`init --force`) after this till was paired.                                                                            | Printer → **Forget pairing**, then pair again (section 5).                                               |
@@ -264,12 +264,16 @@ one does, so receipts carry the logo only after the owner has checked it:
    an unconfirmed logo never reaches a receipt. Removing it matters all the same: a printer that
    does not understand the logo command can read the picture's dots as text or as printer commands,
    and every test page from this till still carries the logo.
-6. Repeat the check after replacing or re-configuring the printer. A re-registered till asks for
-   the confirmation again by itself; a replaced or re-configured printer does not, because the
-   confirmation belongs to the logo, not to the printer — this till's receipts keep carrying the
-   logo on the new printer. If the logo does not print correctly there, remove it on
-   **Settings → Receipt** at once and bring the till back to the employee screen while it is online
-   (step 2).
+6. Repeat the check after replacing or re-configuring the printer. The till cannot tell one
+   printer from another, so it asks for the confirmation again by itself only when it is
+   re-registered or its pairing changes — **Forget pairing**, **Pair this till** or the agent's
+   link (section 5) — and its receipts print without the logo until a test print is confirmed
+   again (step 4). A printer replaced or re-configured behind the same pairing goes unnoticed:
+   this till's receipts keep carrying the logo until the check is repeated. If the logo does not
+   print correctly there, press **It did not print correctly**: this till's receipts print without
+   the logo from then on, until a test print is confirmed again. Removing the logo on
+   **Settings → Receipt** is still how to take it off every till, and off this till's test pages;
+   then bring each till back to the employee screen while it is online (step 2).
 
 ## 11. Logs
 

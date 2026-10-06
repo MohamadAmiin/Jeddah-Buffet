@@ -33,7 +33,7 @@
 // no-restricted-imports rule for src/lib/pos enforces that boundary. The receipt
 // contract is the isomorphic src/lib/receipt-layout.ts (T-12).
 
-import { cacheSettings, forgetDevice, readCachedSetting } from './store';
+import { cacheSettings, forgetDevice, inTransaction, readCachedSetting, withDb } from './store';
 import { PAYMENT_METHODS, type PaymentMethod } from '../sync-ops';
 import {
 	DEFAULT_RECEIPT_LAYOUT,
@@ -318,7 +318,9 @@ export async function refreshReceiptLogo(
  * so the one unconfirmed print happens on the printer page, in front of the
  * owner, never on a customer's receipt. A new logo has a new fingerprint and
  * needs a new confirmation; bindDevice / forgetDevice clear this key with the
- * rest of the store, so a re-registered till asks again.
+ * rest of the store, so a re-registered till asks again; and
+ * withdrawReceiptLogoConfirmation, below, takes it back after a failed test
+ * print and whenever a pairing is saved or forgotten.
  */
 const LOGO_CONFIRMED_KEY = 'receiptLogoConfirmed';
 
@@ -340,4 +342,41 @@ export function confirmReceiptLogo(sha256: string): Promise<void> {
 	}
 
 	return cacheSettings([{ key: LOGO_CONFIRMED_KEY, value: sha256 }]);
+}
+
+/**
+ * Withdraw the confirmation: receipts print without the logo until the owner
+ * confirms a test print again. A confirmation vouches for the printer it was
+ * watched on, and the gate cannot tell one printer from another, so it is taken
+ * back whenever that printer may no longer be the one in use (Risk 6;
+ * invariant 9 — a printer without `GS v 0` could read the raster as a drawer
+ * pulse):
+ * - WITH a fingerprint ("It did not print correctly" on /pos/printer), only a
+ *   confirmation of THAT logo is deleted — the answer is about the logo the
+ *   test page carried — and any other value is left as it is;
+ * - WITHOUT one (a pairing saved or forgotten, print-client.ts), whatever is
+ *   confirmed is deleted.
+ * The cached logo stays, so test pages still carry it. One readwrite
+ * transaction reads, compares and deletes (bindDevice's shape), so the value
+ * compared is the value deleted.
+ */
+export function withdrawReceiptLogoConfirmation(sha256?: string): Promise<void> {
+	return withDb((db) =>
+		inTransaction(db, ['settings'], 'readwrite', (tx) => {
+			const store = tx.objectStore('settings');
+
+			if (sha256 === undefined) {
+				store.delete(LOGO_CONFIRMED_KEY);
+				return;
+			}
+
+			const current = store.get(LOGO_CONFIRMED_KEY);
+
+			current.onsuccess = () => {
+				const stored = (current.result as { value?: unknown } | undefined)?.value;
+
+				if (stored === sha256) store.delete(LOGO_CONFIRMED_KEY);
+			};
+		})
+	);
 }

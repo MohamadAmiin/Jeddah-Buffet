@@ -82,7 +82,8 @@ invariant 5).
   are cached so printing never touches the network, and fetched only when the bundle's
   fingerprint changes. Also the logo confirmation key `receiptLogoConfirmed`
   (`confirmReceiptLogo` / `readConfirmedLogoSha`): the sha256 of the logo the owner watched print
-  correctly on a test page.
+  correctly on a test page, withdrawn (`withdrawReceiptLogoConfirmation`) by "It did not print
+  correctly" for that logo and by every pairing saved or forgotten (`print-client.ts`).
 - `menu-view.ts` — pure helpers over the cached menu: category tabs (an item with no category
   sits under the synthetic `Other` tab), the resolved tax rate, modifier groups, `formatTaxRate`.
 - `photo-warmup.ts` — after every menu sync, fetches each photo once so the browser's HTTP cache

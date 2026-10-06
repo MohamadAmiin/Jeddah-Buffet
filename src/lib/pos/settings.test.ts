@@ -5,7 +5,7 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { DEFAULT_RECEIPT_LAYOUT, type ReceiptLayout } from '../receipt-layout';
-import { bindDevice, cacheSettings, readBoundDeviceId } from './store';
+import { bindDevice, cacheSettings, readBoundDeviceId, readCachedSetting } from './store';
 import {
 	PAYMENT_METHODS_SETTING,
 	RECEIPT_LAYOUT_SETTING,
@@ -16,6 +16,7 @@ import {
 	readReceiptLayout,
 	readReceiptLogo,
 	refreshReceiptLogo,
+	withdrawReceiptLogoConfirmation,
 	type CachedPaymentMethod
 } from './settings';
 
@@ -362,7 +363,8 @@ describe('refreshReceiptLogo', () => {
 
 describe('the logo confirmation key (T-24)', () => {
 	// The settings-store key the gate is keyed on (00-overview.md, "Printing"):
-	// written only by confirmReceiptLogo, read only by readConfirmedLogoSha.
+	// written only by confirmReceiptLogo, deleted by withdrawReceiptLogoConfirmation
+	// (and the device wipes), read only by readConfirmedLogoSha.
 	const KEY = 'receiptLogoConfirmed';
 
 	it('answers null when nothing was confirmed', async () => {
@@ -402,6 +404,39 @@ describe('the logo confirmation key (T-24)', () => {
 
 		await confirmReceiptLogo('b'.repeat(64));
 		expect(await readConfirmedLogoSha()).toBe('b'.repeat(64));
+	});
+
+	it('withdrawReceiptLogoConfirmation with the confirmed fingerprint deletes the key, and the cached logo stays', async () => {
+		await cacheSettings([{ key: RECEIPT_LOGO_SETTING, value: LOGO }]);
+		await confirmReceiptLogo(LOGO.sha256);
+
+		await withdrawReceiptLogoConfirmation(LOGO.sha256);
+
+		expect(await readConfirmedLogoSha()).toBeNull();
+		// Deleted, not overwritten.
+		expect(await readCachedSetting(KEY)).toBeUndefined();
+		// Test pages still carry the logo; only receipts lose it.
+		expect(await readReceiptLogo()).toEqual(LOGO);
+	});
+
+	it('withdrawReceiptLogoConfirmation with a DIFFERENT fingerprint leaves the confirmation as it is', async () => {
+		await confirmReceiptLogo(LOGO.sha256);
+
+		await withdrawReceiptLogoConfirmation('b'.repeat(64));
+
+		expect(await readConfirmedLogoSha()).toBe(LOGO.sha256);
+	});
+
+	it('withdrawReceiptLogoConfirmation without a fingerprint deletes whatever is confirmed, and resolves when nothing is', async () => {
+		await withdrawReceiptLogoConfirmation();
+		await withdrawReceiptLogoConfirmation(LOGO.sha256);
+		expect(await readConfirmedLogoSha()).toBeNull();
+
+		await confirmReceiptLogo('b'.repeat(64));
+		await withdrawReceiptLogoConfirmation();
+
+		expect(await readConfirmedLogoSha()).toBeNull();
+		expect(await readCachedSetting(KEY)).toBeUndefined();
 	});
 });
 

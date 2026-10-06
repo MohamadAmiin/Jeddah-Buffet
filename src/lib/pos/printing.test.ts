@@ -14,7 +14,7 @@ import {
 	type Cart,
 	type MenuItemForCart
 } from './orders';
-import { saveAgentSettings, type AgentStatus } from './print-client';
+import { clearAgentSettings, saveAgentSettings, type AgentStatus } from './print-client';
 import {
 	CATCH_UP_WINDOW_MS,
 	catchUp,
@@ -33,7 +33,8 @@ import {
 	confirmReceiptLogo,
 	PAYMENT_METHODS_SETTING,
 	RECEIPT_LAYOUT_SETTING,
-	refreshReceiptLogo
+	refreshReceiptLogo,
+	withdrawReceiptLogoConfirmation
 } from './settings';
 import { cacheSettings, withDb, type LocalOrder } from './store';
 import { DEFAULT_RECEIPT_LAYOUT, type ReceiptLayout } from '../receipt-layout';
@@ -440,6 +441,82 @@ describe('the logo (T-24)', () => {
 			confirmed: false,
 			logo: LOGO_IMAGE
 		});
+	});
+
+	it('MANDATORY (the logo confirmation gate): "It did not print correctly" withdraws THIS logo\'s confirmation — no logo on a later receipt or a reprint, still on the test page; another fingerprint withdraws nothing', async () => {
+		// Confirmed on printer P1, which implements GS v 0.
+		await cacheLogo();
+		await confirmReceiptLogo(LOGO_SHA);
+		const agent = stubAgent({ agentVersion: 2 });
+		const v2 = statusAt(2);
+		const first = await sell('cash');
+		await printOriginals(first.orderId, { drawer: false, fetchFn: agent.fetchFn });
+		expect(hasImage(agent.jobs()[0]!)).toBe(true);
+
+		// An answer about another logo leaves this one's confirmation.
+		await withdrawReceiptLogoConfirmation('b'.repeat(64));
+		expect(await logoForAgent(v2, 'receipt')).toEqual({
+			cached: true,
+			confirmed: true,
+			logo: LOGO_IMAGE
+		});
+
+		// P2 printed the test page's logo as garbage: the owner's answer.
+		await withdrawReceiptLogoConfirmation(LOGO_SHA);
+		expect(await logoForAgent(v2, 'receipt')).toEqual({
+			cached: true,
+			confirmed: false,
+			logo: null
+		});
+		expect(await logoForAgent(v2, 'test')).toEqual({
+			cached: true,
+			confirmed: false,
+			logo: LOGO_IMAGE
+		});
+		const second = await sell('cash');
+		await printOriginals(second.orderId, { drawer: false, fetchFn: agent.fetchFn });
+		expect(await reprint(first.orderId, 'receipt', 'Amina', { fetchFn: agent.fetchFn })).toBe(
+			'queued'
+		);
+		const after = agent.jobs().slice(2);
+		expect(after.map((job) => job.body.id)).toEqual([
+			`${second.orderId}:receipt:0`,
+			`${second.orderId}:kitchen:0`,
+			`${first.orderId}:receipt:r1`
+		]);
+		for (const job of after) expect(hasImage(job)).toBe(false);
+		expect(agent.drawers()).toHaveLength(0);
+	});
+
+	it('MANDATORY (the logo confirmation gate): Forget pairing and a new pairing withdraw the confirmation — the next receipt prints without the logo until it is confirmed again', async () => {
+		await cacheLogo();
+		await confirmReceiptLogo(LOGO_SHA);
+		const agent = stubAgent({ agentVersion: 2 });
+		const v2 = statusAt(2);
+		const withdrawn = { cached: true, confirmed: false, logo: null };
+
+		// Forget pairing, then pair again with the same agent.
+		await clearAgentSettings();
+		expect(await logoForAgent(v2, 'receipt')).toEqual(withdrawn);
+		await saveAgentSettings({ url: 'http://127.0.0.1:9471', token: TOKEN });
+		const first = await sell('cash');
+		await printOriginals(first.orderId, { drawer: false, fetchFn: agent.fetchFn });
+		expect(hasImage(agent.jobs()[0]!)).toBe(false);
+		expect((await logoForAgent(v2, 'test')).logo).toEqual(LOGO_IMAGE);
+
+		// Confirmed again on this pairing: the receipt carries it.
+		await confirmReceiptLogo(LOGO_SHA);
+		const second = await sell('cash');
+		await printOriginals(second.orderId, { drawer: false, fetchFn: agent.fetchFn });
+		expect(hasImage(agent.jobs()[2]!)).toBe(true);
+
+		// A NEW pairing over the old one, with nothing forgotten first.
+		await saveAgentSettings({ url: 'http://localhost:9500', token: 'cd'.repeat(32) });
+		expect(await logoForAgent(v2, 'receipt')).toEqual(withdrawn);
+		const third = await sell('cash');
+		await printOriginals(third.orderId, { drawer: false, fetchFn: agent.fetchFn });
+		expect(hasImage(agent.jobs()[4]!)).toBe(false);
+		expect(agent.drawers()).toHaveLength(0);
 	});
 
 	it('cached AND confirmed on agent v2: the receipt starts with exactly the image, the kitchen ticket has none, a reprint has the COPY banner then the image, and no drawer request', async () => {

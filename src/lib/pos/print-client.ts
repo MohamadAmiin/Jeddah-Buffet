@@ -21,12 +21,19 @@
 // re-registered till must be paired again — deliberate: a token for a till that
 // was handed to another restaurant must not survive (T-28 Watch out).
 //
+// A PAIRING SAVED OR FORGOTTEN WITHDRAWS THE RECEIPT-LOGO CONFIRMATION
+// (settings.ts withdrawReceiptLogoConfirmation; settings-tax-payments-receipt
+// Risk 6). The owner's "The logo printed correctly" vouched for the printer it
+// was watched on; a new pairing may lead to another printer, and one without
+// `GS v 0` reads the raster as data that could hold the drawer pulse.
+//
 // Chrome 142+ gates a public-origin page's requests to 127.0.0.1 behind a
 // one-time "local network access" permission (RESEARCH.md). A refused request
 // throws a TypeError exactly like an agent that is not running, so the client
 // asks the Permissions API which it was — and never reports `blocked` unless the
 // browser itself said `denied`.
 import type { PrintLine } from './receipt';
+import { withdrawReceiptLogoConfirmation } from './settings';
 import { cacheSettings, readCachedSetting } from './store';
 
 export const PRINT_AGENT_URL_KEY = 'printAgentUrl';
@@ -103,7 +110,13 @@ export async function readAgentSettings(): Promise<AgentSettings | null> {
 	return { url, token };
 }
 
-/** Throws — and stores nothing — unless the address is loopback and the token is 64 hex. */
+/**
+ * Throws — and stores nothing — unless the address is loopback and the token is
+ * 64 hex. A pairing that IS saved withdraws the receipt-logo confirmation
+ * first, whatever it replaces (see the header): withdrawn before the write, so
+ * a failure between the two leaves the gate closed — never a new pairing under
+ * an old confirmation.
+ */
 export async function saveAgentSettings(settings: AgentSettings): Promise<void> {
 	const url = settings.url.trim();
 	const token = settings.token.trim();
@@ -115,13 +128,16 @@ export async function saveAgentSettings(settings: AgentSettings): Promise<void> 
 	if (!isAgentToken(token)) {
 		throw new Error('The pairing link is damaged — open the link the agent printed again');
 	}
+	await withdrawReceiptLogoConfirmation();
 	await cacheSettings([
 		{ key: PRINT_AGENT_URL_KEY, value: url },
 		{ key: PRINT_AGENT_TOKEN_KEY, value: token }
 	]);
 }
 
+/** "Forget pairing": the logo confirmation goes first, as in saveAgentSettings, then the pairing. */
 export async function clearAgentSettings(): Promise<void> {
+	await withdrawReceiptLogoConfirmation();
 	await cacheSettings([
 		{ key: PRINT_AGENT_URL_KEY, value: null },
 		{ key: PRINT_AGENT_TOKEN_KEY, value: null }

@@ -39,7 +39,12 @@
 	} from '$lib/pos/print-client';
 	import { logoForAgent } from '$lib/pos/printing';
 	import { renderTestPage } from '$lib/pos/receipt';
-	import { confirmReceiptLogo, readConfirmedLogoSha, readReceiptLogo } from '$lib/pos/settings';
+	import {
+		confirmReceiptLogo,
+		readConfirmedLogoSha,
+		readReceiptLogo,
+		withdrawReceiptLogoConfirmation
+	} from '$lib/pos/settings';
 	import { readCachedSetting } from '$lib/pos/store';
 	import { KEY } from '$lib/components/pos/keys';
 
@@ -64,6 +69,9 @@
 	// the fingerprint of the logo the last test page carried (what "The logo
 	// printed correctly" records); `logoSent` is true after a test page that
 	// carried the logo, which is the only time the two answer keys are offered.
+	// A confirmation vouches for ONE printer, so it is withdrawn again by "It did
+	// not print correctly" (for the logo that page carried) and by every pairing
+	// saved or forgotten (print-client.ts) — the gate cannot tell printers apart.
 	let logoCached = $state(false);
 	let logoConfirmed = $state(false);
 	let logoSha = $state<string | null>(null);
@@ -184,6 +192,11 @@
 	async function pair(settings: AgentSettings) {
 		try {
 			await saveAgentSettings(settings);
+			// Saving withdrew the logo confirmation, and an answer to a test page
+			// printed before this pairing is no longer offered: it may have been
+			// another printer.
+			logoConfirmed = false;
+			logoSent = false;
 			url = settings.url;
 			paired = true;
 			announceChange();
@@ -319,13 +332,37 @@
 		}
 	}
 
-	/** "It did not print correctly": stores nothing — receipts keep printing without the logo. */
-	function logoNotPrinted() {
-		logoSent = false;
-		results = [
-			...results,
-			'✕ Receipts will print without the logo. Remove it on the dashboard (Settings → Receipt).'
-		];
+	/**
+	 * "It did not print correctly": withdraw the confirmation of the logo this
+	 * test page carried — confirmed on another printer, it must not keep reaching
+	 * receipts on this one. Receipts print without the logo until a test print is
+	 * confirmed again.
+	 */
+	async function logoNotPrinted() {
+		if (busy || logoSha === null) return;
+		busy = true;
+		failure = '';
+		try {
+			await withdrawReceiptLogoConfirmation(logoSha);
+			// Read back exactly as onMount and the layout derive it, so this chip is right at once.
+			const [logo, confirmedSha] = await Promise.all([
+				readReceiptLogo().catch(() => null),
+				readConfirmedLogoSha().catch(() => null)
+			]);
+			logoCached = logo !== null;
+			logoConfirmed = logo !== null && confirmedSha === logo.sha256;
+			logoSent = false;
+			results = [
+				...results,
+				'✕ Receipts will print without the logo. Remove it on the dashboard (Settings → Receipt).'
+			];
+			// The layout's chip re-polls on this: its "Test-print the logo" warning returns.
+			announceChange();
+		} catch {
+			failure = '✕ The answer could not be saved — try again';
+		} finally {
+			busy = false;
+		}
 	}
 
 	async function forget() {
@@ -336,6 +373,8 @@
 		logoSent = false;
 		try {
 			await clearAgentSettings();
+			// Forgetting withdrew the logo confirmation too (print-client.ts).
+			logoConfirmed = false;
 			paired = false;
 			// `url` stays: "Pair this till" asks the agent this till just left, which
 			// matters when the agent is not on the default port.
@@ -466,7 +505,7 @@
 						class={secondary}
 						disabled={busy}
 						data-testid="logo-not-printed"
-						onclick={logoNotPrinted}
+						onclick={() => void logoNotPrinted()}
 					>
 						It did not print correctly
 					</button>

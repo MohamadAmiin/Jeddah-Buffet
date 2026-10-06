@@ -22,6 +22,7 @@ import {
 	takePairing,
 	type AgentStatus
 } from './print-client';
+import { confirmReceiptLogo, readConfirmedLogoSha } from './settings';
 import { readCachedSetting } from './store';
 
 function deleteDatabase(): Promise<void> {
@@ -103,6 +104,48 @@ describe('saveAgentSettings', () => {
 
 	it('the token never reaches localStorage', () => {
 		expect(typeof globalThis.localStorage).toBe('undefined');
+	});
+});
+
+describe('the pairing and the receipt-logo confirmation (Risk 6)', () => {
+	// The confirmation vouches for the printer it was watched on, and the gate
+	// cannot tell printers apart: every pairing saved or forgotten withdraws it.
+	const SHA = 'a'.repeat(64);
+	const OTHER = { url: 'http://localhost:9500', token: 'cd'.repeat(32) };
+
+	it('saving a pairing withdraws it — a first pairing, a new one, and the same one again', async () => {
+		for (const settings of [{ url: URL, token: TOKEN }, OTHER, OTHER]) {
+			await confirmReceiptLogo(SHA);
+			expect(await readConfirmedLogoSha()).toBe(SHA);
+
+			await saveAgentSettings(settings);
+
+			expect(await readConfirmedLogoSha()).toBeNull();
+			expect(await readAgentSettings()).toEqual(settings);
+		}
+	});
+
+	it('Forget pairing withdraws it', async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		await confirmReceiptLogo(SHA);
+
+		await clearAgentSettings();
+
+		expect(await readConfirmedLogoSha()).toBeNull();
+		expect(await readAgentSettings()).toBeNull();
+	});
+
+	it('a refused pairing stores nothing and withdraws nothing', async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		await confirmReceiptLogo(SHA);
+
+		await expect(
+			saveAgentSettings({ url: 'https://evil.example', token: TOKEN })
+		).rejects.toThrow();
+		await expect(saveAgentSettings({ url: URL, token: TOKEN.slice(1) })).rejects.toThrow();
+
+		expect(await readConfirmedLogoSha()).toBe(SHA);
+		expect(await readAgentSettings()).toEqual({ url: URL, token: TOKEN });
 	});
 });
 
