@@ -333,17 +333,18 @@
 	}
 
 	/**
-	 * "It did not print correctly": withdraw the confirmation of the logo this
-	 * test page carried — confirmed on another printer, it must not keep reaching
-	 * receipts on this one. Receipts print without the logo until a test print is
-	 * confirmed again.
+	 * "It did not print correctly": withdraw ANY confirmation, not only the one of
+	 * the logo this test page carried. A failed raster print means this printer
+	 * cannot print a logo at all, so no logo confirmed on another printer — this
+	 * one, or one restored later with the same fingerprint — may keep reaching its
+	 * receipts. Receipts print without the logo until a test print is confirmed again.
 	 */
 	async function logoNotPrinted() {
 		if (busy || logoSha === null) return;
 		busy = true;
 		failure = '';
 		try {
-			await withdrawReceiptLogoConfirmation(logoSha);
+			await withdrawReceiptLogoConfirmation();
 			// Read back exactly as onMount and the layout derive it, so this chip is right at once.
 			const [logo, confirmedSha] = await Promise.all([
 				readReceiptLogo().catch(() => null),
