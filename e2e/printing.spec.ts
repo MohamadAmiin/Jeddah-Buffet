@@ -217,16 +217,23 @@ test('receipts, kitchen tickets and the drawer: cash prints, a reprint is COPY, 
 		currency: 'USD',
 		idleSeconds: 300
 	});
+	// The receipt header and footer live on /settings/receipt (T-31): the
+	// address, the phone and footer line 1 of up to five.
 	await page
 		.getByRole('navigation', { name: 'Dashboard sections' })
 		.getByRole('link', { name: 'Settings', exact: true })
 		.click();
 	await expect(page).toHaveURL(/\/settings$/);
+	await page
+		.getByRole('navigation', { name: 'Settings sections' })
+		.getByRole('link', { name: 'Receipt', exact: true })
+		.click();
+	await expect(page).toHaveURL(/\/settings\/receipt$/);
 	await page.getByLabel('Address').fill('Makka Al-Mukarama Rd, Km4');
 	await page.getByLabel('Phone').fill('61 555 0142');
-	await page.getByLabel('Footer line').fill('Mahadsanid! Thank you!');
-	await page.getByRole('button', { name: 'Save settings' }).click();
-	await expect(page.getByRole('alert')).toContainText('Settings saved.');
+	await page.getByLabel('Footer line 1').fill('Mahadsanid! Thank you!');
+	await page.getByRole('button', { name: 'Save receipt' }).click();
+	await expect(page.getByRole('alert')).toContainText('Receipt saved.');
 
 	// The card terminal is a NAMED method on /settings/payments (T-29), not a
 	// switch on /settings. It is named `Card` so the till steps below — the
