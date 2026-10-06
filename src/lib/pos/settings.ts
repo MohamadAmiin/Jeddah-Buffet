@@ -45,7 +45,10 @@ import {
 	type ReceiptShow
 } from '../receipt-layout';
 
-/** The three settings-store keys this module owns (00-overview.md, "Till"). */
+/**
+ * The three settings-store keys this module owns (00-overview.md, "Till"), plus
+ * LOGO_CONFIRMED_KEY below — the logo confirmation gate (T-24).
+ */
 export const PAYMENT_METHODS_SETTING = 'paymentMethods';
 export const RECEIPT_LAYOUT_SETTING = 'receiptLayout';
 export const RECEIPT_LOGO_SETTING = 'receiptLogo';
@@ -301,4 +304,40 @@ export async function refreshReceiptLogo(
 	}
 
 	await cacheSettings([{ key: RECEIPT_LOGO_SETTING, value: logo }]);
+}
+
+// ── The logo confirmation gate (T-24) ───────────────────────────────────────
+
+/**
+ * The fingerprint of the logo the owner watched print correctly on a test page
+ * from /pos/printer ("The logo printed correctly"). A RECEIPT carries the logo
+ * only while the cached logo's `sha256` equals this value (printing.ts
+ * logoForAgent). Why a gate at all: on a printer that does not implement
+ * `GS v 0` the raster bytes are read as ordinary data and could, by chance,
+ * contain the drawer pulse (tasks/settings-tax-payments-receipt RESEARCH.md) —
+ * so the one unconfirmed print happens on the printer page, in front of the
+ * owner, never on a customer's receipt. A new logo has a new fingerprint and
+ * needs a new confirmation; bindDevice / forgetDevice clear this key with the
+ * rest of the store, so a re-registered till asks again.
+ */
+const LOGO_CONFIRMED_KEY = 'receiptLogoConfirmed';
+
+/** The confirmed logo's fingerprint — a 64-hex string — or null when unset or garbled. */
+export async function readConfirmedLogoSha(): Promise<string | null> {
+	const value = await readCachedSetting(LOGO_CONFIRMED_KEY);
+
+	return typeof value === 'string' && SHA256_HEX.test(value) ? value : null;
+}
+
+/**
+ * Record that the owner saw the logo with this fingerprint print correctly.
+ * Refuses anything but a 64-hex string with a TypeError — synchronously, before
+ * any write — so a garbled value can never be stored as a confirmation.
+ */
+export function confirmReceiptLogo(sha256: string): Promise<void> {
+	if (typeof sha256 !== 'string' || !SHA256_HEX.test(sha256)) {
+		throw new TypeError("confirmReceiptLogo takes the logo's 64-hex sha256");
+	}
+
+	return cacheSettings([{ key: LOGO_CONFIRMED_KEY, value: sha256 }]);
 }

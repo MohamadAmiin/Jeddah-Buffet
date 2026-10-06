@@ -928,6 +928,7 @@ describe('renderKitchenTicket', () => {
 describe('renderTestPage (T-29)', () => {
 	for (const width of [32, 48] as const) {
 		it(`at ${width}: every line fits, the ruler is exactly ${width} long, all printable ASCII`, () => {
+			// The page is PrintLine[] since T-24; without a logo it holds text lines only.
 			const lines = renderTestPage({
 				width,
 				restaurantName: 'Café Zócalo — “Home”',
@@ -935,7 +936,7 @@ describe('renderTestPage (T-29)', () => {
 				now: '2026-09-29T07:15:00Z',
 				timeZone: 'Africa/Mogadishu',
 				printer: 'kitchen'
-			});
+			}).filter((l): l is TextLine => !isImageLine(l));
 			expect(lines.length).toBeGreaterThan(8);
 			for (const l of lines) {
 				expect(l.text.length, l.text).toBeLessThanOrEqual(width);
@@ -954,6 +955,32 @@ describe('renderTestPage (T-29)', () => {
 			expect(lines.find((l) => l.text.trim() === 'TEST PRINT')?.size).toBe('tall');
 		});
 	}
+});
+
+describe('renderTestPage with the logo (T-24)', () => {
+	const page = {
+		width: 32 as const,
+		restaurantName: 'Maqaayadda Hodan',
+		deviceCode: 'POS1',
+		now: '2026-09-29T07:15:00Z',
+		timeZone: 'Africa/Mogadishu',
+		printer: 'receipt' as const
+	};
+	const logo = { widthDots: 8, heightDots: 1, bitmap: 'gA==' };
+
+	it('prints the image FIRST, exactly as given, and the same text lines after it', () => {
+		const withLogo = renderTestPage({ ...page, logo });
+		expect(withLogo[0]).toEqual({ image: { widthDots: 8, heightDots: 1, bitmap: 'gA==' } });
+		expect(withLogo.filter(isImageLine)).toHaveLength(1);
+		expect(withLogo.slice(1)).toEqual(renderTestPage(page));
+		expect(withLogo.slice(1).some(isImageLine)).toBe(false);
+	});
+
+	it('a null or an absent logo gives no image line, and the same page', () => {
+		expect(renderTestPage({ ...page, logo: null }).some(isImageLine)).toBe(false);
+		expect(renderTestPage(page).some(isImageLine)).toBe(false);
+		expect(renderTestPage({ ...page, logo: null })).toEqual(renderTestPage(page));
+	});
 });
 
 describe('dates', () => {

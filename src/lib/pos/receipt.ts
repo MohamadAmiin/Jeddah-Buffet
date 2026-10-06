@@ -5,7 +5,8 @@
 // CALLER passes in — the owner's receipt layout, the payment numbers and the
 // logo, which src/lib/pos/printing.ts reads from the till's cache — and returns
 // lines for the print agent to encode: printable ASCII text lines and, on a
-// receipt, at most one image line. It reads no setting and computes nothing.
+// receipt or on the receipt printer's test page, at most one image line. It
+// reads no setting and computes nothing.
 // It runs on the till, so it works offline.
 //
 // EVERY AMOUNT ON PAPER IS A STORED STRING FORMATTED, NEVER RECOMPUTED
@@ -556,6 +557,12 @@ export type TestPageInput = {
 	now: string;
 	timeZone: string;
 	printer: 'receipt' | 'kitchen';
+	/**
+	 * The cached logo, printed FIRST — the receipt printer's page on an agent of
+	 * version 2 (T-24): the owner sees on paper that the printer draws it before
+	 * any receipt carries it. Absent or null: text only.
+	 */
+	logo?: ImageLine['image'] | null;
 };
 
 /**
@@ -563,8 +570,9 @@ export type TestPageInput = {
  * TEST PRINT, the printer's role and column count, the terminal, the time,
  * and a ruler of exactly `width` characters so a wrong paper width is visible
  * at a glance (a 48-column page on 58 mm paper wraps or clips the ruler).
+ * With a logo, the image line comes first and the text is exactly the same.
  */
-export function renderTestPage(input: TestPageInput): TextLine[] {
+export function renderTestPage(input: TestPageInput): PrintLine[] {
 	const w = input.width;
 	const ruler = '1234567890'.repeat(5).slice(0, w);
 	const out: TextLine[] = [
@@ -582,5 +590,8 @@ export function renderTestPage(input: TestPageInput): TextLine[] {
 		...lines(center('IF YOU CAN READ THIS,', w), { align: 'center' }),
 		...lines(center('PRINTING WORKS', w), { align: 'center' })
 	];
-	return out.map((l) => ({ ...l, text: toPrintable(l.text) }));
+	// toPrintable maps the text lines only; the image line is passed on exactly.
+	const textLines: TextLine[] = out.map((l) => ({ ...l, text: toPrintable(l.text) }));
+	const logo = input.logo ?? null;
+	return logo === null ? textLines : [{ image: logo }, ...textLines];
 }

@@ -18,20 +18,42 @@
 // layout and the enabled methods' merchant numbers are read HERE from the
 // till's cache (settings.ts, T-21) and passed in: the formatter reads no setting
 // (tasks/settings-tax-payments-receipt T-23).
+//
+// THE LOGO (T-24) goes through logoForAgent, below: only to an agent reporting
+// a version that validates and encodes image lines, and onto a RECEIPT only
+// after the owner confirmed its test print on /pos/printer. A receipt the agent
+// refuses because of its image is sent once more without it (submitReceipt),
+// so a logo never costs the customer a receipt. None of it touches the drawer
+// clause, and the till never composes a printer byte.
 import { paymentNumbersFrom } from '../receipt-layout';
 import { canPrint, type CanPrint } from './can-print';
 import type { Cart } from './orders';
-import { agentStatus, pulseDrawer, submitJob } from './print-client';
+import {
+	agentPrintsImages,
+	agentStatus,
+	pulseDrawer,
+	submitJob,
+	type AgentStatus,
+	type PrintJob,
+	type SubmitResult
+} from './print-client';
 import { onFlushEvent } from './queue';
 import {
+	isImageLine,
 	renderKitchenTicket,
 	renderReceipt,
+	type ImageLine,
 	type ReceiptHeader,
 	type ReceiptInput,
 	type ReceiptWidth
 } from './receipt';
 import { readSessionRow } from './session';
-import { readPaymentMethods, readReceiptLayout } from './settings';
+import {
+	readConfirmedLogoSha,
+	readPaymentMethods,
+	readReceiptLayout,
+	readReceiptLogo
+} from './settings';
 import {
 	inTransaction,
 	readCachedSetting,
@@ -145,16 +167,62 @@ async function businessDateFor(order: LocalOrder<Cart>): Promise<string | null> 
 	return null;
 }
 
-async function receiptInput(order: LocalOrder<Cart>): Promise<ReceiptInput> {
+// ── The logo (T-24) ─────────────────────────────────────────────────────────
+
+export type LogoForAgent = {
+	/** A logo is cached on this till. */
+	cached: boolean;
+	/** The cached logo's sha256 is the one the owner confirmed on /pos/printer. */
+	confirmed: boolean;
+	/** What goes on the page, or null. Never spread from the cache, which carries `sha256`. */
+	logo: ImageLine['image'] | null;
+};
+
+/**
+ * THE LOGO CONFIRMATION GATE. The cached logo (settings.ts — IndexedDB only,
+ * never the network, so an offline till prints its copy) goes on a page only
+ * when the agent reports a version that validates and encodes image lines
+ * (agentPrintsImages — an older agent would refuse the whole job), and on a
+ * RECEIPT only after the owner has watched a test page print it correctly and
+ * pressed "The logo printed correctly" on /pos/printer, which stores its sha256
+ * (settings.ts confirmReceiptLogo). A test page carries it whenever the agent
+ * can print it: that one unconfirmed print happens in front of the owner. Why:
+ * on a printer that does not implement `GS v 0` the raster bytes are read as
+ * ordinary data and could, by chance, contain the drawer pulse (RESEARCH.md);
+ * a receipt never takes that chance. The three fields are copied EXPLICITLY —
+ * the agent refuses an image object with any key beyond widthDots, heightDots
+ * and bitmap (T-25).
+ */
+export async function logoForAgent(
+	status: AgentStatus,
+	purpose: 'receipt' | 'test'
+): Promise<LogoForAgent> {
+	const [cached, confirmedSha] = await Promise.all([
+		readReceiptLogo().catch(() => null),
+		readConfirmedLogoSha().catch(() => null)
+	]);
+	if (cached === null) return { cached: false, confirmed: false, logo: null };
+	const confirmed = confirmedSha === cached.sha256;
+	if (!agentPrintsImages(status)) return { cached: true, confirmed, logo: null };
+	if (purpose === 'receipt' && !confirmed) return { cached: true, confirmed, logo: null };
+	return {
+		cached: true,
+		confirmed,
+		logo: { widthDots: cached.widthDots, heightDots: cached.heightDots, bitmap: cached.bitmap }
+	};
+}
+
+async function receiptInput(order: LocalOrder<Cart>, status: AgentStatus): Promise<ReceiptInput> {
 	const sale = order.sale;
 	if (!sale) throw new Error('order has no sale snapshot');
-	const [header, timeZone, deviceCode, businessDate, layout, methods] = await Promise.all([
+	const [header, timeZone, deviceCode, businessDate, layout, methods, logo] = await Promise.all([
 		readReceiptHeader(),
 		setting('timeZone'),
 		setting('deviceCode'),
 		businessDateFor(order),
 		readReceiptLayout(),
-		readPaymentMethods()
+		readPaymentMethods(),
+		logoForAgent(status, 'receipt')
 	]);
 	return {
 		sale: { ...sale, businessDate },
@@ -165,9 +233,27 @@ async function receiptInput(order: LocalOrder<Cart>): Promise<ReceiptInput> {
 		// The CURRENT settings, not sale data: a reprint prints today's numbers,
 		// and they are never part of the COPY figures (Settings 6).
 		paymentNumbers: paymentNumbersFrom(methods),
-		// T-24 puts the cached logo here, for an agent of version 2 only.
-		logo: null
+		// The cached logo through the gate above: null for an agent below version
+		// 2, for no cached logo, and for a logo the owner has not confirmed.
+		logo: logo.logo
 	};
+}
+
+/**
+ * Send a RECEIPT job — an original or a reprint, never the kitchen ticket.
+ * When the agent refuses it as a bad job AND it carries an image line, send it
+ * ONCE more with the image removed, under the SAME id, and answer with that:
+ * a logo never costs the customer a receipt. The id is safe to reuse because
+ * the agent parses the job BEFORE its queue records the id (print-agent/src/
+ * server.ts, the /jobs route: parseJob throws 422 ahead of submitJob), so the
+ * refused job left nothing behind and nothing prints twice.
+ */
+async function submitReceipt(job: PrintJob, fetchFn: typeof fetch): Promise<SubmitResult> {
+	const answer = await submitJob(job, fetchFn);
+	if (typeof answer === 'object' && answer.error === 'bad_job' && job.lines.some(isImageLine)) {
+		return submitJob({ ...job, lines: job.lines.filter((l) => !isImageLine(l)) }, fetchFn);
+	}
+	return answer;
 }
 
 /**
@@ -222,13 +308,13 @@ export async function printOriginals(
 	const printers = state.status.printers;
 	const receiptWidth: ReceiptWidth = printers.receipt.width;
 	const kitchenWidth: ReceiptWidth = printers.kitchen?.width ?? printers.receipt.width;
-	const input = await receiptInput(order);
+	const input = await receiptInput(order, state.status);
 	const marks = order.printed ?? {};
 	const stamp = () => new Date(now()).toISOString();
 
 	let receipt: PrintOutcome = 'already_printed';
 	if (!marks.receiptAt) {
-		receipt = await submitJob(
+		receipt = await submitReceipt(
 			{
 				id: `${orderId}:receipt:0`,
 				printer: 'receipt',
@@ -304,13 +390,14 @@ export async function reprint(
 			: printers.receipt.width;
 	const n = (order.printed?.reprints ?? 0) + 1;
 	await markPrinted(orderId, { reprints: n });
-	const input = await receiptInput(order);
+	const input = await receiptInput(order, state.status);
 	const copy = { reprintedAt: new Date(now()).toISOString(), by };
 	const lines =
 		kind === 'receipt'
 			? renderReceipt(input, { width, copy })
 			: renderKitchenTicket(input, { width, copy });
-	return submitJob({ id: `${orderId}:${kind}:r${n}`, printer: kind, lines, cut: true }, fetchFn);
+	const job: PrintJob = { id: `${orderId}:${kind}:r${n}`, printer: kind, lines, cut: true };
+	return kind === 'receipt' ? submitReceipt(job, fetchFn) : submitJob(job, fetchFn);
 }
 
 // ── The auto-printer ────────────────────────────────────────────────────────

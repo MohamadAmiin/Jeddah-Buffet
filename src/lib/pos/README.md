@@ -80,7 +80,9 @@ invariant 5).
   `receiptLayout`, `receiptLogo`); readers fall back safely (no methods → `[]`; no layout → the
   default with a pre-plan `receiptFooter` as footer line 1; a bad logo → null); the logo's bytes
   are cached so printing never touches the network, and fetched only when the bundle's
-  fingerprint changes.
+  fingerprint changes. Also the logo confirmation key `receiptLogoConfirmed`
+  (`confirmReceiptLogo` / `readConfirmedLogoSha`): the sha256 of the logo the owner watched print
+  correctly on a test page.
 - `menu-view.ts` — pure helpers over the cached menu: category tabs (an item with no category
   sits under the synthetic `Other` tab), the resolved tax rate, modifier groups, `formatTaxRate`.
 - `photo-warmup.ts` — after every menu sync, fetches each photo once so the browser's HTTP cache
@@ -91,15 +93,20 @@ invariant 5).
   synthetic when the cache has none) and THE offline rule: card and mobile kinds are disabled
   offline with the reason in words; everything decides by kind, never by name.
 - `receipt.ts` — the receipt, kitchen-ticket and test-page formatter. Pure: the sale's STORED
-  snapshot in, lines of printable ASCII out, 32 or 48 columns; it computes nothing.
+  snapshot in, lines of printable ASCII out, plus at most one 1-bit logo image line first on a
+  receipt (and on the receipt printer's test page), 32 or 48 columns; it computes nothing.
 - `print-client.ts` — the loopback agent client: the pairing settings (a loopback address and a
   64-hex token, in IndexedDB, never `localStorage`), obtained from the agent itself
   (`requestPairing`, answered once while the agent's pairing is open) or read from the
   agent's pairing link (`parsePairingFragment`; a link opened before the owner signs in waits in
   memory only) — nothing is typed — `agentStatus`, `submitJob`, `pulseDrawer`,
-  the Chrome local-network permission probe and the printer chip.
+  the Chrome local-network permission probe and the printer chip, which says when the agent is
+  too old to print the cached logo (`agentPrintsImages`, `IMAGE_AGENT_VERSION = 2`) or the logo
+  still needs its test print.
 - `printing.ts` — what prints when: `printOriginals` (with THE drawer clause), `reprint`
   (marked COPY, never the drawer), `startAutoPrint` and its catch-up, and `listRecentSales` /
-  `saleStatusMark` for `/pos/sales`.
+  `saleStatusMark` for `/pos/sales`; the logo goes only to an agent reporting version 2
+  (`logoForAgent`), and onto a receipt only after the owner confirmed the logo's test print
+  (`receiptLogoConfirmed`); a receipt refused because of its image is sent once more without it.
 
 Spec 4, 5, 6, 11. Invariants 5, 12.

@@ -14,11 +14,12 @@ import {
 	type Cart,
 	type MenuItemForCart
 } from './orders';
-import { saveAgentSettings } from './print-client';
+import { saveAgentSettings, type AgentStatus } from './print-client';
 import {
 	CATCH_UP_WINDOW_MS,
 	catchUp,
 	listRecentSales,
+	logoForAgent,
 	printOriginals,
 	readOrder,
 	readReceiptHeader,
@@ -28,7 +29,12 @@ import {
 	startAutoPrint
 } from './printing';
 import { flush } from './queue';
-import { PAYMENT_METHODS_SETTING, RECEIPT_LAYOUT_SETTING } from './settings';
+import {
+	confirmReceiptLogo,
+	PAYMENT_METHODS_SETTING,
+	RECEIPT_LAYOUT_SETTING,
+	refreshReceiptLogo
+} from './settings';
 import { cacheSettings, withDb, type LocalOrder } from './store';
 import { DEFAULT_RECEIPT_LAYOUT, type ReceiptLayout } from '../receipt-layout';
 
@@ -64,10 +70,18 @@ beforeEach(async () => {
 
 type Sent = { path: string; body: Record<string, unknown> };
 
-function stubAgent(over: { kitchen?: boolean; drawer?: number } = {}) {
+/**
+ * `agentVersion` defaults to 1 (text only); `refuseImages` answers 422 bad_job
+ * to any job whose lines carry an `image` — a version-2 agent whose printer
+ * rejects the raster, or a stale status (T-24). Every request is recorded,
+ * refused ones included.
+ */
+function stubAgent(
+	over: { kitchen?: boolean; drawer?: number; agentVersion?: number; refuseImages?: boolean } = {}
+) {
 	const sent: Sent[] = [];
 	const status = {
-		agentVersion: 1,
+		agentVersion: over.agentVersion ?? 1,
 		printers: {
 			receipt: { width: 48, reachable: true, queued: 0 },
 			kitchen: over.kitchen === false ? null : { width: 32, reachable: true, queued: 0 }
@@ -84,7 +98,12 @@ function stubAgent(over: { kitchen?: boolean; drawer?: number } = {}) {
 		if (path === '/status') return json(status, 200);
 		const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
 		sent.push({ path, body });
-		if (path === '/jobs') return json({ status: 'queued' }, 202);
+		if (path === '/jobs') {
+			if (over.refuseImages && hasImage({ path, body })) {
+				return json({ error: 'bad_job', detail: 'lines[0] with an image is refused here' }, 422);
+			}
+			return json({ status: 'queued' }, 202);
+		}
 		if (path === '/drawer') {
 			const code = over.drawer ?? 200;
 			if (code === 200) return json({ status: 'opened' }, 200);
@@ -145,8 +164,43 @@ async function setSync(orderId: string, syncStatus: LocalOrder<Cart>['syncStatus
 	);
 }
 
+const linesOf = (job: Sent) => job.body.lines as Array<Record<string, unknown>>;
+const hasImage = (job: Sent) => linesOf(job).some((l) => 'image' in l);
+/** The text lines only: an image line has no text (T-24). */
 const textOf = (job: Sent) =>
-	(job.body.lines as Array<{ text: string }>).map((l) => l.text).join('\n');
+	linesOf(job)
+		.filter((l): l is { text: string } => typeof l.text === 'string')
+		.map((l) => l.text)
+		.join('\n');
+
+// ── The logo (T-24) ─────────────────────────────────────────────────────────
+
+const LOGO_SHA = 'a'.repeat(64);
+const LOGO_IMAGE = { widthDots: 8, heightDots: 1, bitmap: 'gA==' };
+
+/**
+ * Cache a logo through T-21's public API, never a guessed storage shape: the
+ * bundle's fingerprint in the layout, then the route's bytes from a stub.
+ */
+async function cacheLogo(sha256 = LOGO_SHA) {
+	const route = (async (input: string | URL | Request) => {
+		const url = String(input);
+		if (url !== '/api/pos/receipt-logo') throw new Error(`unexpected request: ${url}`);
+		return new Response(JSON.stringify({ sha256, ...LOGO_IMAGE }), {
+			status: 200,
+			headers: { 'content-type': 'application/json' }
+		});
+	}) as unknown as typeof fetch;
+	await refreshReceiptLogo(
+		{ ...DEFAULT_RECEIPT_LAYOUT, logo: { sha256, widthDots: 8, heightDots: 1 } },
+		route
+	);
+}
+
+const statusAt = (agentVersion: number): AgentStatus => ({
+	agentVersion,
+	printers: { receipt: { width: 48, reachable: true, queued: 0 }, kitchen: null }
+});
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
@@ -307,6 +361,214 @@ describe('printOriginals', () => {
 		// replaces the legacy receiptFooter fallback (T-21).
 		expect(tape).toContain('CASH');
 		expect(tape).not.toContain('Mahadsanid!');
+	});
+});
+
+describe('the logo (T-24)', () => {
+	it('a cached logo is left off for an agent of version 1, confirmed or not', async () => {
+		await cacheLogo();
+		await confirmReceiptLogo(LOGO_SHA);
+		const agent = stubAgent({ agentVersion: 1 });
+		const { orderId } = await sell('cash');
+		const result = await printOriginals(orderId, { drawer: false, fetchFn: agent.fetchFn });
+		expect(result.receipt).toBe('queued');
+		expect(agent.jobs()).toHaveLength(2);
+		for (const job of agent.jobs()) expect(hasImage(job)).toBe(false);
+		expect(await logoForAgent(statusAt(1), 'receipt')).toEqual({
+			cached: true,
+			confirmed: true,
+			logo: null
+		});
+		expect(await logoForAgent(statusAt(1), 'test')).toEqual({
+			cached: true,
+			confirmed: true,
+			logo: null
+		});
+	});
+
+	it('MANDATORY (the logo confirmation gate): on agent v2 a receipt carries the logo only after the owner confirmed THIS logo; a test page carries it regardless', async () => {
+		await cacheLogo();
+		const agent = stubAgent({ agentVersion: 2 });
+		const v2 = statusAt(2);
+
+		// Cached, not confirmed: nothing on the receipt; the test page gets it.
+		const first = await sell('cash');
+		expect(
+			(await printOriginals(first.orderId, { drawer: false, fetchFn: agent.fetchFn })).receipt
+		).toBe('queued');
+		expect(hasImage(agent.jobs()[0]!)).toBe(false);
+		expect(await logoForAgent(v2, 'receipt')).toEqual({
+			cached: true,
+			confirmed: false,
+			logo: null
+		});
+		expect(await logoForAgent(v2, 'test')).toEqual({
+			cached: true,
+			confirmed: false,
+			logo: LOGO_IMAGE
+		});
+
+		// Confirmed: the receipt carries it.
+		await confirmReceiptLogo(LOGO_SHA);
+		const second = await sell('cash');
+		await printOriginals(second.orderId, { drawer: false, fetchFn: agent.fetchFn });
+		expect(hasImage(agent.jobs()[2]!)).toBe(true);
+		expect(await logoForAgent(v2, 'receipt')).toEqual({
+			cached: true,
+			confirmed: true,
+			logo: LOGO_IMAGE
+		});
+		expect(await logoForAgent(v2, 'test')).toEqual({
+			cached: true,
+			confirmed: true,
+			logo: LOGO_IMAGE
+		});
+
+		// A NEW logo has a new sha256 and needs a new confirmation: off the
+		// receipt again, still on the test page.
+		await cacheLogo('b'.repeat(64));
+		const third = await sell('cash');
+		await printOriginals(third.orderId, { drawer: false, fetchFn: agent.fetchFn });
+		expect(hasImage(agent.jobs()[4]!)).toBe(false);
+		expect(await logoForAgent(v2, 'receipt')).toEqual({
+			cached: true,
+			confirmed: false,
+			logo: null
+		});
+		expect(await logoForAgent(v2, 'test')).toEqual({
+			cached: true,
+			confirmed: false,
+			logo: LOGO_IMAGE
+		});
+	});
+
+	it('cached AND confirmed on agent v2: the receipt starts with exactly the image, the kitchen ticket has none, a reprint has the COPY banner then the image, and no drawer request', async () => {
+		await cacheLogo();
+		await confirmReceiptLogo(LOGO_SHA);
+		const agent = stubAgent({ agentVersion: 2 });
+		const { orderId } = await sell('cash');
+		const result = await printOriginals(orderId, {
+			drawer: false,
+			fetchFn: agent.fetchFn,
+			now: () => NOW_MS
+		});
+		expect(result).toEqual({ receipt: 'queued', kitchen: 'queued', drawer: 'not_requested' });
+		const [receipt, kitchen] = agent.jobs();
+		// Exactly the three fields — never the cache's sha256 (the agent refuses a fourth key).
+		expect(linesOf(receipt!)[0]).toEqual({
+			image: { widthDots: 8, heightDots: 1, bitmap: 'gA==' }
+		});
+		expect(linesOf(receipt!).filter((l) => 'image' in l)).toHaveLength(1);
+		expect(textOf(receipt!)).toContain('Maqaayadda Hodan');
+		expect(hasImage(kitchen!)).toBe(false);
+
+		expect(await reprint(orderId, 'receipt', 'Amina', { fetchFn: agent.fetchFn })).toBe('queued');
+		const copy = linesOf(agent.jobs()[2]!);
+		expect(copy[0]!.text).toMatch(/^\*+$/);
+		expect(copy[1]!.text).toContain('COPY');
+		expect(copy[2]!.text).toMatch(/^\*+$/);
+		expect(copy[3]).toEqual({ image: LOGO_IMAGE });
+		expect(agent.drawers()).toHaveLength(0);
+	});
+
+	it('agent v2 with no logo cached: no image line anywhere', async () => {
+		const agent = stubAgent({ agentVersion: 2 });
+		const { orderId } = await sell('cash');
+		await printOriginals(orderId, { drawer: false, fetchFn: agent.fetchFn });
+		expect(agent.jobs()).toHaveLength(2);
+		for (const job of agent.jobs()) expect(hasImage(job)).toBe(false);
+		const none = { cached: false, confirmed: false, logo: null };
+		expect(await logoForAgent(statusAt(2), 'receipt')).toEqual(none);
+		expect(await logoForAgent(statusAt(2), 'test')).toEqual(none);
+	});
+
+	it('a receipt the agent refuses because of its image is sent once more without it, under the SAME id — a logo never costs the customer a receipt', async () => {
+		await cacheLogo();
+		await confirmReceiptLogo(LOGO_SHA);
+		const agent = stubAgent({ agentVersion: 2, refuseImages: true });
+		const { orderId } = await sell('cash');
+		const result = await printOriginals(orderId, {
+			drawer: false,
+			fetchFn: agent.fetchFn,
+			now: () => NOW_MS
+		});
+		expect(result.receipt).toBe('queued');
+		expect(result.kitchen).toBe('queued');
+		expect(agent.ids()).toEqual([
+			`${orderId}:receipt:0`,
+			`${orderId}:receipt:0`,
+			`${orderId}:kitchen:0`
+		]);
+		const [refused, again] = agent.jobs();
+		expect(hasImage(refused!)).toBe(true);
+		expect(hasImage(again!)).toBe(false);
+		expect(textOf(again!)).toBe(textOf(refused!));
+		expect((await readOrder(orderId))?.printed?.receiptAt).toBeTruthy();
+
+		// The same for a receipt reprint; the kitchen ticket never carries an image.
+		expect(await reprint(orderId, 'receipt', 'Amina', { fetchFn: agent.fetchFn })).toBe('queued');
+		expect(agent.ids().slice(3)).toEqual([`${orderId}:receipt:r1`, `${orderId}:receipt:r1`]);
+		expect(hasImage(agent.jobs()[3]!)).toBe(true);
+		expect(hasImage(agent.jobs()[4]!)).toBe(false);
+		expect(agent.drawers()).toHaveLength(0);
+	});
+
+	it('MANDATORY (invariant 5 — fail closed), with a cached, confirmed logo on agent v2: a pending card sale sends NOTHING; once accepted it prints both, with the logo, and never the drawer', async () => {
+		await cacheLogo();
+		await confirmReceiptLogo(LOGO_SHA);
+		const agent = stubAgent({ agentVersion: 2 });
+		const { orderId } = await sell('card');
+		const pending = await printOriginals(orderId, { drawer: true, fetchFn: agent.fetchFn });
+		expect(pending).toEqual({
+			receipt: { skipped: 'awaiting_confirmation' },
+			kitchen: { skipped: 'awaiting_confirmation' },
+			drawer: { skipped: 'awaiting_confirmation' }
+		});
+		expect(agent.sent).toHaveLength(0);
+
+		await setSync(orderId, 'accepted');
+		const printed = await printOriginals(orderId, { drawer: true, fetchFn: agent.fetchFn });
+		expect(printed.receipt).toBe('queued');
+		expect(printed.kitchen).toBe('queued');
+		expect(printed.drawer).toBe('not_cash');
+		expect(agent.ids()).toEqual([`${orderId}:receipt:0`, `${orderId}:kitchen:0`]);
+		expect(agent.drawers()).toHaveLength(0);
+		expect(hasImage(agent.jobs()[0]!)).toBe(true);
+		expect(hasImage(agent.jobs()[1]!)).toBe(false);
+		expect(textOf(agent.jobs()[0]!)).toContain('CARD');
+	});
+
+	it('the drawer clause is untouched by the logo (invariant 9): one pulse for a cash original within 30 s, none on a reprint, none at 31 s', async () => {
+		await cacheLogo();
+		await confirmReceiptLogo(LOGO_SHA);
+		const agent = stubAgent({ agentVersion: 2 });
+		const { orderId } = await sell('cash');
+		const result = await printOriginals(orderId, {
+			drawer: true,
+			fetchFn: agent.fetchFn,
+			now: () => NOW_MS + 5_000
+		});
+		expect(result).toEqual({ receipt: 'queued', kitchen: 'queued', drawer: 'opened' });
+		expect(hasImage(agent.jobs()[0]!)).toBe(true);
+		expect(agent.drawers()).toHaveLength(1);
+		expect(agent.drawers()[0]!.body).toEqual({
+			id: `${orderId}:drawer`,
+			completedAt: new Date(NOW_MS).toISOString()
+		});
+
+		expect(await reprint(orderId, 'receipt', 'Amina', { fetchFn: agent.fetchFn })).toBe('queued');
+		expect(hasImage(agent.jobs()[2]!)).toBe(true);
+		expect(agent.drawers()).toHaveLength(1);
+
+		const late = await sell('cash');
+		const tooLate = await printOriginals(late.orderId, {
+			drawer: true,
+			fetchFn: agent.fetchFn,
+			now: () => NOW_MS + 31_000
+		});
+		expect(tooLate).toEqual({ receipt: 'queued', kitchen: 'queued', drawer: 'too_late' });
+		expect(agent.drawers()).toHaveLength(1);
+		expect((await readOrder(late.orderId))?.printed?.drawerAt).toBeUndefined();
 	});
 });
 

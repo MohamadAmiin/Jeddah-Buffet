@@ -10,6 +10,8 @@ import {
 	PAYMENT_METHODS_SETTING,
 	RECEIPT_LAYOUT_SETTING,
 	RECEIPT_LOGO_SETTING,
+	confirmReceiptLogo,
+	readConfirmedLogoSha,
 	readPaymentMethods,
 	readReceiptLayout,
 	readReceiptLogo,
@@ -358,8 +360,53 @@ describe('refreshReceiptLogo', () => {
 	});
 });
 
+describe('the logo confirmation key (T-24)', () => {
+	// The settings-store key the gate is keyed on (00-overview.md, "Printing"):
+	// written only by confirmReceiptLogo, read only by readConfirmedLogoSha.
+	const KEY = 'receiptLogoConfirmed';
+
+	it('answers null when nothing was confirmed', async () => {
+		expect(await readConfirmedLogoSha()).toBeNull();
+	});
+
+	it('answers null for a garbled value: not a string, or not 64 lower-case hex characters', async () => {
+		for (const value of [
+			null,
+			42,
+			true,
+			'XYZ',
+			'A'.repeat(64),
+			'a'.repeat(63),
+			'a'.repeat(65),
+			{ sha256: 'a'.repeat(64) },
+			['a'.repeat(64)]
+		]) {
+			await cacheSettings([{ key: KEY, value }]);
+
+			expect(await readConfirmedLogoSha(), JSON.stringify(value)).toBeNull();
+		}
+	});
+
+	it('confirmReceiptLogo refuses anything but a 64-hex string with a TypeError, before any write', async () => {
+		expect(() => confirmReceiptLogo('x')).toThrow(TypeError);
+		expect(() => confirmReceiptLogo('A'.repeat(64))).toThrow(TypeError);
+		expect(() => confirmReceiptLogo('a'.repeat(63))).toThrow(TypeError);
+		expect(() => confirmReceiptLogo(42 as unknown as string)).toThrow(TypeError);
+
+		expect(await readConfirmedLogoSha()).toBeNull();
+	});
+
+	it('a 64-hex value round-trips, and a later confirmation replaces it', async () => {
+		await confirmReceiptLogo(LOGO.sha256);
+		expect(await readConfirmedLogoSha()).toBe(LOGO.sha256);
+
+		await confirmReceiptLogo('b'.repeat(64));
+		expect(await readConfirmedLogoSha()).toBe('b'.repeat(64));
+	});
+});
+
 describe('a device change', () => {
-	it('drops the cached methods, layout and logo', async () => {
+	it('drops the cached methods, layout, logo and the logo confirmation', async () => {
 		await bindDevice('device-A');
 		await cacheSettings([
 			{ key: PAYMENT_METHODS_SETTING, value: [CASH, EVC] },
@@ -369,13 +416,17 @@ describe('a device change', () => {
 			},
 			{ key: RECEIPT_LOGO_SETTING, value: LOGO }
 		]);
+		await confirmReceiptLogo(LOGO.sha256);
 		expect(await readPaymentMethods()).toEqual([CASH, EVC]);
 		expect(await readReceiptLogo()).toEqual(LOGO);
+		expect(await readConfirmedLogoSha()).toBe(LOGO.sha256);
 
 		await bindDevice('device-B');
 
 		expect(await readPaymentMethods()).toEqual([]);
 		expect(await readReceiptLogo()).toBeNull();
 		expect(await readReceiptLayout()).toEqual(DEFAULT_RECEIPT_LAYOUT);
+		// A re-registered till asks for the test print again (the gate's key is per device).
+		expect(await readConfirmedLogoSha()).toBeNull();
 	});
 });
