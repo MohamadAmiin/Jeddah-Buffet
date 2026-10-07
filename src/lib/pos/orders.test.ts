@@ -17,6 +17,7 @@ import {
 	removeLine,
 	setNote,
 	setOrderType,
+	touchedLineId,
 	type Cart,
 	type CartLine,
 	type MenuItemForCart,
@@ -113,9 +114,11 @@ describe('cart primitives', () => {
 
 	it('removeLine renumbers; changeQuantity is absolute', () => {
 		let d = newCart('device-A', 'takeaway', null, NOW);
+		// Three DIFFERENT lines: a repeat tap of the same thing would merge.
 		d = addLine(d, tea, VAT);
-		d = addLine(d, tea, VAT);
-		d = addLine(d, tea, VAT);
+		d = addLine(d, tea, REDUCED);
+		d = addLine(d, tea, LEGACY);
+		expect(d.lines.map((l) => l.lineNo)).toEqual([1, 2, 3]);
 		const middleId = d.lines[1].lineId;
 		d = removeLine(d, middleId);
 		expect(d.lines.map((l) => l.lineNo)).toEqual([1, 2]);
@@ -808,11 +811,15 @@ describe('T-33 cart helpers', () => {
 		expect(setNote(cart, 'no onions').lines).toBe(cart.lines);
 	});
 
-	it('two taps are two lines; quantity is absolute; removal renumbers', () => {
+	it('two taps of the same item are ONE line of 2; quantity is absolute; removal renumbers', () => {
 		let cart = newCart('device-A', 'dine_in', null, NOW);
 		cart = addLine(cart, tea33, VAT);
+		const teaId = cart.lines[0].lineId;
 		cart = addLine(cart, tea33, VAT);
-		expect(cart.lines.map((l) => l.lineNo)).toEqual([1, 2]);
+		cart = addLine(cart, tea33, VAT, [], 2);
+		expect(cart.lines).toHaveLength(1);
+		expect(cart.lines[0]).toMatchObject({ lineId: teaId, lineNo: 1, quantity: 4 });
+		expect(lineAmounts(cart)).toEqual([3400n]);
 
 		cart = doneWhenCart();
 		const teaLineId = cart.lines[0].lineId;
@@ -821,9 +828,55 @@ describe('T-33 cart helpers', () => {
 		expect(lineAmounts(cart)).toEqual([2550n, 1050n]);
 		expect(() => changeQuantity(cart, teaLineId, 0)).toThrow();
 
-		cart = addLine(cart, tea33, VAT);
+		cart = addLine(cart, tea33, REDUCED);
 		cart = removeLine(cart, cart.lines[0].lineId);
 		expect(cart.lines.map((l) => l.lineNo)).toEqual([1, 2]);
+	});
+
+	it('a tap merges only into the very same thing: modifiers, price and rate must match', () => {
+		const sugar: MenuModifierForCart = { id: 'mod-sugar', name: 'Sugar', priceDeltaMinor: 0n };
+		let cart = newCart('device-A', 'dine_in', null, NOW);
+		cart = addLine(cart, coffee33, VAT, [oat, sugar]);
+		// The same choices picked in another order are the same line.
+		cart = addLine(cart, coffee33, VAT, [sugar, oat]);
+		expect(cart.lines).toHaveLength(1);
+		expect(cart.lines[0].quantity).toBe(2);
+		// Other modifiers, none, another rate, or a price a menu re-sync changed:
+		// each its own line, so every line keeps the one price and rate it prints.
+		cart = addLine(cart, coffee33, VAT, [oat]);
+		cart = addLine(cart, coffee33, VAT);
+		cart = addLine(cart, coffee33, REDUCED);
+		cart = addLine(cart, coffee33, LEGACY);
+		cart = addLine(cart, { ...coffee33, priceMinor: 1100n }, VAT);
+		cart = addLine(cart, { ...coffee33, id: 'item-coffee-2' }, VAT);
+		expect(cart.lines.map((l) => l.quantity)).toEqual([2, 1, 1, 1, 1, 1, 1]);
+		expect(cart.lines.map((l) => l.lineNo)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+		// A merge that would leave the safe-integer range throws, like changeQuantity.
+		const big = changeQuantity(cart, cart.lines[1].lineId, Number.MAX_SAFE_INTEGER);
+		expect(() => addLine(big, coffee33, VAT, [oat])).toThrow(/quantity/);
+	});
+
+	it('a cart saved by the previous build (no rate id or name keys) still merges a legacy tap', () => {
+		let cart = newCart('device-A', 'dine_in', null, NOW);
+		cart = addLine(cart, tea33, LEGACY);
+		const legacy: Partial<CartLine> = { ...cart.lines[0] };
+		delete legacy.taxRateId;
+		delete legacy.taxRateName;
+		cart = { ...cart, lines: [legacy as CartLine] };
+		cart = addLine(cart, tea33, LEGACY);
+		expect(cart.lines).toHaveLength(1);
+		expect(cart.lines[0].quantity).toBe(2);
+	});
+
+	it('touchedLineId names the line a tap created or grew', () => {
+		const empty = newCart('device-A', 'dine_in', null, NOW);
+		const one = addLine(empty, tea33, VAT);
+		expect(touchedLineId(empty, one)).toBe(one.lines[0].lineId);
+		const two = addLine(one, coffee33, VAT);
+		expect(touchedLineId(one, two)).toBe(two.lines[1].lineId);
+		const grown = addLine(two, tea33, VAT);
+		expect(touchedLineId(two, grown)).toBe(one.lines[0].lineId);
+		expect(touchedLineId(grown, grown)).toBeNull();
 	});
 
 	it('setOrderType trims, drops the table for takeaway, and leaves lines alone', () => {

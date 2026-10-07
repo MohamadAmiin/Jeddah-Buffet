@@ -29,6 +29,7 @@
 		saveCart,
 		setNote,
 		setOrderType,
+		touchedLineId,
 		type Cart
 	} from '$lib/pos/orders';
 	import {
@@ -275,8 +276,11 @@
 	}
 
 	async function added(next: Cart) {
+		const before = cart;
 		await commit(next);
-		selectedLine = next.lines.at(-1)?.lineId ?? null;
+		// A repeat tap grows an existing line (addLine): select THAT line, so
+		// − / + / Remove act on what was just tapped.
+		selectedLine = (before && touchedLineId(before, next)) ?? next.lines.at(-1)?.lineId ?? null;
 	}
 
 	async function tapItem(item: MenuItem) {

@@ -119,11 +119,43 @@ function requireQuantity(quantity: number): void {
 	}
 }
 
+/** The modifiers a line was added with, in one order, so the same choices
+ * picked in another order compare equal. */
+function modifierKey(modifiers: CartModifier[]): string {
+	return modifiers
+		.map((m) => `${m.modifierId}\u0000${m.modifierName}\u0000${m.priceDeltaMinor}`)
+		.sort()
+		.join('\u0001');
+}
+
+/** True when `line` is the very thing `candidate` would add: the same item with
+ * the same modifier choices, at the same snapshotted price and rate. Anything
+ * that differs — other modifiers, or a price or rate a menu re-sync changed —
+ * stays its own line, so every line keeps the one price and rate it prints. */
+function isSameLine(line: CartLine, candidate: CartLine): boolean {
+	return (
+		line.menuItemId === candidate.menuItemId &&
+		line.unitPriceMinor === candidate.unitPriceMinor &&
+		line.taxRateBp === candidate.taxRateBp &&
+		(line.taxRateId ?? null) === candidate.taxRateId &&
+		(line.taxRateName ?? null) === candidate.taxRateName &&
+		line.discountMinor === candidate.discountMinor &&
+		modifierKey(line.modifiers) === modifierKey(candidate.modifiers)
+	);
+}
+
 /**
- * Add one line, snapshotting the RESOLVED rate on it — number, id and name
+ * Add an item, snapshotting the RESOLVED rate on it — number, id and name
  * (invariant 7). The caller resolves the rate (resolveTaxRate), which throws
  * for a missing one before this is reached; here the number only has to be a
  * rate at all. A rate of 0 is a rate, not "unset".
+ *
+ * Tapping an item the cart already holds — same item, same modifier choices,
+ * same price and rate (isSameLine) — raises that line's quantity instead of
+ * adding a second line (user decision 2026-10-07, replacing pos-sales T-33's
+ * "two taps = two lines"). The line keeps its id and number. The till has no
+ * sent-to-kitchen state on a cart line (kitchen tickets print at payment), so
+ * nothing already sent can be merged into.
  */
 export function addLine(
 	cart: Cart,
@@ -153,7 +185,29 @@ export function addLine(
 			priceDeltaMinor: m.priceDeltaMinor
 		}))
 	};
+	const existing = cart.lines.find((l) => isSameLine(l, line));
+	if (existing) {
+		const merged = existing.quantity + quantity;
+		requireQuantity(merged);
+		return {
+			...cart,
+			lines: cart.lines.map((l) => (l.lineId === existing.lineId ? { ...l, quantity: merged } : l))
+		};
+	}
 	return { ...cart, lines: [...cart.lines, line] };
+}
+
+/**
+ * The line an `addLine` call created or grew, for the screen to select: the
+ * line of `after` that is new, or whose quantity differs from `before`'s.
+ * Null when nothing changed.
+ */
+export function touchedLineId(before: Cart, after: Cart): string | null {
+	for (const line of after.lines) {
+		const old = before.lines.find((l) => l.lineId === line.lineId);
+		if (!old || old.quantity !== line.quantity) return line.lineId;
+	}
+	return null;
 }
 
 export function removeLine(cart: Cart, lineId: string): Cart {
