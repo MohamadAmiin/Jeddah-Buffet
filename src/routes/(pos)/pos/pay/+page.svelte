@@ -612,9 +612,12 @@
 										{/if}
 									{:else if selected.kind === 'mobile'}
 										<p>
-											The customer sends {formatMoney(figures.totals.total, money)} by {selected.name}{#if selected.merchantNumber !== null}
-												to <span class="font-mono" data-testid="merchant-number"
-													>{selected.merchantNumber}</span
+											The customer sends {formatMoney(figures.totals.total, money)} by {selected.name}{selected.merchantNumber !==
+											null
+												? ' to '
+												: ''}{#if selected.merchantNumber !== null}<span
+													class="font-mono"
+													data-testid="merchant-number">{selected.merchantNumber}</span
 												>{/if}. Press Pay once the payment has arrived.
 										</p>
 									{/if}

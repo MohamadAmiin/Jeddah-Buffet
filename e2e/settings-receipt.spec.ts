@@ -342,6 +342,8 @@ test('configure, sell, print: a named rate, a named method, payment numbers, the
 	// The selected method's merchant number, on the pay screen (Settings 6).
 	await expect(tillPage.getByTestId('merchant-number')).toBeVisible();
 	await expect(tillPage.getByTestId('merchant-number')).toHaveText('61 234 5678');
+	// The words around it keep their spaces ("by EVC Plus to 61 …", not "EVC Plusto").
+	await expect(tillPage.getByText(/ by EVC Plus to 61 234 5678\. Press Pay/)).toBeVisible();
 	const before2 = receipt.bytes().length;
 	const kitchenBefore2 = kitchen.bytes().length;
 	await tillPage.getByRole('button', { name: /^Pay · EVC Plus/ }).click();
