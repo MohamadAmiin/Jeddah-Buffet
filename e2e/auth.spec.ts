@@ -190,18 +190,36 @@ test('the owner registers, works, signs out and signs back in', async ({
 	await page.goto('/settings');
 	await expect(page.getByRole('heading', { name: 'Restaurant settings' })).toBeVisible();
 	await page.getByLabel('Restaurant name').fill(RENAMED);
-	// The tax and currency settings (T-36), saved by the same form.
-	await page.getByLabel('Tax mode').fill('exclusive');
-	await page.getByLabel('Tax rate (basis points)').fill('825');
+	// The currency (T-36) is saved by the same form; the tax mode and the rate
+	// moved to /settings/tax (tasks/settings-tax-payments-receipt T-28), below.
 	await page.getByLabel('Currency code').fill('USD');
 	await page.getByRole('button', { name: 'Save settings' }).click();
 	await expect(page.getByRole('alert')).toContainText('Settings saved.');
 	await expect(page.getByRole('heading', { name: RENAMED })).toBeVisible();
 
-	// The checklist now names ONLY the idle lock: tax and currency have left the
-	// list. The idle lock is saved on /device, which this journey never visits, so
-	// the settings step legitimately stays "not started" — do not assert that it
-	// flips to done, and do not assert that the count drops.
+	// The tax page, by its sub-navigation link: the mode, then ONE named default
+	// rate through the Add tax rate panel — as the completeSettings fixture does.
+	await page
+		.getByRole('navigation', { name: 'Settings sections' })
+		.getByRole('link', { name: 'Tax', exact: true })
+		.click();
+	await expect(page).toHaveURL(/\/settings\/tax$/);
+	await page.getByLabel('Tax mode').selectOption('exclusive');
+	await page.getByRole('button', { name: 'Save tax mode' }).click();
+	await expect(page.getByRole('alert')).toContainText('Tax mode saved.');
+	const taxPanel = page.getByRole('region', { name: 'Add tax rate' });
+	await taxPanel.getByLabel('Rate name').fill('Tax');
+	await taxPanel.getByLabel('Rate (%)').fill('8.25');
+	await taxPanel.getByLabel('Make this the default rate').check();
+	await page.getByRole('button', { name: 'Add rate' }).click();
+	await expect(page.getByRole('alert')).toContainText('Tax added and made the default rate.');
+
+	// The checklist now names ONLY the idle lock: the tax mode, the named default
+	// rate and the currency have left the list — which is what proves the default
+	// rate counts for settingsComplete. The idle lock is saved on /device, which
+	// this journey never visits, so the settings step legitimately stays "not
+	// started" — do not assert that it flips to done, and do not assert that the
+	// count drops.
 	await page.goto('/dashboard');
 	await expect(page.getByText('Still needed: POS idle lock.')).toBeVisible();
 

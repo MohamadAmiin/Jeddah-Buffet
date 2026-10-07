@@ -113,6 +113,14 @@ const job = (id: string, text: string, printer: Job['printer'] = 'receipt'): Job
 	lines: [{ text }],
 	cut: true
 });
+const imageJob = (id: string, printer: Job['printer']): Job => ({
+	id,
+	printer,
+	lines: [{ image: { widthDots: 8, heightDots: 1, bitmap: 'AA==' } }],
+	cut: true
+});
+/** The GS v 0 header the encoder writes for a printer `bytesWide` bytes across (48 or 72). */
+const rasterHeader = (bytesWide: number) => Buffer.from([0x1d, 0x76, 0x30, 0x00, bytesWide, 0x00]);
 
 const textOf = (bytes: Buffer) => bytes.toString('latin1').replace(/[^\x20-\x7e]/g, '');
 const queueFiles = (dataDir: string) =>
@@ -328,6 +336,33 @@ describe('createQueue', () => {
 		fresh.record('young');
 		expect(fresh.prune()).toBe(0);
 		expect(fresh.has('young')).toBe(true);
+	});
+
+	it('reports agent version 2', async () => {
+		const fake = await startFake();
+		const q = makeQueue(tmp(), fake.cfg);
+		expect((await q.status()).agentVersion).toBe(2);
+	});
+
+	it('encodes an image at the width of the printer the job goes to', async () => {
+		const receipt = await startFake();
+		const kitchen = await startFake();
+		const q = makeQueue(tmp(), receipt.cfg, { ...kitchen.cfg, width: 32 });
+		expect(q.submit(imageJob('i1:receipt:0', 'receipt'))).toBe('queued');
+		expect(q.submit(imageJob('i1:kitchen:0', 'kitchen'))).toBe('queued');
+		await until(() => receipt.jobs.length === 1 && kitchen.jobs.length === 1, 4000, 'both prints');
+		// 48 columns are 72 bytes across (0x48); 32 columns are 48 bytes (0x30).
+		expect(receipt.jobs[0]!.includes(rasterHeader(0x48))).toBe(true);
+		expect(receipt.jobs[0]!.includes(rasterHeader(0x30))).toBe(false);
+		expect(kitchen.jobs[0]!.includes(rasterHeader(0x30))).toBe(true);
+		expect(kitchen.jobs[0]!.includes(rasterHeader(0x48))).toBe(false);
+
+		// With no kitchen printer a kitchen job rides the receipt printer, at ITS width.
+		const only = await startFake();
+		const fallback = makeQueue(tmp(), only.cfg, null);
+		expect(fallback.submit(imageJob('i2:kitchen:0', 'kitchen'))).toBe('queued');
+		await until(() => only.jobs.length === 1, 4000, 'the kitchen image on the receipt printer');
+		expect(only.jobs[0]!.includes(rasterHeader(0x48))).toBe(true);
 	});
 });
 

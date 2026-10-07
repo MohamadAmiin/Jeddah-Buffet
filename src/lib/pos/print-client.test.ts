@@ -4,10 +4,12 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+	agentPrintsImages,
 	agentStatus,
 	clearAgentSettings,
 	DEFAULT_AGENT_URL,
 	hasPendingPairing,
+	IMAGE_AGENT_VERSION,
 	localNetworkPermission,
 	parsePairingFragment,
 	printerChip,
@@ -20,6 +22,7 @@ import {
 	takePairing,
 	type AgentStatus
 } from './print-client';
+import { confirmReceiptLogo, readConfirmedLogoSha } from './settings';
 import { readCachedSetting } from './store';
 
 function deleteDatabase(): Promise<void> {
@@ -101,6 +104,48 @@ describe('saveAgentSettings', () => {
 
 	it('the token never reaches localStorage', () => {
 		expect(typeof globalThis.localStorage).toBe('undefined');
+	});
+});
+
+describe('the pairing and the receipt-logo confirmation (Risk 6)', () => {
+	// The confirmation vouches for the printer it was watched on, and the gate
+	// cannot tell printers apart: every pairing saved or forgotten withdraws it.
+	const SHA = 'a'.repeat(64);
+	const OTHER = { url: 'http://localhost:9500', token: 'cd'.repeat(32) };
+
+	it('saving a pairing withdraws it — a first pairing, a new one, and the same one again', async () => {
+		for (const settings of [{ url: URL, token: TOKEN }, OTHER, OTHER]) {
+			await confirmReceiptLogo(SHA);
+			expect(await readConfirmedLogoSha()).toBe(SHA);
+
+			await saveAgentSettings(settings);
+
+			expect(await readConfirmedLogoSha()).toBeNull();
+			expect(await readAgentSettings()).toEqual(settings);
+		}
+	});
+
+	it('Forget pairing withdraws it', async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		await confirmReceiptLogo(SHA);
+
+		await clearAgentSettings();
+
+		expect(await readConfirmedLogoSha()).toBeNull();
+		expect(await readAgentSettings()).toBeNull();
+	});
+
+	it('a refused pairing stores nothing and withdraws nothing', async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		await confirmReceiptLogo(SHA);
+
+		await expect(
+			saveAgentSettings({ url: 'https://evil.example', token: TOKEN })
+		).rejects.toThrow();
+		await expect(saveAgentSettings({ url: URL, token: TOKEN.slice(1) })).rejects.toThrow();
+
+		expect(await readConfirmedLogoSha()).toBe(SHA);
+		expect(await readAgentSettings()).toEqual({ url: URL, token: TOKEN });
 	});
 });
 
@@ -228,6 +273,13 @@ describe('agentStatus', () => {
 			`Bearer ${TOKEN}`
 		);
 		expect(calls[0]!.init.signal).toBeInstanceOf(AbortSignal);
+	});
+
+	it('returns a version-2 body as ready, exactly as it arrived (print-agent T-25)', async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		const v2: AgentStatus = { ...READY, agentVersion: 2 };
+		const { fetchFn } = stubFetch([{ status: 200, body: v2 }]);
+		expect(await agentStatus(fetchFn, unknown)).toEqual({ state: 'ready', status: v2 });
 	});
 
 	it('maps 401 and 403 → unauthorized, 500 → unreachable', async () => {
@@ -392,7 +444,77 @@ describe('localNetworkPermission', () => {
 	});
 });
 
+describe('agentPrintsImages (T-24)', () => {
+	it('is true from version 2 — IMAGE_AGENT_VERSION — and false for 1, a missing version or the string "2"', () => {
+		expect(IMAGE_AGENT_VERSION).toBe(2);
+		// The status body is an unvalidated cast: a version that is not a number is no version.
+		const at = (agentVersion: unknown) =>
+			agentPrintsImages({ ...READY, agentVersion } as AgentStatus);
+		expect(at(1)).toBe(false);
+		expect(at(2)).toBe(true);
+		expect(at(3)).toBe(true);
+		expect(at(undefined)).toBe(false);
+		expect(at(null)).toBe(false);
+		expect(at('2')).toBe(false);
+	});
+});
+
 describe('printerChip', () => {
+	it('says when a ready agent is too old to print the cached logo, or the logo still needs its test print (T-24)', () => {
+		const v1: AgentStatus = {
+			agentVersion: 1,
+			printers: { receipt: { width: 48, reachable: true, queued: 0 }, kitchen: null }
+		};
+		const v2: AgentStatus = { ...v1, agentVersion: 2 };
+		const tooOld = {
+			glyph: '◆',
+			text: 'Update the print agent to print the logo',
+			tone: 'offline'
+		};
+		expect(printerChip({ state: 'ready', status: v1 }, { logoCached: true })).toEqual(tooOld);
+		expect(
+			printerChip({ state: 'ready', status: v1 }, { logoCached: true, logoConfirmed: true })
+		).toEqual(tooOld);
+		// Jobs waiting are still counted, after the sentence.
+		expect(
+			printerChip({ state: 'ready', status: READY }, { logoCached: true, logoConfirmed: true })
+		).toEqual({
+			glyph: '◆',
+			text: 'Update the print agent to print the logo · 2 waiting',
+			tone: 'offline'
+		});
+		expect(printerChip({ state: 'ready', status: v2 }, { logoCached: true })).toEqual({
+			glyph: '◆',
+			text: 'Test-print the logo before receipts use it',
+			tone: 'offline'
+		});
+		expect(
+			printerChip(
+				{ state: 'ready', status: { ...READY, agentVersion: 2 } },
+				{ logoCached: true, logoConfirmed: false }
+			)
+		).toEqual({
+			glyph: '◆',
+			text: 'Test-print the logo before receipts use it · 2 waiting',
+			tone: 'offline'
+		});
+		// Ready, as before: no logo cached (whatever the version), or v2 with the logo confirmed.
+		const ready = { glyph: '●', text: 'Printer ready', tone: 'ok' };
+		expect(printerChip({ state: 'ready', status: v1 })).toEqual(ready);
+		expect(printerChip({ state: 'ready', status: v1 }, {})).toEqual(ready);
+		expect(printerChip({ state: 'ready', status: v2 }, { logoCached: false })).toEqual(ready);
+		expect(
+			printerChip({ state: 'ready', status: v2 }, { logoCached: true, logoConfirmed: true })
+		).toEqual(ready);
+		// The four non-ready states ignore the option.
+		for (const state of ['unreachable', 'blocked', 'unauthorized', 'not_set_up'] as const) {
+			expect(printerChip({ state }, { logoCached: true })).toEqual(printerChip({ state }));
+			expect(printerChip({ state }, { logoCached: true, logoConfirmed: true })).toEqual(
+				printerChip({ state })
+			);
+		}
+	});
+
 	it('gives each state its glyph, sentence and tone', () => {
 		expect(printerChip({ state: 'ready', status: READY })).toEqual({
 			glyph: '●',

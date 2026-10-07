@@ -3,9 +3,9 @@ import { describe, it, expect } from 'vitest';
 import {
 	createCategorySchema,
 	createItemSchema,
-	formatTaxRate,
-	parseOptionalRate,
-	parsePriceInput
+	itemTaxRateLabel,
+	parsePriceInput,
+	parseTaxRateChoice
 } from './helpers';
 
 // MANDATORY (spec 29 — money arithmetic and rounding): the ONE place a typed
@@ -54,29 +54,48 @@ describe('parsePriceInput — THE price parser', () => {
 	});
 });
 
-describe('formatTaxRate', () => {
-	it.each([
-		[825, '8.25%'],
-		[850, '8.5%'],
-		[1000, '10%'],
-		[5, '0.05%'],
-		[0, '0%'],
-		[10000, '100%'],
-		[null, 'restaurant rate']
-	])('labels %s as %j', (bp, label) => {
-		expect(formatTaxRate(bp)).toBe(label);
+// MANDATORY (spec 29 — tax): the item panel's rate choice (tasks/settings-tax-
+// payments-receipt T-32). A blank is Default — NULL, which follows the
+// restaurant's default rate — and anything else must be a rate's uuid; a number
+// such as '825' is no longer a rate on this page.
+describe('parseTaxRateChoice — the item panel’s rate select', () => {
+	const uuid = '0f9a4c2e-1b3d-4e5f-8a6b-7c8d9e0f1a2b';
+	const MESSAGE = 'That tax rate no longer exists. Reload the page.';
+
+	it.each(['', '  ', null, undefined])('reads %j as Default (null)', (raw) => {
+		expect(parseTaxRateChoice(raw)).toEqual({ ok: true, value: null });
+	});
+
+	it('reads a uuid as itself, trimmed', () => {
+		expect(parseTaxRateChoice(uuid)).toEqual({ ok: true, value: uuid });
+		expect(parseTaxRateChoice(`  ${uuid}  `)).toEqual({ ok: true, value: uuid });
+	});
+
+	it.each(['abc', '825'])('refuses %j with the message', (raw) => {
+		expect(parseTaxRateChoice(raw)).toEqual({ ok: false, message: MESSAGE });
 	});
 });
 
-describe('parseOptionalRate', () => {
-	it('reads a blank as "inherit the restaurant rate" (null) and a whole number as itself', () => {
-		expect(parseOptionalRate('')).toEqual({ ok: true, value: null });
-		expect(parseOptionalRate(null)).toEqual({ ok: true, value: null });
-		expect(parseOptionalRate('825')).toEqual({ ok: true, value: 825 });
+// MANDATORY (spec 29 — tax): the tile's label names the rate the item sells at.
+describe('itemTaxRateLabel', () => {
+	const tax = { id: 'rate-tax', name: 'Tax', rateBp: 1000 };
+	const exempt = { id: 'rate-exempt', name: 'Exempt', rateBp: 0 };
+	const rates = [tax, exempt];
+
+	it('names the default rate while the item follows it', () => {
+		expect(itemTaxRateLabel(null, rates, tax)).toBe('Default (Tax 10.00%)');
 	});
 
-	it.each(['8.25', '10001', '-1', 'abc'])('refuses %j', (raw) => {
-		expect(parseOptionalRate(raw).ok).toBe(false);
+	it('names the rate the item is pinned to', () => {
+		expect(itemTaxRateLabel(exempt.id, rates, tax)).toBe('Exempt 0.00%');
+	});
+
+	it('says so while no default has been chosen', () => {
+		expect(itemTaxRateLabel(null, rates, null)).toBe('Default (not chosen yet)');
+	});
+
+	it('guards an id no rate matches', () => {
+		expect(itemTaxRateLabel('rate-gone', rates, tax)).toBe('Unknown rate');
 	});
 });
 

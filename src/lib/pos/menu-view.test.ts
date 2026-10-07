@@ -1,7 +1,14 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { formatTaxRate as moneyFormatTaxRate } from '../money/tax';
 import type { LocalMenu } from './store';
-import { formatTaxRate, itemsByCategory, modifierGroupsFor, resolveTaxRate } from './menu-view';
+import {
+	formatTaxRate,
+	itemsByCategory,
+	lineTaxRateText,
+	modifierGroupsFor,
+	resolveTaxRate
+} from './menu-view';
 
 type Item = LocalMenu['items'][number];
 
@@ -10,6 +17,7 @@ function item(over: Partial<Item> & Pick<Item, 'id' | 'categoryId'>): Item {
 		name: over.id,
 		priceMinor: 100n,
 		taxRateBp: null,
+		taxRate: null,
 		isAvailable: true,
 		sortOrder: 0,
 		modifierGroupIds: [],
@@ -21,11 +29,13 @@ function item(over: Partial<Item> & Pick<Item, 'id' | 'categoryId'>): Item {
 function menu(over: Partial<LocalMenu>): LocalMenu {
 	return {
 		version: 1,
+		format: 2,
 		restaurantId: 'r',
 		currency: 'USD',
 		currencyExponent: 2,
 		taxMode: 'exclusive',
 		taxRateBp: 825,
+		defaultTaxRate: null,
 		categories: [],
 		items: [],
 		modifierGroups: [],
@@ -33,14 +43,84 @@ function menu(over: Partial<LocalMenu>): LocalMenu {
 	};
 }
 
+// tasks/settings-tax-payments-receipt T-18: the named rate first, then the legacy
+// numbers a format-1 copy carries.
 describe('resolveTaxRate', () => {
-	it('prefers the item, treats 0 as a rate, and throws when neither is set', () => {
-		expect(resolveTaxRate({ name: 'Tea', taxRateBp: 500 }, { taxRateBp: 825 })).toBe(500);
-		expect(resolveTaxRate({ name: 'Tea', taxRateBp: null }, { taxRateBp: 825 })).toBe(825);
-		expect(resolveTaxRate({ name: 'Tea', taxRateBp: 0 }, { taxRateBp: 825 })).toBe(0);
-		expect(() => resolveTaxRate({ name: 'Tea', taxRateBp: null }, { taxRateBp: null })).toThrow(
-			/tax rate.*Tea|Tea.*tax rate/
+	const TAX = { id: 'r0', name: 'Tax', rateBp: 825 };
+
+	it("the item's named rate wins", () => {
+		const reduced = { id: 'r5', name: 'Reduced', rateBp: 500 };
+		const resolved = resolveTaxRate(
+			{ name: 'Tea', taxRate: reduced, taxRateBp: 999 },
+			{ defaultTaxRate: TAX, taxRateBp: 825 }
 		);
+		expect(resolved).toEqual({ id: 'r5', name: 'Reduced', rateBp: 500 });
+		// Copied into a new object: a cart line never shares the cached row.
+		expect(resolved).not.toBe(reduced);
+	});
+
+	it("a format-1 item's own number comes next", () => {
+		expect(
+			resolveTaxRate(
+				{ name: 'Tea', taxRate: null, taxRateBp: 500 },
+				{ defaultTaxRate: TAX, taxRateBp: 825 }
+			)
+		).toEqual({ id: null, name: null, rateBp: 500 });
+	});
+
+	it("then the menu's default rate", () => {
+		const resolved = resolveTaxRate(
+			{ name: 'Tea', taxRate: null, taxRateBp: null },
+			{ defaultTaxRate: TAX, taxRateBp: 825 }
+		);
+		expect(resolved).toEqual({ id: 'r0', name: 'Tax', rateBp: 825 });
+		expect(resolved).not.toBe(TAX);
+	});
+
+	it("then the menu's legacy number", () => {
+		expect(
+			resolveTaxRate(
+				{ name: 'Tea', taxRate: null, taxRateBp: null },
+				{ defaultTaxRate: null, taxRateBp: 825 }
+			)
+		).toEqual({ id: null, name: null, rateBp: 825 });
+	});
+
+	it('0 is a rate at every step', () => {
+		const exempt = { id: 'r-ex', name: 'Exempt', rateBp: 0 };
+		expect(
+			resolveTaxRate(
+				{ name: 'Tea', taxRate: exempt, taxRateBp: 825 },
+				{ defaultTaxRate: TAX, taxRateBp: 825 }
+			)
+		).toEqual({ id: 'r-ex', name: 'Exempt', rateBp: 0 });
+		expect(
+			resolveTaxRate(
+				{ name: 'Tea', taxRate: null, taxRateBp: 0 },
+				{ defaultTaxRate: TAX, taxRateBp: 825 }
+			)
+		).toEqual({ id: null, name: null, rateBp: 0 });
+		expect(
+			resolveTaxRate(
+				{ name: 'Tea', taxRate: null, taxRateBp: null },
+				{ defaultTaxRate: exempt, taxRateBp: 825 }
+			)
+		).toEqual({ id: 'r-ex', name: 'Exempt', rateBp: 0 });
+		expect(
+			resolveTaxRate(
+				{ name: 'Tea', taxRate: null, taxRateBp: null },
+				{ defaultTaxRate: null, taxRateBp: 0 }
+			)
+		).toEqual({ id: null, name: null, rateBp: 0 });
+	});
+
+	it('throws naming the item when nothing is set', () => {
+		expect(() =>
+			resolveTaxRate(
+				{ name: 'Tea', taxRate: null, taxRateBp: null },
+				{ defaultTaxRate: null, taxRateBp: null }
+			)
+		).toThrow(/tax rate.*Tea|Tea.*tax rate/);
 	});
 });
 
@@ -121,6 +201,24 @@ describe('formatTaxRate', () => {
 		expect(() => formatTaxRate(8.25)).toThrow();
 		expect(() => formatTaxRate(-1)).toThrow();
 	});
+
+	it("is the money module's function, re-exported — not a copy", () => {
+		expect(formatTaxRate).toBe(moneyFormatTaxRate);
+	});
+});
+
+// settings-tax-payments-receipt T-19: the check line's tax text — the stored
+// number first (e2e/pos-sale.spec.ts asserts `@ 8.00 · tax 10.00%`), then the
+// rate's name when the line has one.
+describe('lineTaxRateText', () => {
+	it('prints the stored number, then the name when the line has one', () => {
+		expect(lineTaxRateText({ taxRateBp: 1000, taxRateName: null })).toBe('10.00%');
+		expect(lineTaxRateText({ taxRateBp: 1000, taxRateName: 'VAT' })).toBe('10.00% (VAT)');
+	});
+
+	it('a line saved by the previous build, with no name key, prints the number alone', () => {
+		expect(lineTaxRateText({ taxRateBp: 1000 })).toBe('10.00%');
+	});
 });
 
 describe('MANDATORY (spec 29) — the till screens hold no number conversion of money', () => {
@@ -144,7 +242,9 @@ describe('MANDATORY (spec 29) — the till screens hold no number conversion of 
 		'Number(',
 		'roundToMinor(',
 		'taxOnAmount(',
-		'taxOnLine('
+		'taxOnLine(',
+		// T-19: only orders.ts computes the per-rate breakdown; a screen prints it.
+		'taxBreakdown('
 	];
 
 	for (const file of FILES) {

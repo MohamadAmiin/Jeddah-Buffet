@@ -15,24 +15,38 @@
 //
 // The agent is the one program on the till PC that can open the cash drawer,
 // which is why the drawer is its own endpoint (T-26 never queues or replays it)
-// and why a job's text is validated here to printable ASCII within the target
-// printer's width — the encoder (T-26) is the second wall.
+// and why a job's lines are validated here: text to printable ASCII within the
+// target printer's width, or an image to an exact shape — a width that is a
+// multiple of 8 up to the printer's dots, a height up to MAX_IMAGE_HEIGHT_DOTS,
+// and canonical base64 of exactly widthDots / 8 × heightDots bytes
+// (settings-tax-payments-receipt T-25). The encoder (escpos.ts) is the second
+// wall for both.
 import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AgentConfig } from './config.ts';
+import { DOTS, MAX_IMAGE_HEIGHT_DOTS } from './escpos.ts';
 import type { PairingClaim } from './pairing.ts';
 
-export type PrintLine = {
+export type TextLine = {
 	text: string;
 	bold?: boolean;
 	size?: 'normal' | 'tall' | 'double';
 	align?: 'left' | 'center';
 };
+/**
+ * A picture as plain pixel data, never printer bytes. `bitmap` is STANDARD
+ * base64 with `=` padding, exactly as the till's cached logo carries it
+ * (GET /api/pos/receipt-logo): 1-bit rows of widthDots / 8 bytes, most
+ * significant bit first, 1 = black — the GS v 0 raster format, so the agent
+ * never inverts or reorders a bit.
+ */
+export type ImageLine = { image: { widthDots: number; heightDots: number; bitmap: string } };
+export type PrintLine = TextLine | ImageLine;
 export type Job = { id: string; printer: 'receipt' | 'kitchen'; lines: PrintLine[]; cut: boolean };
 export type DrawerRequest = { id: string; completedAt: string };
 export type PrinterStatus = { width: 32 | 48; reachable: boolean; queued: number };
 export type AgentStatus = {
-	agentVersion: 1;
+	agentVersion: 2;
 	printers: { receipt: PrinterStatus; kitchen: PrinterStatus | null };
 };
 export type SubmitOutcome = 'queued' | 'duplicate';
@@ -47,6 +61,8 @@ export type AgentDeps = {
 };
 
 export const MAX_BODY_BYTES = 65_536;
+/** A receipt carries one logo; the cap stops a job from becoming a picture dump that holds the printer. */
+export const MAX_IMAGE_LINES = 2;
 const ID = /^[A-Za-z0-9:_-]{1,100}$/;
 const PRINTABLE = /^[\x20-\x7e]*$/;
 const ISO_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/;
@@ -77,9 +93,71 @@ function id(value: unknown): string {
 }
 
 /**
+ * An image line is `{ image: { widthDots, heightDots, bitmap } }` and nothing
+ * else — no text, no attribute, no extra field — in the exact shape the
+ * encoder's raster header will fix for the target printer. `bitmap` must be
+ * STANDARD base64 with `=` padding that decodes to EXACTLY widthDots / 8 ×
+ * heightDots bytes: the canonical round trip refuses URL-safe characters,
+ * missing padding and non-zero trailing bits, all of which Node's lenient
+ * decoder accepts silently. Returns a FRESH object, never the input.
+ */
+function imageLine(l: Record<string, unknown>, i: number, width: 32 | 48): ImageLine {
+	if (Object.keys(l).length !== 1) {
+		throw new BadRequest(`lines[${i}] with an image must have no other key`);
+	}
+	const image = obj(l.image, `lines[${i}].image`);
+	if (Object.keys(image).sort().join(',') !== 'bitmap,heightDots,widthDots') {
+		throw new BadRequest(
+			`lines[${i}].image must have exactly the keys widthDots, heightDots and bitmap`
+		);
+	}
+	const { widthDots, heightDots, bitmap } = image;
+	if (
+		typeof widthDots !== 'number' ||
+		!Number.isInteger(widthDots) ||
+		widthDots % 8 !== 0 ||
+		widthDots < 8 ||
+		widthDots > DOTS[width]
+	) {
+		throw new BadRequest(
+			`lines[${i}].image.widthDots must be a multiple of 8 from 8 to ${DOTS[width]} on a ${width}-column printer`
+		);
+	}
+	if (
+		typeof heightDots !== 'number' ||
+		!Number.isInteger(heightDots) ||
+		heightDots < 1 ||
+		heightDots > MAX_IMAGE_HEIGHT_DOTS
+	) {
+		throw new BadRequest(
+			`lines[${i}].image.heightDots must be an integer from 1 to ${MAX_IMAGE_HEIGHT_DOTS}`
+		);
+	}
+	if (typeof bitmap !== 'string') {
+		throw new BadRequest(`lines[${i}].image.bitmap must be a base64 string`);
+	}
+	const expected = (widthDots / 8) * heightDots;
+	const chars = 4 * Math.ceil(expected / 3);
+	if (bitmap.length !== chars) {
+		throw new BadRequest(
+			`lines[${i}].image.bitmap must be ${chars} base64 characters for ${expected} bytes`
+		);
+	}
+	const decoded = Buffer.from(bitmap, 'base64');
+	if (decoded.length !== expected || decoded.toString('base64') !== bitmap) {
+		throw new BadRequest(
+			`lines[${i}].image.bitmap must be standard base64 of exactly ${expected} bytes`
+		);
+	}
+	return { image: { widthDots, heightDots, bitmap } };
+}
+
+/**
  * A print job as the till sends it. The target printer decides the width: a
  * kitchen job goes to the kitchen printer, or to the receipt printer when none
- * is configured (assumption 7). A 'double' line holds half the columns.
+ * is configured (assumption 7). A 'double' line holds half the columns; an
+ * image line is at most the printer's dots wide and MAX_IMAGE_HEIGHT_DOTS
+ * tall, and a job carries at most MAX_IMAGE_LINES of them.
  */
 export function parseJob(raw: unknown, printers: AgentConfig['printers']): Job {
 	const body = obj(raw, 'job');
@@ -92,8 +170,13 @@ export function parseJob(raw: unknown, printers: AgentConfig['printers']): Job {
 	if (!Array.isArray(body.lines) || body.lines.length < 1 || body.lines.length > 400) {
 		throw new BadRequest('lines must be an array of 1-400 lines');
 	}
-	const lines: PrintLine[] = body.lines.map((entry, i) => {
+	let imageLines = 0;
+	const lines: PrintLine[] = body.lines.map((entry, i): PrintLine => {
 		const l = obj(entry, `lines[${i}]`);
+		if (Object.hasOwn(l, 'image')) {
+			imageLines += 1;
+			return imageLine(l, i, target.width);
+		}
 		if (typeof l.text !== 'string' || !PRINTABLE.test(l.text)) {
 			throw new BadRequest(`lines[${i}].text must be printable ASCII (0x20-0x7E)`);
 		}
@@ -113,12 +196,15 @@ export function parseJob(raw: unknown, printers: AgentConfig['printers']): Job {
 		if (l.align !== undefined && (typeof l.align !== 'string' || !ALIGNS.has(l.align))) {
 			throw new BadRequest(`lines[${i}].align must be left or center`);
 		}
-		const line: PrintLine = { text: l.text };
+		const line: TextLine = { text: l.text };
 		if (l.bold !== undefined) line.bold = l.bold;
-		if (l.size !== undefined) line.size = size as PrintLine['size'];
-		if (l.align !== undefined) line.align = l.align as PrintLine['align'];
+		if (l.size !== undefined) line.size = size as TextLine['size'];
+		if (l.align !== undefined) line.align = l.align as TextLine['align'];
 		return line;
 	});
+	if (imageLines > MAX_IMAGE_LINES) {
+		throw new BadRequest(`a job carries at most ${MAX_IMAGE_LINES} image lines`);
+	}
 	if (typeof body.cut !== 'boolean') throw new BadRequest('cut must be a boolean');
 	return { id: jobId, printer, lines, cut: body.cut };
 }

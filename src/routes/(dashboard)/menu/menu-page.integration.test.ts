@@ -3,12 +3,14 @@ import type { RequestEvent } from '@sveltejs/kit';
 import { eq } from 'drizzle-orm';
 import { testDb, closeTestDb } from '$lib/server/db/test/db';
 import { seedStaff } from '$lib/server/db/test/seed';
+import { seedTaxRate } from '$lib/server/db/test/settings';
 import { restaurants } from '$lib/server/db/schema/restaurants';
 import { users } from '$lib/server/db/schema/users';
+import { auditLog } from '$lib/server/db/schema/audit';
 import { menuCategories, menuImages, menuItems } from '$lib/server/db/schema/menu';
 import type { Principal } from '$lib/server/auth/session';
 import { onRestaurantCreated, updateSettings } from '$lib/server/restaurants';
-import { createCategory, listMenu } from '$lib/server/menu';
+import { archiveTaxRate, createCategory, listMenu } from '$lib/server/menu';
 import { applyMovements, createIngredient, setRecipe } from '$lib/server/inventory';
 import { minor } from '$lib/money';
 import { formatAmount, moneyFormatFor } from '$lib/money/format';
@@ -56,6 +58,30 @@ async function makeRestaurant({ currency }: { currency: boolean }) {
 	);
 	return { restaurantId: restaurant.id, ownerId: owner.id, categoryId: category.id };
 }
+
+/**
+ * A SECOND restaurant with one live rate and no owner row (the fixture owner's
+ * email is unique across every restaurant, so a second makeRestaurant would
+ * collide). Returns the rate's id, which the first restaurant must never reach.
+ */
+async function foreignRate(): Promise<string> {
+	const [other] = await db.insert(restaurants).values({ name: 'Cafe Two' }).returning();
+	return db.transaction(async (tx) => {
+		await onRestaurantCreated(tx, other.id, {
+			restaurantName: 'Cafe Two',
+			timeZone: 'Africa/Mogadishu'
+		});
+		return seedTaxRate(
+			tx,
+			other.id,
+			{ rateBp: 1000 },
+			{ actorUserId: null, ip: null, userAgent: null }
+		);
+	});
+}
+
+const rateChangeAudits = () =>
+	db.select().from(auditLog).where(eq(auditLog.event, 'menu.item_tax_rate_changed'));
 
 function principal(userId: string, restaurantId: string, role: Principal['role']): Principal {
 	return {
@@ -128,7 +154,7 @@ describe('the /menu page', () => {
 
 		const result = await act(
 			'createItem',
-			makeEvent(asOwner, { categoryId: r.categoryId, name: 'Tea', price: '8.50', taxRateBp: '' })
+			makeEvent(asOwner, { categoryId: r.categoryId, name: 'Tea', price: '8.50', taxRateId: '' })
 		);
 
 		// The result also carries itemId (T-11), for the panel's follow-up photo upload.
@@ -136,7 +162,8 @@ describe('the /menu page', () => {
 		expect(typeof (result as { itemId?: unknown }).itemId).toBe('string');
 		const [row] = await db.select().from(menuItems).where(eq(menuItems.name, 'Tea'));
 		expect(row.priceMinor).toBe(850n);
-		expect(row.taxRateBp).toBeNull();
+		// T-13: no rate chosen on the item = NULL = the restaurant's default rate.
+		expect(row.taxRateId).toBeNull();
 	});
 
 	it('refuses a price with more decimals than the currency has, and stores nothing', async () => {
@@ -180,7 +207,167 @@ describe('the /menu page', () => {
 		// JSON.stringify throws on a bigint, so this line is the assertion.
 		const serialised = JSON.stringify(data);
 		expect(serialised).toContain('"price":"1,234.50"');
-		expect(serialised).toContain('"taxRate":"restaurant rate"');
+		// T-32: no rate chosen yet — the tile says so, and the panel offers Default alone.
+		expect(serialised).toContain('"taxRate":"Default (not chosen yet)"');
+		expect(serialised).toContain('"rateOptions":[{"value":"","label":"Default — not chosen yet"}]');
+
+		// Once a default Tax 10% rate exists, the item — which stored NULL — follows it,
+		// and the panel offers Default (named) plus the live rate by id.
+		const ctx = { actorUserId: r.ownerId, ip: null, userAgent: null };
+		const taxId = await db.transaction((tx) =>
+			seedTaxRate(tx, r.restaurantId, { rateBp: 1000, makeDefault: true }, ctx)
+		);
+		const again = JSON.stringify(await load(makeEvent(asOwner) as never));
+		expect(again).toContain('"taxRate":"Default (Tax 10.00%)"');
+		expect(again).toContain(
+			`"rateOptions":[{"value":"","label":"Default — Tax 10.00%"},{"value":"${taxId}","label":"Tax 10.00%"}]`
+		);
+	});
+
+	// T-32: the panel's rate choice. '' is Default (NULL — the item follows the
+	// restaurant's default even after it changes); an id pins the item to that
+	// rate. Two different choices, never collapsed.
+	it('creates an item on a named rate and one on the default', async () => {
+		const r = await makeRestaurant({ currency: true });
+		const asOwner = principal(r.ownerId, r.restaurantId, 'owner');
+		const ctx = { actorUserId: r.ownerId, ip: null, userAgent: null };
+		const exemptId = await db.transaction(async (tx) => {
+			await seedTaxRate(tx, r.restaurantId, { rateBp: 1000, makeDefault: true }, ctx);
+			return seedTaxRate(tx, r.restaurantId, { name: 'Exempt', rateBp: 0 }, ctx);
+		});
+
+		expect(
+			await act(
+				'createItem',
+				makeEvent(asOwner, {
+					categoryId: r.categoryId,
+					name: 'Water',
+					price: '1.00',
+					taxRateId: exemptId
+				})
+			)
+		).toMatchObject({ message: 'Water added.' });
+		expect(
+			await act(
+				'createItem',
+				makeEvent(asOwner, { categoryId: r.categoryId, name: 'Tea', price: '2.00', taxRateId: '' })
+			)
+		).toMatchObject({ message: 'Tea added.' });
+
+		const rows = await db
+			.select()
+			.from(menuItems)
+			.where(eq(menuItems.restaurantId, r.restaurantId));
+		const byName = new Map(rows.map((row) => [row.name, row]));
+		expect(byName.get('Water')!.taxRateId).toBe(exemptId);
+		expect(byName.get('Tea')!.taxRateId).toBeNull();
+
+		// The tiles: the pinned rate by name; Default names the default rate.
+		const data = (await load(makeEvent(asOwner) as never)) as {
+			items: { name: string; taxRate: string; taxRateId: string | null }[];
+		};
+		const tiles = new Map(data.items.map((item) => [item.name, item]));
+		expect(tiles.get('Water')).toMatchObject({ taxRate: 'Exempt 0.00%', taxRateId: exemptId });
+		expect(tiles.get('Tea')).toMatchObject({ taxRate: 'Default (Tax 10.00%)', taxRateId: null });
+		// Creating an item audits no rate change: there was no rate before.
+		expect(await rateChangeAudits()).toHaveLength(0);
+	});
+
+	it('moves an item from a named rate back to Default, audited once (invariant 10)', async () => {
+		const r = await makeRestaurant({ currency: true });
+		const asOwner = principal(r.ownerId, r.restaurantId, 'owner');
+		const ctx = { actorUserId: r.ownerId, ip: null, userAgent: null };
+		const exemptId = await db.transaction(async (tx) => {
+			await seedTaxRate(tx, r.restaurantId, { rateBp: 1000, makeDefault: true }, ctx);
+			return seedTaxRate(tx, r.restaurantId, { name: 'Exempt', rateBp: 0 }, ctx);
+		});
+		const created = (await act(
+			'createItem',
+			makeEvent(asOwner, {
+				categoryId: r.categoryId,
+				name: 'Water',
+				price: '1.00',
+				taxRateId: exemptId
+			})
+		)) as { itemId: string };
+		const itemId = created.itemId;
+		const form = (taxRateId: string) =>
+			makeEvent(asOwner, { itemId, name: 'Water', price: '', categoryId: r.categoryId, taxRateId });
+
+		expect(await act('updateItem', form(''))).toEqual({ message: 'Water saved.' });
+		const [row] = await db.select().from(menuItems).where(eq(menuItems.id, itemId));
+		expect(row.taxRateId).toBeNull();
+		const audits = await rateChangeAudits();
+		expect(audits).toHaveLength(1);
+		expect(audits[0].restaurantId).toBe(r.restaurantId);
+		expect(audits[0].actorUserId).toBe(r.ownerId);
+		expect(audits[0].details).toMatchObject({
+			itemId,
+			name: 'Water',
+			oldTaxRateId: exemptId,
+			newTaxRateId: null
+		});
+
+		// Saving the form again with Default still chosen writes and audits nothing.
+		expect(await act('updateItem', form(''))).toEqual({ message: 'No change to save.' });
+		expect(await rateChangeAudits()).toHaveLength(1);
+	});
+
+	it("refuses another restaurant's rate, an archived rate and a malformed id, and stores nothing", async () => {
+		const r = await makeRestaurant({ currency: true });
+		const asOwner = principal(r.ownerId, r.restaurantId, 'owner');
+		const ctx = { actorUserId: r.ownerId, ip: null, userAgent: null };
+		const archivedId = await db.transaction(async (tx) => {
+			await seedTaxRate(tx, r.restaurantId, { rateBp: 1000, makeDefault: true }, ctx);
+			const old = await seedTaxRate(tx, r.restaurantId, { name: 'Old', rateBp: 500 }, ctx);
+			const archived = await archiveTaxRate(tx, r.restaurantId, old, ctx);
+			if (!archived.ok) throw new Error(archived.reason);
+			return old;
+		});
+		const foreignId = await foreignRate();
+		const GONE = 'That tax rate is no longer available.';
+		const MALFORMED = 'That tax rate no longer exists. Reload the page.';
+		const refusals = [
+			[foreignId, GONE],
+			[archivedId, GONE],
+			['abc', MALFORMED]
+		] as const;
+
+		for (const [taxRateId, message] of refusals) {
+			expect(
+				await act(
+					'createItem',
+					makeEvent(asOwner, { categoryId: r.categoryId, name: 'Tea', price: '1.00', taxRateId })
+				),
+				taxRateId
+			).toMatchObject({ status: 400, data: { message } });
+		}
+		expect(await db.select().from(menuItems)).toHaveLength(0);
+
+		// The same three on an existing item leave it on Default, with no audit row.
+		const created = (await act(
+			'createItem',
+			makeEvent(asOwner, { categoryId: r.categoryId, name: 'Tea', price: '1.00', taxRateId: '' })
+		)) as { itemId: string };
+		for (const [taxRateId, message] of refusals) {
+			expect(
+				await act(
+					'updateItem',
+					makeEvent(asOwner, {
+						itemId: created.itemId,
+						name: 'Tea',
+						price: '',
+						categoryId: r.categoryId,
+						taxRateId
+					})
+				),
+				taxRateId
+			).toMatchObject({ status: 400, data: { message } });
+		}
+		const [row] = await db.select().from(menuItems).where(eq(menuItems.id, created.itemId));
+		expect(row.taxRateId).toBeNull();
+		expect(await db.select().from(menuItems)).toHaveLength(1);
+		expect(await rateChangeAudits()).toHaveLength(0);
 	});
 
 	// tasks/inventory-cogs T-34: cost and margin, read-only, from the ledger's
@@ -191,16 +378,17 @@ describe('the /menu page', () => {
 		const r = await makeRestaurant({ currency: true });
 		const asOwner = principal(r.ownerId, r.restaurantId, 'owner');
 		const ctx = { actorUserId: r.ownerId, ip: null, userAgent: null };
-		await db.transaction((tx) =>
-			updateSettings(tx, r.restaurantId, { taxMode: 'exclusive', taxRateBp: 1000 }, ctx)
+		await db.transaction(async (tx) => {
+			await seedTaxRate(tx, r.restaurantId, { rateBp: 1000, makeDefault: true }, ctx);
+			await updateSettings(tx, r.restaurantId, { taxMode: 'exclusive' }, ctx);
+		});
+		await act(
+			'createItem',
+			makeEvent(asOwner, { categoryId: r.categoryId, name: 'Burger', price: '8.00', taxRateId: '' })
 		);
 		await act(
 			'createItem',
-			makeEvent(asOwner, { categoryId: r.categoryId, name: 'Burger', price: '8.00', taxRateBp: '' })
-		);
-		await act(
-			'createItem',
-			makeEvent(asOwner, { categoryId: r.categoryId, name: 'Water', price: '1.00', taxRateBp: '' })
+			makeEvent(asOwner, { categoryId: r.categoryId, name: 'Water', price: '1.00', taxRateId: '' })
 		);
 		const [burger] = await db.select().from(menuItems).where(eq(menuItems.name, 'Burger'));
 
@@ -259,6 +447,45 @@ describe('the /menu page', () => {
 		expect(byName.get('Water')!.cost).toBeNull();
 		expect(byName.get('Water')!.margin).toBeNull();
 		expect(() => JSON.stringify(data)).not.toThrow();
+
+		// MANDATORY (spec 29 — tax in BOTH modes; T-32). Prices include tax: the net
+		// price is 800 × 10000 / 11000 = 727.27 → 727 (half-up, dishMargin's one
+		// rounding), so the margin is 727 − 120 = 6.07. The page itself computed none
+		// of this: the numbers come from dishMargin and the strings from the formatter.
+		const burgerMargin = async () => {
+			const page = (await load(makeEvent(asOwner) as never)) as {
+				items: { name: string; margin: { text: string | null; unset: boolean } | null }[];
+			};
+			return page.items.find((item) => item.name === 'Burger')!.margin;
+		};
+		await db.transaction((tx) => updateSettings(tx, r.restaurantId, { taxMode: 'inclusive' }, ctx));
+		expect(await burgerMargin()).toEqual({
+			text: formatAmount(minor(607n), usd),
+			negative: false,
+			unset: false
+		});
+		expect(formatAmount(minor(607n), usd)).toBe('6.07');
+
+		// Burger pinned to Exempt 0%: its OWN rate wins over the default, and a 0%
+		// rate leaves the net price at the price in both modes, so 6.80 in both.
+		const exemptId = await db.transaction((tx) =>
+			seedTaxRate(tx, r.restaurantId, { name: 'Exempt', rateBp: 0 }, ctx)
+		);
+		expect(
+			await act(
+				'updateItem',
+				makeEvent(asOwner, {
+					itemId: burger.id,
+					name: 'Burger',
+					price: '',
+					categoryId: r.categoryId,
+					taxRateId: exemptId
+				})
+			)
+		).toEqual({ message: 'Burger saved.' });
+		expect(await burgerMargin()).toEqual({ text: '6.80', negative: false, unset: false });
+		await db.transaction((tx) => updateSettings(tx, r.restaurantId, { taxMode: 'exclusive' }, ctx));
+		expect(await burgerMargin()).toEqual({ text: '6.80', negative: false, unset: false });
 	});
 });
 

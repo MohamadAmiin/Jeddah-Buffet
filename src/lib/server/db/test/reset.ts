@@ -9,12 +9,15 @@ import pg from 'pg';
 // opening_stock_entries, stock_movements, supplier_payments, purchase_lines,
 // purchases, recipe_lines, ingredient_purchase_units, ingredients,
 // journal_entry_lines, journal_entries, accounts,
-// pos_sync_ops, invoices, payments, order_line_modifiers, order_lines, orders,
-// pos_sessions, audit_log, sessions, pos_devices, menu_item_modifier_groups,
-// modifiers, menu_items, menu_images, modifier_groups, menu_categories, users,
-// role_permissions, roles, restaurant_settings, restaurants.
+// pos_sync_ops, invoices, payments, payment_methods, order_line_modifiers,
+// order_lines, orders, pos_sessions, audit_log, sessions, pos_devices,
+// menu_item_modifier_groups, modifiers, menu_items, menu_images, modifier_groups,
+// menu_categories, users, role_permissions, roles, receipt_lines, receipt_logos,
+// restaurant_settings, tax_rates, restaurants.
 // users before roles in the comment order: users.role_id references roles;
-// menu_items before menu_images: menu_items.image_id references menu_images.
+// menu_items before menu_images: menu_items.image_id references menu_images;
+// payments before payment_methods, and restaurant_settings, menu_items and
+// order_lines before tax_rates, because each references the one after it.
 //
 // T-09's append-only triggers on journal_entries, journal_entry_lines, invoices
 // and payments block UPDATE and DELETE but not TRUNCATE (TRUNCATE fires only
@@ -41,6 +44,7 @@ export const TABLES = [
 	'pos_sync_ops',
 	'invoices',
 	'payments',
+	'payment_methods',
 	'order_line_modifiers',
 	'order_lines',
 	'orders',
@@ -55,7 +59,10 @@ export const TABLES = [
 	'users',
 	'role_permissions',
 	'roles',
+	'receipt_lines',
+	'receipt_logos',
 	'restaurant_settings',
+	'tax_rates',
 	'restaurants'
 ] as const;
 

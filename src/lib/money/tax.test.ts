@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { addExact, exact, minor, roundToMinor, ROUNDING_RULE, sumExact } from './index';
-import { TAX_MODES, taxOnAmount, taxOnLine } from './tax';
+import { formatTaxRate, parsePercentToBp, TAX_MODES, taxOnAmount, taxOnLine } from './tax';
 
 // A seeded linear-congruential generator (Numerical Recipes constants), in bigint,
 // so a failing generated case reproduces exactly. No property-testing library.
@@ -112,5 +113,95 @@ describe('tax in BOTH modes (spec 17)', () => {
 
 	it('refuses an unset mode rather than picking one', () => {
 		expect(() => taxOnLine(minor(1000n), 1000, null as never)).toThrow(TypeError);
+	});
+});
+
+// MANDATORY (spec 29 — money arithmetic and rounding). Moved here from
+// src/lib/pos/menu-view.ts by tasks/settings-tax-payments-receipt T-08.
+describe('formatTaxRate — basis points to "x.xx%"', () => {
+	it('renders basis points as a two-decimal percentage', () => {
+		expect(formatTaxRate(825)).toBe('8.25%');
+		expect(formatTaxRate(0)).toBe('0.00%');
+		expect(formatTaxRate(10000)).toBe('100.00%');
+		expect(formatTaxRate(5)).toBe('0.05%');
+		expect(formatTaxRate(1050)).toBe('10.50%');
+	});
+
+	it('refuses a rate that is not whole basis points in 0..10000', () => {
+		for (const rate of [8.25, -1, 10_001, Number.NaN]) {
+			expect(() => formatTaxRate(rate)).toThrow(TypeError);
+		}
+	});
+});
+
+// MANDATORY (spec 29 — money arithmetic and rounding): the ONE parser of a rate
+// an owner types as a percent. It never rounds, so it is never a second rounding
+// site (invariant 7).
+describe('parsePercentToBp — a rate typed as a percent', () => {
+	it('accepts up to three whole digits and up to two decimals, as integer basis points', () => {
+		const accepted: Array<[string, number]> = [
+			['5', 500],
+			['5.5', 550],
+			['8.25', 825],
+			['0', 0], // a 0% rate is legal
+			['0.00', 0],
+			['0.05', 5],
+			['100', 10000],
+			['100.00', 10000],
+			[' 12.5 ', 1250], // trimmed
+			['05', 500] // a leading zero is harmless
+		];
+		for (const [input, bp] of accepted) {
+			expect(parsePercentToBp(input), JSON.stringify(input)).toBe(bp);
+		}
+	});
+
+	it('refuses everything else with null, and never rounds a third decimal', () => {
+		const refused = [
+			'',
+			'   ',
+			'100.01', // above 100%
+			'101',
+			'1000',
+			'-1',
+			'+5',
+			'5.255', // refused, NOT rounded to 526
+			'5,5',
+			'1e2',
+			'.5',
+			'5.',
+			'5%',
+			'abc',
+			'０' // '０', a full-width digit: \d is ASCII 0-9 only
+		];
+		for (const input of refused) {
+			expect(parsePercentToBp(input), JSON.stringify(input)).toBeNull();
+		}
+	});
+
+	// Pins the dashboard's edit field, which shows a stored rate without its '%'.
+	it('round-trips every legal rate through formatTaxRate without the %', () => {
+		for (let bp = 0; bp <= 10_000; bp++) {
+			expect(parsePercentToBp(formatTaxRate(bp).slice(0, -1))).toBe(bp);
+		}
+	});
+});
+
+describe('tax source tripwire', () => {
+	// Math. is NOT forbidden here: formatTaxRate was moved verbatim and uses
+	// Math.trunc on a RATE (basis points), which is not money. Money in this file
+	// is bigint Exact arithmetic and never meets Math.
+	it('uses no float, no Number() and imports only ./index', () => {
+		const source = readFileSync(new URL('./tax.ts', import.meta.url), 'utf8');
+		const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+		// Import specifiers are read before string literals are blanked out.
+		const froms = [...code.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((m) => m[1]);
+		expect(froms).toEqual(['./index']);
+		// A decimal inside a message string is not arithmetic; blank strings out.
+		const bare = code.replace(/'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/g, "''");
+		expect(bare).not.toMatch(/\bparseFloat\b/);
+		expect(bare).not.toMatch(/\btoFixed\b/);
+		expect(bare).not.toMatch(/\bNumber\(/);
+		expect(bare).not.toMatch(/\b\d+\.\d+\b/);
 	});
 });

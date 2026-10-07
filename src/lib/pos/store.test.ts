@@ -232,11 +232,13 @@ describe('the POS store', () => {
 		await cacheSettings([{ key: 'posIdleLockSeconds', value: 300 }]);
 		await replaceMenu({
 			version: 3,
+			format: 2,
 			restaurantId: 'restaurant-A',
 			currency: 'USD',
 			currencyExponent: 2,
 			taxMode: 'exclusive',
 			taxRateBp: 825,
+			defaultTaxRate: null,
 			categories: [],
 			items: [],
 			modifierGroups: []
@@ -506,6 +508,7 @@ describe('a menu snapshot that fails to parse (menu-and-printing T-15)', () => {
 	};
 	const snapshotPayload = (version: number, items: unknown[]) => ({
 		version,
+		format: 2,
 		restaurantId: 'restaurant-A',
 		takenAt: '2026-09-29T09:00:00.000Z',
 		currency: 'USD',

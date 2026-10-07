@@ -418,4 +418,36 @@ describe('summarizeOp', () => {
 			summarizeOp('session.open', { posSessionId: 's', openingCashMinor: '10000' }, usd).lines
 		).toEqual(['Shift open · float 100.00 USD']);
 	});
+
+	// settings-tax-payments-receipt T-17: the tender names the payment method. The
+	// stored payload is untrusted — an unrecorded op may hold a name the validator
+	// refused — so only a 1–40 character name with no control character is shown;
+	// anything else reads as the capitalised kind, as before named methods.
+	it('names the payment method in the tender, never a name the validator would refuse', () => {
+		const payload = (name?: unknown) => ({
+			lines: [{ itemName: 'Tea', quantity: 1, modifiers: [] }],
+			totals: { totalMinor: '935' },
+			payments: [
+				{
+					paymentId: 'payment-uuid',
+					method: 'mobile',
+					...(name === undefined ? {} : { paymentMethodName: name }),
+					amountMinor: '935',
+					tenderedMinor: null,
+					changeMinor: null
+				}
+			]
+		});
+		const tender = (name?: unknown) => summarizeOp('sale.complete', payload(name), usd).tender;
+		// '9.35 USD' — formatMoney joins the amount and the code with a no-break space.
+		const amount = formatMoney(minor(935n), usd);
+		expect(tender('EVC Plus')).toBe('EVC Plus ' + amount);
+		expect(tender('x'.repeat(40))).toBe('x'.repeat(40) + ' ' + amount);
+		// No name — a payload queued before named methods — and a null one.
+		expect(tender()).toBe('Mobile ' + amount);
+		expect(tender(null)).toBe('Mobile ' + amount);
+		// Names the validator refuses: a control character, 41 characters.
+		expect(tender('EVC\u001bPlus')).toBe('Mobile ' + amount);
+		expect(tender('x'.repeat(41))).toBe('Mobile ' + amount);
+	});
 });

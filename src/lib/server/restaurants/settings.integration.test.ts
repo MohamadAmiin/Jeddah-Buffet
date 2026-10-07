@@ -1,8 +1,9 @@
 import { describe, it, expect, afterAll } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { testDb, closeTestDb } from '../db/test/db';
 import { restaurants } from '../db/schema/restaurants';
 import { restaurantSettings } from '../db/schema/restaurant-settings';
+import { taxRates } from '../db/schema/tax-rates';
 import { auditLog } from '../db/schema/audit';
 import {
 	getRestaurantWithSettings,
@@ -11,6 +12,9 @@ import {
 	onRestaurantCreated,
 	canonicalTimeZone
 } from './index';
+import { archiveTaxRate, createTaxRate } from '../menu';
+import { registerRestaurant } from '../auth/register';
+import { seedTaxRate } from '../db/test/settings';
 import { exact, minor } from '../../money';
 import { taxOnLine } from '../../money/tax';
 
@@ -26,6 +30,29 @@ async function makeRestaurant(name = 'Cafe One', timeZone = 'Africa/Mogadishu'):
 	// Registration runs in ONE transaction, so the initializers do too.
 	await db.transaction((tx) => onRestaurantCreated(tx, row.id, { restaurantName: name, timeZone }));
 	return row.id;
+}
+
+/** A named rate (T-13), NOT the default: createTaxRate alone. */
+async function createRate(restaurantId: string, name: string, rateBp: number): Promise<string> {
+	const created = await db.transaction((tx) =>
+		createTaxRate(tx, restaurantId, { name, rateBp }, ctx)
+	);
+	if (!created.ok) throw new Error(`fixture rate was not created: ${created.reason}`);
+	return created.id;
+}
+
+const settingsUpdatedRows = (restaurantId: string) =>
+	db
+		.select()
+		.from(auditLog)
+		.where(and(eq(auditLog.event, 'settings.updated'), eq(auditLog.restaurantId, restaurantId)));
+
+async function versionOf(restaurantId: string): Promise<number> {
+	const [row] = await db
+		.select({ menuVersion: restaurantSettings.menuVersion })
+		.from(restaurantSettings)
+		.where(eq(restaurantSettings.restaurantId, restaurantId));
+	return row.menuVersion;
 }
 
 describe('getRestaurantWithSettings', () => {
@@ -167,27 +194,62 @@ describe('settingsComplete', () => {
 
 	it('is complete once all four are chosen', async () => {
 		const id = await makeRestaurant();
-		const result = await db.transaction((tx) =>
-			updateSettings(
+		const result = await db.transaction(async (tx) => {
+			await seedTaxRate(tx, id, { rateBp: 825, makeDefault: true }, ctx);
+			return updateSettings(
 				tx,
 				id,
-				{ taxMode: 'inclusive', taxRateBp: 825, currencyCode: 'USD', posIdleLockSeconds: 120 },
+				{ taxMode: 'inclusive', currencyCode: 'USD', posIdleLockSeconds: 120 },
 				ctx
-			)
-		);
+			);
+		});
 		expect(result.ok).toBe(true);
 		expect(await settingsComplete(db, id)).toEqual({ complete: true, missing: [] });
 	});
 
 	it('stays incomplete with only the three new settings chosen: the idle lock is still missing', async () => {
 		const id = await makeRestaurant();
-		await db.transaction((tx) =>
-			updateSettings(tx, id, { taxMode: 'exclusive', taxRateBp: 825, currencyCode: 'USD' }, ctx)
-		);
+		await db.transaction(async (tx) => {
+			await seedTaxRate(tx, id, { rateBp: 825, makeDefault: true }, ctx);
+			await updateSettings(tx, id, { taxMode: 'exclusive', currencyCode: 'USD' }, ctx);
+		});
 		expect(await settingsComplete(db, id)).toEqual({
 			complete: false,
 			missing: ['POS idle lock']
 		});
+	});
+
+	// T-13 / risk 5: a rate that exists is not an answer to "which rate". Only the
+	// default pointer is.
+	it("keeps 'tax rate' missing while a rate exists but is not the default", async () => {
+		const id = await makeRestaurant();
+		await createRate(id, 'VAT', 500);
+		expect(await settingsComplete(db, id)).toEqual({
+			complete: false,
+			missing: ['POS idle lock', 'tax mode', 'tax rate', 'currency']
+		});
+	});
+
+	// MANDATORY (risk 5 — no rate is ever seeded or assumed): the real registration
+	// path seeds no tax_rates row and no default.
+	it('registration seeds no rate and no default', async () => {
+		const registered = await registerRestaurant(
+			db,
+			{
+				restaurantName: 'Fresh Cafe',
+				timeZone: 'Africa/Mogadishu',
+				ownerDisplayName: 'The Owner',
+				email: 'fresh-owner@cafe.com',
+				password: 'correct horse battery staple'
+			},
+			{ mode: 'operator', ip: null, userAgent: 'test' }
+		);
+		if (!registered.ok) throw new Error(`registration failed: ${registered.reason}`);
+		const id = registered.restaurantId;
+
+		expect(await db.select().from(taxRates).where(eq(taxRates.restaurantId, id))).toHaveLength(0);
+		expect((await getRestaurantWithSettings(db, id))!.defaultTaxRateId).toBeNull();
+		expect((await settingsComplete(db, id)).missing).toContain('tax rate');
 	});
 
 	it('reports a restaurant with no settings row as incomplete', async () => {
@@ -274,26 +336,41 @@ describe('the tax and currency settings (T-36)', () => {
 	it('carries each tax mode from the database into taxOnLine', async () => {
 		const exclusiveId = await makeRestaurant('Exclusive Cafe');
 		const inclusiveId = await makeRestaurant('Inclusive Cafe');
-		await db.transaction((tx) =>
-			updateSettings(tx, exclusiveId, { taxMode: 'exclusive', taxRateBp: 825 }, ctx)
-		);
-		await db.transaction((tx) =>
-			updateSettings(tx, inclusiveId, { taxMode: 'inclusive', taxRateBp: 825 }, ctx)
-		);
+		await db.transaction(async (tx) => {
+			await seedTaxRate(tx, exclusiveId, { rateBp: 825, makeDefault: true }, ctx);
+			await updateSettings(tx, exclusiveId, { taxMode: 'exclusive' }, ctx);
+		});
+		await db.transaction(async (tx) => {
+			await seedTaxRate(tx, inclusiveId, { rateBp: 825, makeDefault: true }, ctx);
+			await updateSettings(tx, inclusiveId, { taxMode: 'inclusive' }, ctx);
+		});
 
 		const exclusive = (await getRestaurantWithSettings(db, exclusiveId))!;
 		const inclusive = (await getRestaurantWithSettings(db, inclusiveId))!;
 		expect(exclusive.taxMode).toBe('exclusive');
 		expect(inclusive.taxMode).toBe('inclusive');
 
+		// T-13: the rate is the rate_bp of the row the default pointer names, read
+		// from the database — never a number the test supplies.
+		const rateOf = async (restaurantId: string, defaultTaxRateId: string | null) => {
+			const [row] = await db
+				.select({ rateBp: taxRates.rateBp })
+				.from(taxRates)
+				.where(and(eq(taxRates.id, defaultTaxRateId!), eq(taxRates.restaurantId, restaurantId)));
+			return row.rateBp;
+		};
+		const exclusiveRate = await rateOf(exclusiveId, exclusive.defaultTaxRateId);
+		const inclusiveRate = await rateOf(inclusiveId, inclusive.defaultTaxRateId);
+		expect([exclusiveRate, inclusiveRate]).toEqual([825, 825]);
+
 		// Exclusive: 1000 is the net and 82.5 goes on top.
-		expect(taxOnLine(minor(1000n), exclusive.taxRateBp!, exclusive.taxMode!)).toEqual({
+		expect(taxOnLine(minor(1000n), exclusiveRate, exclusive.taxMode!)).toEqual({
 			net: exact(1000n),
 			tax: exact(825000n, 10000n),
 			gross: exact(10825000n, 10000n)
 		});
 		// Inclusive: 1000 already contains the tax.
-		expect(taxOnLine(minor(1000n), inclusive.taxRateBp!, inclusive.taxMode!)).toEqual({
+		expect(taxOnLine(minor(1000n), inclusiveRate, inclusive.taxMode!)).toEqual({
 			net: exact(10000000n, 10825n),
 			tax: exact(825000n, 10825n),
 			gross: exact(1000n)
@@ -312,20 +389,8 @@ describe('the tax and currency settings (T-36)', () => {
 		});
 	});
 
-	it('refuses a fractional tax rate and writes nothing — neither the column nor an audit row', async () => {
-		const id = await makeRestaurant();
-
-		const result = await db.transaction((tx) => updateSettings(tx, id, { taxRateBp: 8.25 }, ctx));
-
-		expect(result).toEqual({ ok: false, reason: 'invalid_tax_rate' });
-		expect(await db.select().from(auditLog)).toHaveLength(0);
-		expect((await getRestaurantWithSettings(db, id))!.taxRateBp).toBeNull();
-	});
-
 	it.each([
 		[{ taxMode: 'included' }, 'invalid_tax_mode'],
-		[{ taxRateBp: -1 }, 'invalid_tax_rate'],
-		[{ taxRateBp: 10_001 }, 'invalid_tax_rate'],
 		[{ currencyCode: 'SOS' }, 'invalid_currency'],
 		[{ currencyCode: 'usd' }, 'invalid_currency']
 	] as const)('refuses %j with %s and writes nothing', async (changes, reason) => {
@@ -339,34 +404,65 @@ describe('the tax and currency settings (T-36)', () => {
 
 	it('writes all three and a rename in ONE row of the settings table and ONE audit row', async () => {
 		const id = await makeRestaurant('Old Name');
+		// The rate exists BEFORE the save (its own tax_rate.created row and bump).
+		const rateId = await createRate(id, 'VAT', 825);
 
 		await db.transaction((tx) =>
 			updateSettings(
 				tx,
 				id,
-				{ name: 'New Name', taxMode: 'exclusive', taxRateBp: 825, currencyCode: 'USD' },
+				{ name: 'New Name', taxMode: 'exclusive', defaultTaxRateId: rateId, currencyCode: 'USD' },
 				ctx
 			)
 		);
 
 		const after = (await getRestaurantWithSettings(db, id))!;
-		expect([after.name, after.taxMode, after.taxRateBp, after.currencyCode]).toEqual([
+		expect([after.name, after.taxMode, after.defaultTaxRateId, after.currencyCode]).toEqual([
 			'New Name',
 			'exclusive',
-			825,
+			rateId,
 			'USD'
 		]);
 		expect(after.timeZone).toBe('Africa/Mogadishu');
-		const rows = await db.select().from(auditLog);
+		const rows = await settingsUpdatedRows(id);
 		expect(rows).toHaveLength(1);
 		expect(rows[0].details).toEqual({
 			changes: {
 				name: { old: 'Old Name', new: 'New Name' },
 				taxMode: { old: null, new: 'exclusive' },
-				taxRateBp: { old: null, new: 825 },
+				defaultTaxRateId: { old: null, new: rateId },
 				currencyCode: { old: null, new: 'USD' }
 			}
 		});
+	});
+
+	// T-13: the default pointer is checked FOR SHARE against tax_rates; every
+	// refusal writes nothing — no default, no settings.updated row, no bump.
+	it('refuses an unknown, malformed, foreign, archived or null default and writes nothing', async () => {
+		const id = await makeRestaurant('Cafe A');
+		const other = await makeRestaurant('Cafe B');
+		const foreign = await createRate(other, 'B rate', 900);
+		const archived = await createRate(id, 'Old', 100);
+		const archivedResult = await db.transaction((tx) => archiveTaxRate(tx, id, archived, ctx));
+		expect(archivedResult).toEqual({ ok: true });
+		const before = await versionOf(id);
+
+		for (const candidate of [
+			'00000000-0000-4000-8000-000000000000',
+			'abc',
+			foreign,
+			archived,
+			null as never
+		]) {
+			const result = await db.transaction((tx) =>
+				updateSettings(tx, id, { defaultTaxRateId: candidate }, ctx)
+			);
+			expect(result, String(candidate)).toEqual({ ok: false, reason: 'invalid_tax_rate' });
+		}
+
+		expect((await getRestaurantWithSettings(db, id))!.defaultTaxRateId).toBeNull();
+		expect(await settingsUpdatedRows(id)).toHaveLength(0);
+		expect(await versionOf(id)).toBe(before);
 	});
 });
 
@@ -379,94 +475,79 @@ describe('accepted tenders and the menu-version bump (T-29)', () => {
 		return row.menuVersion;
 	}
 
-	it('a tax rate change bumps menu_version by exactly 1; re-saving the same rate does not', async () => {
+	// T-13 (risk 4): the default rate is in the till's snapshot, so choosing it
+	// bumps the version — exactly once, with ONE settings.updated row.
+	it('a default rate change bumps menu_version by exactly 1; re-saving the same default does not', async () => {
 		const id = await makeRestaurant('Cafe T29a');
-		expect(await menuVersionOf(id)).toBe(1);
-		await db.transaction((tx) => updateSettings(tx, id, { taxRateBp: 825 }, ctx));
-		expect(await menuVersionOf(id)).toBe(2);
-		const again = await db.transaction((tx) => updateSettings(tx, id, { taxRateBp: 825 }, ctx));
-		expect(again).toEqual({ ok: true, changed: false });
-		expect(await menuVersionOf(id)).toBe(2);
-	});
+		const rateId = await createRate(id, 'VAT', 825);
+		const before = await menuVersionOf(id);
 
-	it('one save changing mode, rate and currency together bumps once', async () => {
-		const id = await makeRestaurant('Cafe T29b');
-		expect(await menuVersionOf(id)).toBe(1);
-		await db.transaction((tx) =>
-			updateSettings(tx, id, { taxMode: 'exclusive', taxRateBp: 825, currencyCode: 'USD' }, ctx)
+		const first = await db.transaction((tx) =>
+			updateSettings(tx, id, { defaultTaxRateId: rateId }, ctx)
 		);
-		expect(await menuVersionOf(id)).toBe(2);
+		expect(first).toEqual({
+			ok: true,
+			changed: true,
+			changes: { defaultTaxRateId: { old: null, new: rateId } }
+		});
+		expect(await menuVersionOf(id)).toBe(before + 1);
+		const rows = await settingsUpdatedRows(id);
+		expect(rows).toHaveLength(1);
+		expect(
+			(rows[0].details as { changes: Record<string, unknown> }).changes.defaultTaxRateId
+		).toEqual({ old: null, new: rateId });
+		expect((await getRestaurantWithSettings(db, id))!.defaultTaxRateId).toBe(rateId);
+
+		const again = await db.transaction((tx) =>
+			updateSettings(tx, id, { defaultTaxRateId: rateId }, ctx)
+		);
+		expect(again).toEqual({ ok: true, changed: false });
+		expect(await menuVersionOf(id)).toBe(before + 1);
+		expect(await settingsUpdatedRows(id)).toHaveLength(1);
 	});
 
-	it('saving only the name, the time zone, the idle lock or a tender does not bump', async () => {
+	it('one save changing mode, default rate and currency together bumps once', async () => {
+		const id = await makeRestaurant('Cafe T29b');
+		const rateId = await createRate(id, 'VAT', 825);
+		const before = await menuVersionOf(id);
+		await db.transaction((tx) =>
+			updateSettings(
+				tx,
+				id,
+				{ taxMode: 'exclusive', defaultTaxRateId: rateId, currencyCode: 'USD' },
+				ctx
+			)
+		);
+		expect(await menuVersionOf(id)).toBe(before + 1);
+	});
+
+	it('saving only the name, the time zone or the idle lock does not bump', async () => {
 		const id = await makeRestaurant('Cafe T29c');
 		for (const changes of [
 			{ name: 'Renamed' },
 			{ timeZone: 'Asia/Riyadh' },
-			{ posIdleLockSeconds: 120 },
-			{ acceptsCard: true }
+			{ posIdleLockSeconds: 120 }
 		] as const) {
 			await db.transaction((tx) => updateSettings(tx, id, changes, ctx));
 			expect(await menuVersionOf(id)).toBe(1);
 		}
 	});
 
-	it('saving acceptsCard true writes the column with one audit row; false is a chosen answer distinct from null', async () => {
-		const id = await makeRestaurant('Cafe T29d');
-		const first = await db.transaction((tx) => updateSettings(tx, id, { acceptsCard: true }, ctx));
-		expect(first).toEqual({
-			ok: true,
-			changed: true,
-			changes: { acceptsCard: { old: null, new: true } }
-		});
-		const [after] = await db
-			.select({
-				acceptsCard: restaurantSettings.acceptsCard,
-				acceptsMobile: restaurantSettings.acceptsMobile
-			})
-			.from(restaurantSettings)
-			.where(eq(restaurantSettings.restaurantId, id));
-		expect(after.acceptsCard).toBe(true);
-		expect(after.acceptsMobile).toBeNull();
-
-		const second = await db.transaction((tx) =>
-			updateSettings(tx, id, { acceptsMobile: false }, ctx)
-		);
-		expect(second).toMatchObject({
-			ok: true,
-			changed: true,
-			changes: { acceptsMobile: { old: null, new: false } }
-		});
-	});
-
-	it('rejects a non-boolean tender and writes nothing', async () => {
-		const id = await makeRestaurant('Cafe T29e');
-		const result = await db.transaction((tx) =>
-			updateSettings(tx, id, { acceptsCard: 'yes' as unknown as boolean }, ctx)
-		);
-		expect(result).toEqual({ ok: false, reason: 'invalid_tender' });
-		const [after] = await db
-			.select({ acceptsCard: restaurantSettings.acceptsCard })
-			.from(restaurantSettings)
-			.where(eq(restaurantSettings.restaurantId, id));
-		expect(after.acceptsCard).toBeNull();
-	});
-
 	it('the tenders are not part of settingsComplete', async () => {
 		const id = await makeRestaurant('Cafe T29f');
-		await db.transaction((tx) =>
-			updateSettings(
+		await db.transaction(async (tx) => {
+			await seedTaxRate(tx, id, { rateBp: 825, makeDefault: true }, ctx);
+			await updateSettings(
 				tx,
 				id,
 				{
 					taxMode: 'exclusive',
-					taxRateBp: 825,
 					currencyCode: 'USD',
 					posIdleLockSeconds: 120
 				},
 				ctx
-			)
-		);
+			);
+		});
 		expect(await settingsComplete(db, id)).toEqual({ complete: true, missing: [] });
 	});
 });
@@ -490,8 +571,7 @@ describe('the receipt header (menu-and-printing T-21)', () => {
 	const header = {
 		receiptAddress: 'Makka Al-Mukarama Rd, Km4',
 		receiptPhone: '61 555 0142',
-		taxRegistrationNumber: 'TIN-0001',
-		receiptFooter: 'Mahadsanid! Thank you!'
+		taxRegistrationNumber: 'TIN-0001'
 	};
 	const settingsUpdates = () =>
 		db.select().from(auditLog).where(eq(auditLog.event, 'settings.updated'));
@@ -503,7 +583,7 @@ describe('the receipt header (menu-and-printing T-21)', () => {
 		return row.v;
 	};
 
-	it('writes all four with ONE audit row naming them, re-saving writes nothing', async () => {
+	it('writes all three with ONE audit row naming them, re-saving writes nothing', async () => {
 		const id = await makeRestaurant();
 		const result = await db.transaction((tx) => updateSettings(tx, id, header, ctx));
 		expect(result.ok).toBe(true);
@@ -528,12 +608,12 @@ describe('the receipt header (menu-and-printing T-21)', () => {
 		const id = await makeRestaurant();
 		await db.transaction((tx) => updateSettings(tx, id, header, ctx));
 		const cleared = await db.transaction((tx) =>
-			updateSettings(tx, id, { receiptPhone: '', receiptFooter: '  Thanks  ' }, ctx)
+			updateSettings(tx, id, { receiptPhone: '', taxRegistrationNumber: '  TIN-0002  ' }, ctx)
 		);
 		expect(cleared.ok).toBe(true);
 		const after = await getRestaurantWithSettings(db, id);
 		expect(after!.receiptPhone).toBeNull();
-		expect(after!.receiptFooter).toBe('Thanks');
+		expect(after!.taxRegistrationNumber).toBe('TIN-0002');
 		expect(after!.receiptAddress).toBe(header.receiptAddress);
 	});
 
@@ -554,7 +634,7 @@ describe('the receipt header (menu-and-printing T-21)', () => {
 	it('does not bump menu_version: the header is not in the menu snapshot', async () => {
 		const id = await makeRestaurant();
 		const before = await menuVersion(id);
-		await db.transaction((tx) => updateSettings(tx, id, { receiptFooter: 'Thank you' }, ctx));
+		await db.transaction((tx) => updateSettings(tx, id, { receiptAddress: 'Km4' }, ctx));
 		expect(await menuVersion(id)).toBe(before);
 	});
 
@@ -564,6 +644,5 @@ describe('the receipt header (menu-and-printing T-21)', () => {
 		await db.transaction((tx) => updateSettings(tx, a, header, ctx));
 		const other = await getRestaurantWithSettings(db, b);
 		expect(other!.receiptAddress).toBeNull();
-		expect(other!.receiptFooter).toBeNull();
 	});
 });

@@ -364,7 +364,9 @@
 								<span>
 									Margin
 									{#if item.margin?.unset}
-										<span class="text-ink-2">Set the tax mode in Settings</span>
+										<span class="text-ink-2"
+											>Set the tax mode and default rate in Settings › Tax</span
+										>
 									{:else}
 										<span
 											class={`font-mono tabular-nums ${item.margin?.negative ? 'text-danger' : 'text-ink'}`}
@@ -470,13 +472,17 @@
 							value={editing?.categoryId ?? ''}
 							options={categoryOptions}
 						/>
-						<Field
+						<!-- Default ('' → null) FOLLOWS the restaurant's default rate even after it
+						     changes; a named rate (its id) PINS the item to that rate. Two different
+						     choices, never collapsed (T-32). The options are the server's: live
+						     rates only, each labelled by the money module's formatter. -->
+						<SelectField
 							id="panel-rate"
-							name="taxRateBp"
-							label="Item tax rate (basis points)"
-							inputmode="numeric"
-							value={editing?.taxRateBp == null ? '' : String(editing.taxRateBp)}
-							hint="Leave blank to use the restaurant rate. 825 means 8.25%."
+							name="taxRateId"
+							label="Tax rate"
+							value={editing?.taxRateId ?? ''}
+							options={data.rateOptions}
+							hint="Default follows the restaurant's default rate, even after it changes. A named rate keeps this item on that rate."
 						/>
 						<div class="flex flex-col gap-1">
 							<label class="text-ink-2 text-sm font-medium" for="panel-photo">Photo</label>

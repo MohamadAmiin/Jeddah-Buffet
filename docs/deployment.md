@@ -197,6 +197,11 @@ The printing rules the code enforces, for whoever operates the till:
 - **The drawer opens once, for a cash sale, within 30 seconds of it** (invariant 9). The
   pulse is never queued, never retried and never sent by a reprint, so a printer that
   comes back after an outage prints the waiting receipts and leaves the drawer shut.
+- **A logo needs print agent version 2.** Update the agent on every till PC
+  (`print-agent/README.md`, "Updating") before uploading a logo; an older agent prints
+  the receipt without it and the printer chip says so. Receipts carry the logo only
+  after the owner has confirmed a test print of it on that till ("Checking the logo").
+  Reload the till once after deploying this release.
 
 ---
 

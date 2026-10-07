@@ -2,25 +2,38 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client';
-import { onRestaurantCreated, updateSettings } from '../restaurants';
+import { archivePaymentMethod, onRestaurantCreated, updateSettings } from '../restaurants';
 import { registerDevice } from '../auth/pos-device';
 import {
+	archiveItem,
+	archiveTaxRate,
 	createCategory,
 	createItem,
 	createModifierGroup,
 	createModifier,
+	createTaxRate,
 	linkModifierGroup,
+	readMenuSnapshot,
 	updateItem,
+	updateTaxRate,
 	getMenuVersion
 } from '../menu';
 import { seedStaff } from '../db/test/seed';
+import {
+	cashMethodId,
+	defaultTaxRateOf,
+	seedPaymentMethod,
+	seedTaxRate
+} from '../db/test/settings';
 import { closeTestDb, testDb } from '../db/test/db';
 import { restaurants } from '../db/schema/restaurants';
 import { users } from '../db/schema/users';
 import { posSessions } from '../db/schema/pos-sessions';
-import { restaurantSettings } from '../db/schema/restaurant-settings';
 import { validateSale, type SyncContext } from './validate';
 import type { OpEnvelope } from '../../sync-ops';
+import { minor, ROUNDING_RULE } from '../../money';
+import { computeOrderTotals, serializeTotals } from '../../money/order-totals';
+import { changeDue } from '../../money/change';
 
 afterAll(async () => {
 	await closeTestDb();
@@ -38,9 +51,14 @@ type Fixture = {
 	cashierId: string;
 	waiterId: string;
 	menuVersion: number;
+	/** The named default rate ('Tax' 10%, T-13), or null when the fixture has none. */
+	taxRateId: string | null;
 };
 
-async function makeFixture(email = 'validate@example.com'): Promise<Fixture> {
+async function makeFixture(
+	email = 'validate@example.com',
+	opts: { defaultRate?: boolean } = {}
+): Promise<Fixture> {
 	const [r] = await testDb().insert(restaurants).values({ name: 'Cafe Val' }).returning({
 		id: restaurants.id
 	});
@@ -60,19 +78,25 @@ async function makeFixture(email = 'validate@example.com'): Promise<Fixture> {
 		.returning({ id: users.id });
 	const ownerId = owner.id;
 
-	await db.transaction(async (tx) =>
-		updateSettings(
+	// T-13: 'Tax' 10% is the named default unless the test asks for no rate at all.
+	const taxRateId = await db.transaction(async (tx) => {
+		const ctx = { actorUserId: ownerId, ip: null, userAgent: null };
+		const id =
+			opts.defaultRate === false
+				? null
+				: await seedTaxRate(tx, restaurantId, { rateBp: 1000, makeDefault: true }, ctx);
+		await updateSettings(
 			tx,
 			restaurantId,
 			{
 				taxMode: 'exclusive',
-				taxRateBp: 1000,
 				currencyCode: 'USD',
 				posIdleLockSeconds: 120
 			},
-			{ actorUserId: ownerId, ip: null, userAgent: null }
-		)
-	);
+			ctx
+		);
+		return id;
+	});
 
 	const device = await db.transaction((tx) =>
 		registerDevice(tx, { restaurantId, actorUserId: ownerId, label: 'Counter tablet' })
@@ -148,7 +172,8 @@ async function makeFixture(email = 'validate@example.com'): Promise<Fixture> {
 		syrupId,
 		cashierId: cashier.id,
 		waiterId: waiter.id,
-		menuVersion
+		menuVersion,
+		taxRateId
 	};
 }
 
@@ -221,6 +246,63 @@ function envelope(f: Fixture, overrides: Record<string, unknown> = {}): Payload 
 		seq: 1,
 		payload
 	} as Payload;
+}
+
+/**
+ * A one-line cash sale of `item` at `taxRateBp` and `menuVersion`, totalled by the
+ * money module exactly as the till totals it (computeOrderTotals + serializeTotals),
+ * paid with a 100.00 note and the change changeDue computes.
+ */
+function oneLineCash(
+	f: Fixture,
+	item: { id: string; name: string; priceMinor: bigint },
+	taxRateBp: number,
+	menuVersion: number
+): Payload {
+	const totals = serializeTotals(
+		computeOrderTotals(
+			{
+				taxMode: 'exclusive',
+				lines: [
+					{
+						unitPriceMinor: minor(item.priceMinor),
+						quantity: 1n,
+						modifierDeltasMinor: [],
+						taxRateBp,
+						discountMinor: minor(0n)
+					}
+				]
+			},
+			ROUNDING_RULE
+		)
+	);
+	const tendered = 10_000n;
+	return envelope(f, {
+		menuVersion,
+		lines: [
+			{
+				lineId: randomUUID(),
+				lineNo: 1,
+				menuItemId: item.id,
+				itemName: item.name,
+				quantity: 1,
+				unitPriceMinor: item.priceMinor.toString(),
+				taxRateBp,
+				discountMinor: '0',
+				modifiers: []
+			}
+		],
+		totals,
+		payments: [
+			{
+				paymentId: randomUUID(),
+				method: 'cash',
+				amountMinor: totals.totalMinor,
+				tenderedMinor: tendered.toString(),
+				changeMinor: changeDue(minor(tendered), minor(BigInt(totals.totalMinor))).toString()
+			}
+		]
+	});
 }
 
 let fx: Fixture;
@@ -486,7 +568,9 @@ describe('validateSale (T-18)', () => {
 		expect(result.ok).toBe(true);
 	});
 
-	it('card without accepts_card set is invalid_payload; after opting in it passes', async () => {
+	// settings-tax-payments-receipt T-15: a card tender is a named payment method
+	// now, not the retired accepts_card switch.
+	it('a card payload with no card method is tender_not_accepted; once one is seeded it validates', async () => {
 		const env = envelope(fx, {
 			payments: [
 				{
@@ -499,17 +583,13 @@ describe('validateSale (T-18)', () => {
 			]
 		});
 		const before = await db.transaction((tx) => validateSale(tx, ctxFor(fx, fx.cashierId), env));
-		expect(before.ok).toBe(false);
-		if (!before.ok) {
-			expect(before.hard).toBe('invalid_payload');
-			expect(before.detail).toBe('tender_not_accepted');
-		}
-		await testDb()
-			.update(restaurantSettings)
-			.set({ acceptsCard: true })
-			.where(eq(restaurantSettings.restaurantId, fx.restaurantId));
+		expect(before).toEqual({ ok: false, hard: 'invalid_payload', detail: 'tender_not_accepted' });
+		await db.transaction((tx) =>
+			seedPaymentMethod(tx, fx.restaurantId, { name: 'Visa terminal', kind: 'card' })
+		);
 		const after = await db.transaction((tx) => validateSale(tx, ctxFor(fx, fx.cashierId), env));
 		expect(after.ok).toBe(true);
+		if (after.ok) expect(after.sale.payment.paymentMethodName).toBe('Visa terminal');
 	});
 
 	it('a clock ahead by more than 5 minutes soft-flags clock_ahead', async () => {
@@ -569,5 +649,491 @@ describe('validateSale (T-18)', () => {
 		);
 		expect(result.ok).toBe(true);
 		if (result.ok) expect(result.softFlags).toContain('session_closed');
+	});
+});
+
+describe('validateSale — named tax rates (T-13)', () => {
+	const ctx = (f: Fixture) => ({ actorUserId: f.ownerId, ip: null, userAgent: null });
+	const tea = (f: Fixture) => ({ id: f.teaId, name: 'Tea', priceMinor: 850n });
+
+	async function reducedRate(f: Fixture): Promise<string> {
+		const created = await db.transaction((tx) =>
+			createTaxRate(tx, f.restaurantId, { name: 'Reduced', rateBp: 500 }, ctx(f))
+		);
+		if (!created.ok) throw new Error(`fixture rate was not created: ${created.reason}`);
+		return created.id;
+	}
+
+	// The rule is written twice — readMenuSnapshot (menu/) and validateSale's Step 8
+	// (orders/, which may not import menu/). This pins the two copies together: a
+	// till that charges exactly what the snapshot says is never flagged.
+	it('validator and snapshot agree: every snapshot item at its resolved rate validates clean', async () => {
+		const reducedId = await reducedRate(fx);
+		const water = await db.transaction((tx) =>
+			createItem(tx, fx.restaurantId, { name: 'Water', priceMinor: 100n, taxRateId: reducedId })
+		);
+		if (!water.ok) throw new Error('fixture item was not created');
+
+		const snapshot = await readMenuSnapshot(testDb(), fx.restaurantId);
+		expect(
+			snapshot.items.map((item) => [item.name, item.taxRate?.name, item.taxRate?.rateBp])
+		).toEqual([
+			['Tea', 'Tax', 1000],
+			['Water', 'Reduced', 500]
+		]);
+		for (const item of snapshot.items) {
+			const result = await db.transaction((tx) =>
+				validateSale(
+					tx,
+					ctxFor(fx, fx.cashierId),
+					oneLineCash(fx, item, item.taxRate!.rateBp, snapshot.version)
+				)
+			);
+			expect(result.ok, item.name).toBe(true);
+			if (result.ok) expect(result.softFlags, item.name).toEqual([]);
+		}
+	});
+
+	// Risk 4: a rate edit bumps the version, so the till's older sale at the old
+	// rate is a SOFT stale_menu_price — never a HARD price_tamper left unrecorded.
+	it('a rate edit is stale at the old version, tamper at the new one, clean at the new rate', async () => {
+		const oldVersion = fx.menuVersion;
+		const edited = await db.transaction((tx) =>
+			updateTaxRate(tx, fx.restaurantId, fx.taxRateId!, { rateBp: 1100 }, ctx(fx))
+		);
+		expect(edited).toEqual({ ok: true, changed: true });
+		const newVersion = await getMenuVersion(testDb(), fx.restaurantId);
+		expect(newVersion).toBe(oldVersion + 1);
+
+		const stale = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(fx, fx.cashierId), oneLineCash(fx, tea(fx), 1000, oldVersion))
+		);
+		expect(stale.ok).toBe(true);
+		if (stale.ok) expect(stale.softFlags).toContain('stale_menu_price');
+
+		const tamper = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(fx, fx.cashierId), oneLineCash(fx, tea(fx), 1000, newVersion))
+		);
+		expect(tamper.ok).toBe(false);
+		if (!tamper.ok) {
+			expect(tamper.hard).toBe('price_tamper');
+			expect(tamper.detail.endsWith(':tax_rate')).toBe(true);
+		}
+
+		const clean = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(fx, fx.cashierId), oneLineCash(fx, tea(fx), 1100, newVersion))
+		);
+		expect(clean.ok).toBe(true);
+		if (clean.ok) expect(clean.softFlags).toEqual([]);
+	});
+
+	it('switching the default makes an old-version sale at the old rate stale, not tamper', async () => {
+		const reducedId = await reducedRate(fx);
+		const oldVersion = await getMenuVersion(testDb(), fx.restaurantId);
+		const switched = await db.transaction((tx) =>
+			updateSettings(tx, fx.restaurantId, { defaultTaxRateId: reducedId }, ctx(fx))
+		);
+		expect(switched.ok).toBe(true);
+		expect(await getMenuVersion(testDb(), fx.restaurantId)).toBe(oldVersion + 1);
+
+		const result = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(fx, fx.cashierId), oneLineCash(fx, tea(fx), 1000, oldVersion))
+		);
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.softFlags).toContain('stale_menu_price');
+	});
+
+	// Risk 5: no rate resolves — no default, no rate on the item — and nothing falls
+	// back to a number, so at the SAME version the line's rate is a HARD difference.
+	it('with no default and no item rate, a sale at the same version is HARD price_tamper', async () => {
+		const bare = await makeFixture(`validate-no-rate-${randomUUID()}@example.com`, {
+			defaultRate: false
+		});
+		expect(bare.taxRateId).toBeNull();
+		const snapshot = await readMenuSnapshot(testDb(), bare.restaurantId);
+		expect(snapshot.defaultTaxRate).toBeNull();
+		expect(snapshot.items.every((item) => item.taxRate === null)).toBe(true);
+
+		const result = await db.transaction((tx) =>
+			validateSale(tx, ctxFor(bare, bare.cashierId), envelope(bare))
+		);
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.hard).toBe('price_tamper');
+			expect(result.detail.endsWith(':tax_rate')).toBe(true);
+		}
+	});
+});
+
+describe('validateSale — named methods and rates (settings-tax-payments-receipt T-15)', () => {
+	const ownerCtx = (f: Fixture) => ({ actorUserId: f.ownerId, ip: null, userAgent: null });
+
+	const validate = (f: Fixture, env: Payload) =>
+		db.transaction((tx) => validateSale(tx, ctxFor(f, f.cashierId), env));
+
+	/** Every refusal below is a HARD invalid_payload unless the test says otherwise. */
+	const invalid = (detail: string) => ({ ok: false, hard: 'invalid_payload', detail });
+
+	/** `envelope(f)` — the 935 cash sale — with its payment's fields replaced by `patch`. */
+	function cashWith(f: Fixture, patch: Record<string, unknown>): Payload {
+		const env = envelope(f);
+		const payload = env.payload as { payments: Record<string, unknown>[] };
+		payload.payments = [{ ...payload.payments[0], ...patch }];
+		return env;
+	}
+
+	/** The same 935 sale paid by card or mobile (no tendered, no change), plus `patch`. */
+	function paidBy(
+		f: Fixture,
+		method: 'card' | 'mobile',
+		patch: Record<string, unknown> = {}
+	): Payload {
+		return envelope(f, {
+			payments: [
+				{
+					paymentId: randomUUID(),
+					method,
+					amountMinor: '935',
+					tenderedMinor: null,
+					changeMinor: null,
+					...patch
+				}
+			]
+		});
+	}
+
+	/** `envelope(f, overrides)` with its one Tea line's fields replaced by `patch`. */
+	function lineWith(
+		f: Fixture,
+		patch: Record<string, unknown>,
+		overrides: Record<string, unknown> = {}
+	): Payload {
+		const env = envelope(f, overrides);
+		const payload = env.payload as { lines: Record<string, unknown>[] };
+		payload.lines = [{ ...payload.lines[0], ...patch }];
+		return env;
+	}
+
+	function seedMethod(
+		f: Fixture,
+		input: { name: string; kind: 'card' | 'mobile'; enabled?: boolean }
+	): Promise<string> {
+		return db.transaction((tx) => seedPaymentMethod(tx, f.restaurantId, input, ownerCtx(f)));
+	}
+
+	/** A second, unrelated restaurant: its ids must never resolve for `fx`. */
+	const restaurantB = () => makeFixture(`validate-b-${randomUUID()}@example.com`);
+
+	// MANDATORY (spec 29 — offline sync; invariant 5): the payload every till queued
+	// before this plan sends carries none of the four keys. It still validates
+	// clean: the payment is attributed to the built-in Cash row, and the line to
+	// the default rate, because the line's 1000 equals that rate's number.
+	it('a pre-plan payload (none of the four keys) validates on the Cash row and the default rate', async () => {
+		const env = envelope(fx);
+		const payload = env.payload as {
+			lines: Record<string, unknown>[];
+			payments: Record<string, unknown>[];
+		};
+		for (const key of ['taxRateId', 'taxRateName']) {
+			expect(key in payload.lines[0], key).toBe(false);
+		}
+		for (const key of ['paymentMethodId', 'paymentMethodName']) {
+			expect(key in payload.payments[0], key).toBe(false);
+		}
+		const cashId = await cashMethodId(testDb(), fx.restaurantId);
+		const rate = await defaultTaxRateOf(testDb(), fx.restaurantId);
+		expect(rate).not.toBeNull();
+
+		const result = await validate(fx, env);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.softFlags).toEqual([]);
+			expect(result.sale.payment).toEqual({
+				paymentId: payload.payments[0].paymentId,
+				method: 'cash',
+				paymentMethodId: cashId,
+				paymentMethodName: 'Cash',
+				amountMinor: 935n,
+				tenderedMinor: 1000n,
+				changeMinor: 65n
+			});
+			expect(result.sale.lines[0].taxRateId).toBe(rate!.id);
+			expect(result.sale.lines[0].taxRateName).toBe(rate!.name);
+		}
+	});
+
+	// Cash.
+	it("cash naming the Cash row's id and the name 'Cash' validates", async () => {
+		const cashId = await cashMethodId(testDb(), fx.restaurantId);
+		const result = await validate(
+			fx,
+			cashWith(fx, { paymentMethodId: cashId, paymentMethodName: 'Cash' })
+		);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.softFlags).toEqual([]);
+			expect(result.sale.payment).toMatchObject({
+				method: 'cash',
+				paymentMethodId: cashId,
+				paymentMethodName: 'Cash'
+			});
+		}
+	});
+
+	it("the till's name wins, trimmed: '  Cash drawer  ' is stored as 'Cash drawer'", async () => {
+		const cashId = await cashMethodId(testDb(), fx.restaurantId);
+		const result = await validate(
+			fx,
+			cashWith(fx, { paymentMethodId: cashId, paymentMethodName: '  Cash drawer  ' })
+		);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.sale.payment.paymentMethodId).toBe(cashId);
+			expect(result.sale.payment.paymentMethodName).toBe('Cash drawer');
+		}
+	});
+
+	it('cash naming a card method is payment_method_kind_mismatch', async () => {
+		const visaId = await seedMethod(fx, { name: 'Visa terminal', kind: 'card' });
+		expect(await validate(fx, cashWith(fx, { paymentMethodId: visaId }))).toEqual(
+			invalid('payment_method_kind_mismatch')
+		);
+	});
+
+	it("cash naming restaurant B's Cash row is unknown_payment_method", async () => {
+		const b = await restaurantB();
+		const foreignCashId = await cashMethodId(testDb(), b.restaurantId);
+		expect(await validate(fx, cashWith(fx, { paymentMethodId: foreignCashId }))).toEqual(
+			invalid('unknown_payment_method')
+		);
+	});
+
+	it('cash naming an invented id is unknown_payment_method', async () => {
+		expect(await validate(fx, cashWith(fx, { paymentMethodId: randomUUID() }))).toEqual(
+			invalid('unknown_payment_method')
+		);
+	});
+
+	// Card and mobile: they have not completed on the till yet, so a method that is
+	// archived or switched off is refused (decision (f) — a 422 the till turns into
+	// sale.abandoned).
+	it('card naming an enabled card method validates with its id and name; once archived, tender_not_accepted', async () => {
+		const visaId = await seedMethod(fx, { name: 'Visa terminal', kind: 'card' });
+		const named = { paymentMethodId: visaId, paymentMethodName: 'Visa terminal' };
+		const live = await validate(fx, paidBy(fx, 'card', named));
+		expect(live.ok).toBe(true);
+		if (live.ok) {
+			expect(live.softFlags).toEqual([]);
+			expect(live.sale.payment).toMatchObject({
+				method: 'card',
+				paymentMethodId: visaId,
+				paymentMethodName: 'Visa terminal'
+			});
+		}
+
+		const archived = await db.transaction((tx) =>
+			archivePaymentMethod(tx, fx.restaurantId, visaId, ownerCtx(fx))
+		);
+		expect(archived).toEqual({ ok: true });
+		expect(await validate(fx, paidBy(fx, 'card', named))).toEqual(invalid('tender_not_accepted'));
+	});
+
+	it('mobile naming a method seeded disabled is tender_not_accepted', async () => {
+		const zaadId = await seedMethod(fx, { name: 'Zaad', kind: 'mobile', enabled: false });
+		expect(
+			await validate(
+				fx,
+				paidBy(fx, 'mobile', { paymentMethodId: zaadId, paymentMethodName: 'Zaad' })
+			)
+		).toEqual(invalid('tender_not_accepted'));
+	});
+
+	it('mobile on the wire naming a CARD method is payment_method_kind_mismatch', async () => {
+		const visaId = await seedMethod(fx, { name: 'Visa terminal', kind: 'card' });
+		expect(await validate(fx, paidBy(fx, 'mobile', { paymentMethodId: visaId }))).toEqual(
+			invalid('payment_method_kind_mismatch')
+		);
+	});
+
+	// sort_order decides, not the name: 'Amex terminal' sorts first by name, but it
+	// was added second, so createPaymentMethod gave it the higher sort_order.
+	it("a card payload with no id resolves to the first live, enabled card method by sort_order ('Visa terminal')", async () => {
+		const visaId = await seedMethod(fx, { name: 'Visa terminal', kind: 'card' });
+		await seedMethod(fx, { name: 'Amex terminal', kind: 'card' });
+		const result = await validate(fx, paidBy(fx, 'card'));
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.sale.payment.paymentMethodId).toBe(visaId);
+			expect(result.sale.payment.paymentMethodName).toBe('Visa terminal');
+		}
+	});
+
+	it('a mobile payload with no id and every mobile method disabled is tender_not_accepted', async () => {
+		await seedMethod(fx, { name: 'EVC Plus', kind: 'mobile', enabled: false });
+		await seedMethod(fx, { name: 'Zaad', kind: 'mobile', enabled: false });
+		expect(await validate(fx, paidBy(fx, 'mobile'))).toEqual(invalid('tender_not_accepted'));
+	});
+
+	// Names: what the receipt printed, so the DB bounds (1–40) and no control
+	// characters, which would command an ESC/POS printer on a reprint.
+	it('a payment method name holding a control character is refused on paymentMethodName', async () => {
+		const result = await validate(fx, paidBy(fx, 'mobile', { paymentMethodName: 'EVC\u001bPlus' }));
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.hard).toBe('invalid_payload');
+			expect(result.detail).toContain('paymentMethodName');
+		}
+	});
+
+	it('a 41-character payment method name is refused on paymentMethodName', async () => {
+		const result = await validate(fx, paidBy(fx, 'mobile', { paymentMethodName: 'E'.repeat(41) }));
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.hard).toBe('invalid_payload');
+			expect(result.detail).toContain('paymentMethodName');
+		}
+	});
+
+	it('a tax rate name holding a control character is refused on taxRateName', async () => {
+		const result = await validate(fx, lineWith(fx, { taxRateName: 'V\u0007AT' }));
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.hard).toBe('invalid_payload');
+			expect(result.detail).toContain('taxRateName');
+		}
+	});
+
+	// Rates.
+	it("a line naming the default rate as 'VAT' stores that id and the SENT name", async () => {
+		const result = await validate(
+			fx,
+			lineWith(fx, { taxRateId: fx.taxRateId, taxRateName: 'VAT' })
+		);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.softFlags).toEqual([]);
+			expect(result.sale.lines[0]).toMatchObject({ taxRateId: fx.taxRateId, taxRateName: 'VAT' });
+		}
+	});
+
+	it("a line naming the default rate with no name stores the row's name", async () => {
+		const result = await validate(fx, lineWith(fx, { taxRateId: fx.taxRateId }));
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.softFlags).toEqual([]);
+			expect(result.sale.lines[0]).toMatchObject({ taxRateId: fx.taxRateId, taxRateName: 'Tax' });
+		}
+	});
+
+	it("a line naming restaurant B's default rate is unknown_tax_rate", async () => {
+		const b = await restaurantB();
+		expect(await validate(fx, lineWith(fx, { taxRateId: b.taxRateId }))).toEqual(
+			invalid('unknown_tax_rate')
+		);
+	});
+
+	it('a line naming an invented rate id is unknown_tax_rate', async () => {
+		expect(await validate(fx, lineWith(fx, { taxRateId: randomUUID() }))).toEqual(
+			invalid('unknown_tax_rate')
+		);
+	});
+
+	// The id is compared, not only the number: 'Reduced' 10% is not the item's rate.
+	it('another live rate with the same number: price_tamper at the current version, stale and kept at an older one', async () => {
+		const reduced = await db.transaction((tx) =>
+			createTaxRate(tx, fx.restaurantId, { name: 'Reduced', rateBp: 1000 }, ownerCtx(fx))
+		);
+		if (!reduced.ok) throw new Error(`fixture rate was not created: ${reduced.reason}`);
+		const current = await getMenuVersion(testDb(), fx.restaurantId);
+		expect(current).toBeGreaterThan(fx.menuVersion);
+
+		const atCurrent = lineWith(fx, { taxRateId: reduced.id }, { menuVersion: current });
+		const lineId = (atCurrent.payload as { lines: { lineId: string }[] }).lines[0].lineId;
+		expect(await validate(fx, atCurrent)).toEqual({
+			ok: false,
+			hard: 'price_tamper',
+			detail: `line:${lineId}:tax_rate`
+		});
+
+		const older = await validate(fx, lineWith(fx, { taxRateId: reduced.id }));
+		expect(older.ok).toBe(true);
+		if (older.ok) {
+			expect(older.softFlags).toContain('stale_menu_price');
+			expect(older.sale.lines[0]).toMatchObject({
+				taxRateId: reduced.id,
+				taxRateName: 'Reduced'
+			});
+		}
+	});
+
+	// Spec 6: a stale till's offline cash sale of an archived item, on that item's
+	// archived rate, still validates clean and stores the rate.
+	it('spec 6: an archived item on its archived rate still sells, storing that rate', async () => {
+		const soda = await db.transaction((tx) =>
+			createTaxRate(tx, fx.restaurantId, { name: 'Soda tax', rateBp: 500 }, ownerCtx(fx))
+		);
+		if (!soda.ok) throw new Error(`fixture rate was not created: ${soda.reason}`);
+		const item = await db.transaction((tx) =>
+			createItem(tx, fx.restaurantId, { name: 'Old soda', priceMinor: 300n, taxRateId: soda.id })
+		);
+		if (!item.ok) throw new Error(`fixture item was not created: ${item.reason}`);
+		expect(await db.transaction((tx) => archiveItem(tx, fx.restaurantId, item.id))).toEqual({
+			ok: true,
+			changed: true
+		});
+		// Allowed: only an archived item uses the rate.
+		expect(
+			await db.transaction((tx) => archiveTaxRate(tx, fx.restaurantId, soda.id, ownerCtx(fx)))
+		).toEqual({ ok: true });
+		const version = await getMenuVersion(testDb(), fx.restaurantId);
+
+		const env = envelope(fx, {
+			menuVersion: version,
+			lines: [
+				{
+					lineId: randomUUID(),
+					lineNo: 1,
+					menuItemId: item.id,
+					itemName: 'Old soda',
+					quantity: 1,
+					unitPriceMinor: '300',
+					taxRateBp: 500,
+					taxRateId: soda.id,
+					discountMinor: '0',
+					modifiers: []
+				}
+			],
+			totals: { subtotalMinor: '300', discountMinor: '0', taxMinor: '15', totalMinor: '315' },
+			payments: [
+				{
+					paymentId: randomUUID(),
+					method: 'cash',
+					amountMinor: '315',
+					tenderedMinor: '400',
+					changeMinor: '85'
+				}
+			]
+		});
+		const result = await validate(fx, env);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.softFlags).toEqual([]);
+			expect(result.sale.lines[0]).toMatchObject({ taxRateId: soda.id, taxRateName: 'Soda tax' });
+		}
+	});
+
+	// A pre-plan line is attributed to the item's rate ONLY when it was taxed at
+	// that rate's number: at 900 against the default's 1000 it keeps no id.
+	it('inference only when the number matches: a pre-plan line at 900 stores no rate id and no name', async () => {
+		const result = await validate(
+			fx,
+			oneLineCash(fx, { id: fx.teaId, name: 'Tea', priceMinor: 850n }, 900, fx.menuVersion - 1)
+		);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.softFlags).toContain('stale_menu_price');
+			expect(result.sale.lines[0].taxRateId).toBeNull();
+			expect(result.sale.lines[0].taxRateName).toBeNull();
+		}
 	});
 });

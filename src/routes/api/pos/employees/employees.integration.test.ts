@@ -13,7 +13,15 @@ import {
 	registerDevice,
 	revokeDevice
 } from '$lib/server/auth/pos-device';
-import { onRestaurantCreated, updateSettings } from '$lib/server/restaurants';
+import {
+	archivePaymentMethod,
+	createPaymentMethod,
+	onRestaurantCreated,
+	replaceReceiptLines,
+	setReceiptLogo,
+	updateSettings
+} from '$lib/server/restaurants';
+import { DEFAULT_RECEIPT_LAYOUT, type ReceiptLayout } from '$lib/receipt-layout';
 import { GET } from './+server';
 
 const db = testDb();
@@ -102,8 +110,14 @@ async function get(cookies: Record<string, string>) {
 				settings: {
 					posIdleLockSeconds: number | null;
 					timeZone: string | null;
-					acceptsCard: boolean | null;
-					acceptsMobile: boolean | null;
+					// tasks/settings-tax-payments-receipt T-20.
+					paymentMethods: Array<{
+						id: string;
+						name: string;
+						kind: string;
+						merchantNumber: string | null;
+					}>;
+					receipt: ReceiptLayout;
 				};
 			},
 			headers: response.headers
@@ -183,6 +197,26 @@ describe('GET /api/pos/employees', () => {
 		}
 	});
 
+	// settings-tax-payments-receipt T-33: the legacy tender and footer keys left
+	// the bundle with their columns (migration 0018). An EXACT key set, so a
+	// retired key cannot come back unnoticed and a new one is a deliberate edit.
+	it('serialises exactly the eight settings keys the till reads', async () => {
+		const a = await makeRestaurant('Cafe A', 'a@cafe.com');
+
+		const { body } = await get({ [DEVICE_COOKIE]: a.token });
+
+		expect(Object.keys(body!.settings).sort()).toEqual([
+			'paymentMethods',
+			'posIdleLockSeconds',
+			'receipt',
+			'receiptAddress',
+			'receiptPhone',
+			'restaurantName',
+			'taxRegistrationNumber',
+			'timeZone'
+		]);
+	});
+
 	it('keeps an employee with no PIN and drops a deactivated one — both decided by the read model', async () => {
 		const a = await makeRestaurant('Cafe A', 'a@cafe.com');
 		await seedStaff(db, a.restaurantId, {
@@ -206,20 +240,24 @@ describe('GET /api/pos/employees', () => {
 		const a = await makeRestaurant('Cafe A', 'a@cafe.com');
 
 		const before = await get({ [DEVICE_COOKIE]: a.token });
-		// null, not a substituted number. The tender flags are also null until
-		// the owner chooses; the time zone is set at registration and travels
-		// through so the till can render the business date.
+		// null, not a substituted number. The time zone is set at registration and
+		// travels through so the till can render the business date.
 		expect(before.body!.settings).toEqual({
 			restaurantName: 'Cafe A',
 			posIdleLockSeconds: null,
 			timeZone: 'UTC',
-			acceptsCard: null,
-			acceptsMobile: null,
 			// T-21: the receipt header rides here too, null until the owner sets it.
 			receiptAddress: null,
 			receiptPhone: null,
 			taxRegistrationNumber: null,
-			receiptFooter: null
+			// settings-tax-payments-receipt T-20: the built-in Cash row every new
+			// restaurant gets from the seedCashMethod initializer (T-11), and
+			// today's receipt layout — every switch on, no lines, no heading, no
+			// logo (T-12).
+			paymentMethods: [
+				{ id: expect.any(String), name: 'Cash', kind: 'cash', merchantNumber: null }
+			],
+			receipt: DEFAULT_RECEIPT_LAYOUT
 		});
 
 		await db.transaction((tx) =>
@@ -235,12 +273,13 @@ describe('GET /api/pos/employees', () => {
 			restaurantName: 'Cafe A',
 			posIdleLockSeconds: 120,
 			timeZone: 'UTC',
-			acceptsCard: null,
-			acceptsMobile: null,
 			receiptAddress: null,
 			receiptPhone: null,
 			taxRegistrationNumber: null,
-			receiptFooter: null
+			paymentMethods: [
+				{ id: expect.any(String), name: 'Cash', kind: 'cash', merchantNumber: null }
+			],
+			receipt: DEFAULT_RECEIPT_LAYOUT
 		});
 	});
 
@@ -259,17 +298,6 @@ describe("the till's sale bootstrap (T-28)", () => {
 		expect(body!.openSession).toBeNull();
 	});
 
-	it('passes the accepted tenders through as stored', async () => {
-		const a = await makeRestaurant('Cafe Tenders', 'tenders@cafe.com');
-		await db
-			.update(restaurantSettings)
-			.set({ acceptsCard: true, acceptsMobile: false })
-			.where(eq(restaurantSettings.restaurantId, a.restaurantId));
-		const { body } = await get({ [DEVICE_COOKIE]: a.token });
-		expect(body!.settings.acceptsCard).toBe(true);
-		expect(body!.settings.acceptsMobile).toBe(false);
-	});
-
 	// menu-and-printing T-21: the receipt header rides INSIDE settings, so the
 	// response keeps its five top-level keys.
 	it('passes the receipt header through as stored, null until set', async () => {
@@ -281,23 +309,20 @@ describe("the till's sale bootstrap (T-28)", () => {
 		expect(before.receiptAddress).toBeNull();
 		expect(before.receiptPhone).toBeNull();
 		expect(before.taxRegistrationNumber).toBeNull();
-		expect(before.receiptFooter).toBeNull();
 
 		await db
 			.update(restaurantSettings)
 			.set({
 				receiptAddress: 'Km4',
 				receiptPhone: '61 555 0142',
-				taxRegistrationNumber: 'TIN-1',
-				receiptFooter: 'Mahadsanid!'
+				taxRegistrationNumber: 'TIN-1'
 			})
 			.where(eq(restaurantSettings.restaurantId, a.restaurantId));
 		const { body } = await get({ [DEVICE_COOKIE]: a.token });
 		expect(body!.settings).toMatchObject({
 			receiptAddress: 'Km4',
 			receiptPhone: '61 555 0142',
-			taxRegistrationNumber: 'TIN-1',
-			receiptFooter: 'Mahadsanid!'
+			taxRegistrationNumber: 'TIN-1'
 		});
 		expect(Object.keys(body!).sort()).toEqual([
 			'device',
@@ -306,5 +331,130 @@ describe("the till's sale bootstrap (T-28)", () => {
 			'openSession',
 			'settings'
 		]);
+	});
+});
+
+describe('payment methods and the receipt layout (settings-tax-payments-receipt T-20)', () => {
+	const ctxOf = (r: { ownerId: string }) => ({ actorUserId: r.ownerId, ip: null, userAgent: null });
+
+	it('ships the enabled, live methods only, cash first, four keys each', async () => {
+		const a = await makeRestaurant('Cafe A', 'a@cafe.com');
+		await db.transaction(async (tx) => {
+			expect(
+				await createPaymentMethod(
+					tx,
+					a.restaurantId,
+					{ name: 'EVC Plus', kind: 'mobile', merchantNumber: '61 234 5678', enabled: true },
+					ctxOf(a)
+				)
+			).toMatchObject({ ok: true });
+			// Disabled: stays out of the bundle.
+			expect(
+				await createPaymentMethod(
+					tx,
+					a.restaurantId,
+					{ name: 'Visa terminal', kind: 'card', merchantNumber: null, enabled: false },
+					ctxOf(a)
+				)
+			).toMatchObject({ ok: true });
+			// Archived: stays out of the bundle, enabled or not.
+			const zaad = await createPaymentMethod(
+				tx,
+				a.restaurantId,
+				{ name: 'Zaad', kind: 'mobile', merchantNumber: '63 345 6789', enabled: true },
+				ctxOf(a)
+			);
+			if (!zaad.ok) throw new Error(zaad.reason);
+			expect(await archivePaymentMethod(tx, a.restaurantId, zaad.id, ctxOf(a))).toEqual({
+				ok: true
+			});
+			expect(
+				await createPaymentMethod(
+					tx,
+					a.restaurantId,
+					{ name: 'Card', kind: 'card', merchantNumber: null, enabled: true },
+					ctxOf(a)
+				)
+			).toMatchObject({ ok: true });
+		});
+
+		const { body } = await get({ [DEVICE_COOKIE]: a.token });
+		const methods = body!.settings.paymentMethods;
+		// Cash first, then sort_order — the reader's order, untouched here.
+		expect(methods.map((m) => m.name)).toEqual(['Cash', 'EVC Plus', 'Card']);
+		// Exactly four keys: the row is mapped by name, never spread, so enabled,
+		// sortOrder and archivedAt cannot leak.
+		for (const method of methods) {
+			expect(Object.keys(method).sort()).toEqual(['id', 'kind', 'merchantNumber', 'name']);
+		}
+		expect(methods[1]).toMatchObject({ kind: 'mobile', merchantNumber: '61 234 5678' });
+	});
+
+	it("never ships another restaurant's methods", async () => {
+		const a = await makeRestaurant('Cafe A', 'a@cafe.com');
+		const b = await makeRestaurant('Cafe B', 'b@cafe.com');
+		await db.transaction(async (tx) => {
+			expect(
+				await createPaymentMethod(
+					tx,
+					b.restaurantId,
+					{ name: 'Zaad', kind: 'mobile', merchantNumber: '63 345 6789', enabled: true },
+					ctxOf(b)
+				)
+			).toMatchObject({ ok: true });
+		});
+
+		const { body } = await get({ [DEVICE_COOKIE]: a.token });
+		expect(body!.settings.paymentMethods.map((m) => m.name)).toEqual(['Cash']);
+		expect(body!.settings.paymentMethods.map((m) => m.name)).not.toContain('Zaad');
+	});
+
+	it("ships the layout and only the logo's fingerprint", async () => {
+		const a = await makeRestaurant('Cafe A', 'a@cafe.com');
+		await db.transaction(async (tx) => {
+			expect(
+				await replaceReceiptLines(tx, a.restaurantId, 'header', ['Open daily 7-23'], ctxOf(a))
+			).toEqual({ ok: true, changed: true });
+			expect(
+				await replaceReceiptLines(tx, a.restaurantId, 'footer', ['Mahadsanid!'], ctxOf(a))
+			).toEqual({ ok: true, changed: true });
+			expect(
+				await updateSettings(
+					tx,
+					a.restaurantId,
+					{
+						receiptShow: { businessDate: false },
+						receiptPaymentNumbersHeading: 'PAY BY MOBILE MONEY'
+					},
+					ctxOf(a)
+				)
+			).toMatchObject({ ok: true, changed: true });
+			expect(
+				await setReceiptLogo(
+					tx,
+					a.restaurantId,
+					{ widthDots: 16, heightDots: 2, bitmap: new Uint8Array([0xff, 0x00, 0x81, 0x7e]) },
+					ctxOf(a)
+				)
+			).toEqual({ ok: true, sha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
+		});
+
+		const { body } = await get({ [DEVICE_COOKIE]: a.token });
+		expect(body!.settings.receipt).toEqual({
+			headerLines: ['Open daily 7-23'],
+			footerLines: ['Mahadsanid!'],
+			// The one switch turned off; every other one still true.
+			show: { ...DEFAULT_RECEIPT_LAYOUT.show, businessDate: false },
+			paymentNumbersHeading: 'PAY BY MOBILE MONEY',
+			logo: { sha256: expect.stringMatching(/^[0-9a-f]{64}$/), widthDots: 16, heightDots: 2 }
+		});
+		// The bitmap never rides in the bundle: GET /api/pos/receipt-logo serves it,
+		// and only when this fingerprint changes.
+		expect(Object.keys(body!.settings.receipt.logo!).sort()).toEqual([
+			'heightDots',
+			'sha256',
+			'widthDots'
+		]);
+		expect(JSON.stringify(body!.settings)).not.toContain('bitmap');
 	});
 });

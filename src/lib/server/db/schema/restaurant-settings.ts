@@ -1,6 +1,16 @@
 import { sql } from 'drizzle-orm';
-import { pgTable, uuid, text, integer, boolean, timestamp, check } from 'drizzle-orm/pg-core';
+import {
+	pgTable,
+	uuid,
+	text,
+	integer,
+	boolean,
+	timestamp,
+	check,
+	foreignKey
+} from 'drizzle-orm/pg-core';
 import { restaurants } from './restaurants';
+import { taxRates } from './tax-rates';
 
 // One settings row per restaurant, so the foreign key IS the primary key.
 //
@@ -16,10 +26,23 @@ import { restaurants } from './restaurants';
 // visited the settings page would open their first session with a tax mode nobody
 // chose.
 //
-// tax_mode, tax_rate_bp and currency_code HAVE LANDED, exactly that way (T-36,
-// once T-03 recorded spec 33 open decisions 3 and 4 on 2026-09-15): nullable, no
-// DEFAULT, and each CHECK below lets a NULL through, because unset is legitimate
-// until the owner chooses.
+// tax_mode, default_tax_rate_id and currency_code HAVE LANDED, exactly that way:
+// nullable, no DEFAULT, no fallback in code, and each CHECK below lets a NULL
+// through, because unset is legitimate until the owner chooses. tax_mode and
+// currency_code landed with T-36 once T-03 recorded spec 33 open decisions 3 and
+// 4 on 2026-09-15; default_tax_rate_id lands exactly like tax_mode
+// (tasks/settings-tax-payments-receipt T-03): it points at the owner's DEFAULT
+// named rate in tax_rates, NULL means the owner has not chosen, and from T-13
+// settingsComplete() reports 'tax rate' until a default is set. tax_rate_bp was
+// RETIRED by migration 0018 (tasks/settings-tax-payments-receipt T-33). A rate
+// is a named tax_rates row, and default_tax_rate_id points at the default —
+// NULL until the owner chooses, with no DEFAULT, so settingsComplete() reports
+// 'tax rate'. (Migration 0017 first copied an existing value into the default
+// named rate "Tax".)
+//
+// accepts_card and accepts_mobile were RETIRED by 0018. The tenders are
+// payment_methods rows: one built-in cash row, plus owner-named card and mobile
+// rows.
 //
 // pos_idle_lock_seconds HAS LANDED, exactly that way (T-08, per the decision
 // recorded on 2026-09-15): NULLABLE, with NO column DEFAULT and no fallback number
@@ -43,15 +66,34 @@ import { restaurants } from './restaurants';
 // settings.updated audit event.
 //
 // RECEIPT HEADER TEXT (tasks/menu-and-printing T-20): receipt_address,
-// receipt_phone, tax_registration_number and receipt_footer are OPTIONAL text
-// the owner may print on every receipt. They are not decisions, so
+// receipt_phone and tax_registration_number are OPTIONAL text the owner may
+// print on every receipt, and they STAY. They are not decisions, so
 // settingsComplete() does not report them; spec 33 open decision 3 (what a
-// receipt must legally show) is STILL OPEN, and these four are the default
-// layout's fields pending a local accountant — a legal requirement changes
+// receipt must legally show) is STILL OPEN, and they are the default layout's
+// fields pending a local accountant — a legal requirement changes
 // src/lib/pos/receipt.ts and these settings, not the ledger. Nullable, no
 // DEFAULT, bounded by the CHECKs below; written only by updateSettings.
 // tax_registration_number is an identifier, not money: schema.test.ts
-// exempts it from the money-name rule by name.
+// exempts it from the money-name rule by name. receipt_footer was RETIRED by
+// 0018. Footer text is now receipt_lines rows with section 'footer'
+// (schema/receipt.ts); migration 0017 copied the old value into footer line 1.
+//
+// RECEIPT SWITCHES (tasks/settings-tax-payments-receipt): the nine receipt_*
+// booleans say which optional fields the receipt prints (gate decision 4). They
+// are NOT NULL DEFAULT true — the ONE place in that plan where a setting column
+// is given a DEFAULT, for the reason menu_version gives above: a display switch
+// answers no open decision, and true reproduces exactly the receipt printed
+// today for every restaurant already registered. Spec 33 open decision 3 (what
+// a receipt must legally show) is STILL OPEN. The fields that can never be
+// hidden have NO column: the restaurant name, the invoice number, the date and
+// time, the items, subtotal/discount/tax/total, the payment, the COPY marks, and
+// the tax registration number when one is set — the receipt formatter (T-23)
+// enforces that, not the database. receipt_tax_breakdown false means one tax
+// line instead of one per rate. receipt_payment_numbers_heading, the optional
+// heading above the payment-numbers block, is nullable with NO DEFAULT (NULL =
+// no heading) and, like all receipt text, refuses control characters
+// (!~ '[[:cntrl:]]') so an ESC can never start the drawer pulse ESC p
+// (invariant 9).
 //
 // onDelete: 'restrict' throughout this plan: a restaurant with any history must
 // not be deletable, because audit rows reference it and those are append-only.
@@ -68,43 +110,44 @@ export const restaurantSettings = pgTable(
 		// Spec 17 and spec 33 open decision 3: the owner picks 'exclusive' or
 		// 'inclusive'; nothing hardcodes one.
 		taxMode: text('tax_mode'),
-		// ONE rate per restaurant, in integer BASIS POINTS (825 = 8.25%). A rate, not
-		// money, so integer — not a _minor bigint. Postgres silently rounds a decimal
-		// into an integer column, so the real guards are the settings form's zod
-		// .int() and updateSettings' Number.isSafeInteger check.
-		taxRateBp: integer('tax_rate_bp'),
+		// The owner's DEFAULT named rate (tax_rates). NULL = not chosen yet — no
+		// DEFAULT and no fallback, like tax_mode; see the note above this table.
+		defaultTaxRateId: uuid('default_tax_rate_id'),
 		// Spec 33 open decision 4: an ISO 4217 code the money formatter can render.
 		currencyCode: text('currency_code'),
-		// Spec 33 open decision 4 (payment methods at launch), the part ASSUMED on
-		// 2026-09-28 (tasks/pos-sales Assumption 3, recorded in CLAUDE.md by T-02
-		// pending the user's confirmation): cash is always accepted; card and
-		// mobile are recorded external-terminal tenders the owner switches on
-		// here. NULLABLE with NO column DEFAULT, exactly like tax_mode above:
-		// null means the owner has not chosen, and the till treats it as OFF and
-		// shows the reason on the disabled key. Written only by updateSettings
-		// (T-29).
-		acceptsCard: boolean('accepts_card'),
-		acceptsMobile: boolean('accepts_mobile'),
 		// Receipt header text (T-20) — optional, nullable, no default; see above.
 		receiptAddress: text('receipt_address'),
 		receiptPhone: text('receipt_phone'),
 		taxRegistrationNumber: text('tax_registration_number'),
-		receiptFooter: text('receipt_footer'),
+		// Receipt display switches (tasks/settings-tax-payments-receipt, gate decision 4) — see
+		// the header. DEFAULT true = exactly today's receipt.
+		receiptShowCashier: boolean('receipt_show_cashier').notNull().default(true),
+		receiptShowTable: boolean('receipt_show_table').notNull().default(true),
+		receiptShowBusinessDate: boolean('receipt_show_business_date').notNull().default(true),
+		receiptShowOrderType: boolean('receipt_show_order_type').notNull().default(true),
+		receiptShowUnitPrice: boolean('receipt_show_unit_price').notNull().default(true),
+		receiptShowCurrencyLine: boolean('receipt_show_currency_line').notNull().default(true),
+		receiptShowDeviceLine: boolean('receipt_show_device_line').notNull().default(true),
+		receiptShowPaymentNumbers: boolean('receipt_show_payment_numbers').notNull().default(true),
+		receiptTaxBreakdown: boolean('receipt_tax_breakdown').notNull().default(true),
+		// Optional heading above the payment-numbers block; NULL = no heading. No DEFAULT.
+		receiptPaymentNumbersHeading: text('receipt_payment_numbers_heading'),
 		// The menu snapshot's version (spec 5) — see the note above this table.
 		menuVersion: integer('menu_version').notNull().default(1),
 		updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow()
 	},
 	(table) => [
+		foreignKey({
+			columns: [table.restaurantId, table.defaultTaxRateId],
+			foreignColumns: [taxRates.restaurantId, taxRates.id],
+			name: 'restaurant_settings_default_tax_rate_fk'
+		}).onDelete('restrict'),
 		// The two literals are TAX_MODES in src/lib/money/tax.ts, spelled identically.
 		// Not imported: drizzle-kit loads this file outside Vite and cannot resolve
 		// $lib. constraints.integration.test.ts pins the two lists together.
 		check(
 			'restaurant_settings_tax_mode_valid',
 			sql`${table.taxMode} is null or ${table.taxMode} in ('exclusive', 'inclusive')`
-		),
-		check(
-			'restaurant_settings_tax_rate_bp_range',
-			sql`${table.taxRateBp} is null or (${table.taxRateBp} >= 0 and ${table.taxRateBp} <= 10000)`
 		),
 		check(
 			'restaurant_settings_currency_code_format',
@@ -124,8 +167,8 @@ export const restaurantSettings = pgTable(
 			sql`${table.taxRegistrationNumber} is null or char_length(${table.taxRegistrationNumber}) between 1 and 40`
 		),
 		check(
-			'restaurant_settings_receipt_footer_length',
-			sql`${table.receiptFooter} is null or char_length(${table.receiptFooter}) between 1 and 120`
+			'restaurant_settings_receipt_payment_numbers_heading_length',
+			sql`${table.receiptPaymentNumbersHeading} is null or (char_length(${table.receiptPaymentNumbersHeading}) between 1 and 40 and ${table.receiptPaymentNumbersHeading} !~ '[[:cntrl:]]')`
 		)
 	]
 );

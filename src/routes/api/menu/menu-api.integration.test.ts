@@ -17,8 +17,10 @@ import {
 	createModifierGroup,
 	linkModifierGroup,
 	setItemAvailability,
-	setItemImage
+	setItemImage,
+	updateTaxRate
 } from '$lib/server/menu';
+import { seedTaxRate } from '$lib/server/db/test/settings';
 import { applyMovements, createIngredient, setRecipe } from '$lib/server/inventory';
 import { minor } from '$lib/money';
 import { qty } from '$lib/money/quantity';
@@ -31,13 +33,18 @@ afterAll(async () => {
 	await closeTestDb();
 });
 
+type SnapshotTaxRate = { id: string; name: string; rateBp: number };
+
 type Snapshot = {
 	version: number;
+	format: number;
 	restaurantId: string;
 	takenAt: string;
 	currency: string | null;
 	currencyExponent: number | null;
 	taxMode: string | null;
+	defaultTaxRate: SnapshotTaxRate | null;
+	/** Legacy (pre-format-2 tills): the default's number. */
 	taxRateBp: number | null;
 	categories: Array<{ id: string; name: string; sortOrder: number }>;
 	items: Array<{
@@ -46,6 +53,8 @@ type Snapshot = {
 		imageId: string | null;
 		name: string;
 		priceMinor: string;
+		taxRate: SnapshotTaxRate | null;
+		/** Legacy (pre-format-2 tills): the RESOLVED number. */
 		taxRateBp: number | null;
 		isAvailable: boolean;
 		sortOrder: number;
@@ -95,10 +104,10 @@ async function addItem(
 	r: { restaurantId: string; categoryId: string },
 	name: string,
 	priceMinor: bigint,
-	taxRateBp: number | null = null
+	taxRateId: string | null = null
 ) {
 	const item = await db.transaction((tx) =>
-		createItem(tx, r.restaurantId, { categoryId: r.categoryId, name, priceMinor, taxRateBp })
+		createItem(tx, r.restaurantId, { categoryId: r.categoryId, name, priceMinor, taxRateId })
 	);
 	if (!item.ok) throw new Error('item not created');
 	return item.id;
@@ -228,32 +237,87 @@ describe('GET /api/menu', () => {
 		expect(after.version).toBe(3); // 1, +1 for the category, +1 for the item
 	});
 
-	it('ships the restaurant rate beside each item rate, never pre-resolving an inherited null', async () => {
+	// T-13: format 2 carries NAMED, RESOLVED rates; the legacy number keys carry the
+	// resolved numbers for a till still on an older shell. Nothing falls back to a
+	// number while no rate resolves (risk 5).
+	it("resolves each item's named rate; the legacy keys carry the resolved numbers", async () => {
 		const a = await makeRestaurant('Cafe One');
-		await addItem(a, 'Inherits', 850n, null);
-		await addItem(a, 'Own rate', 850n, 500);
+		await addItem(a, 'Inherits', 850n);
 
 		const unset = await snapshotFor(a.token);
+		expect(unset.format).toBe(2);
+		expect(unset.defaultTaxRate).toBeNull();
 		expect(unset.taxRateBp).toBeNull();
 		expect(unset.taxMode).toBeNull();
 		expect(unset.currency).toBeNull();
 		expect(unset.currencyExponent).toBeNull();
+		expect(unset.items.length).toBeGreaterThan(0);
+		for (const entry of unset.items) {
+			expect(entry.taxRate).toBeNull();
+			expect(entry.taxRateBp).toBeNull();
+		}
 
-		await db.transaction((tx) =>
-			updateSettings(
+		const { vatId, reducedId } = await db.transaction(async (tx) => {
+			const vat = await seedTaxRate(
 				tx,
 				a.restaurantId,
-				{ taxMode: 'exclusive', taxRateBp: 825, currencyCode: 'USD' },
+				{ name: 'VAT', rateBp: 825, makeDefault: true },
 				a.ctx
-			)
-		);
-		const set = await snapshotFor(a.token);
+			);
+			const reduced = await seedTaxRate(
+				tx,
+				a.restaurantId,
+				{ name: 'Reduced', rateBp: 500 },
+				a.ctx
+			);
+			await updateSettings(
+				tx,
+				a.restaurantId,
+				{ taxMode: 'exclusive', currencyCode: 'USD' },
+				a.ctx
+			);
+			return { vatId: vat, reducedId: reduced };
+		});
+		await addItem(a, 'Own rate', 850n, reducedId);
+
+		const first = await call(GET, '/api/menu', { [DEVICE_COOKIE]: a.token });
+		expect(first.status).toBe(200);
+		const set = JSON.parse(first.text) as Snapshot;
 		const byName = new Map(set.items.map((item) => [item.name, item]));
+		expect(set.format).toBe(2);
+		expect(set.defaultTaxRate).toEqual({ id: vatId, name: 'VAT', rateBp: 825 });
 		expect(set.taxRateBp).toBe(825);
 		expect(set.taxMode).toBe('exclusive');
 		expect([set.currency, set.currencyExponent]).toEqual(['USD', 2]);
-		expect(byName.get('Inherits')!.taxRateBp).toBeNull();
+		expect(byName.get('Inherits')!.taxRate).toEqual({ id: vatId, name: 'VAT', rateBp: 825 });
+		expect(byName.get('Inherits')!.taxRateBp).toBe(825);
+		expect(byName.get('Own rate')!.taxRate).toEqual({
+			id: reducedId,
+			name: 'Reduced',
+			rateBp: 500
+		});
 		expect(byName.get('Own rate')!.taxRateBp).toBe(500);
+
+		// Risk 4: a rate edit bumps the version, so the OLD ETag no longer matches —
+		// the till gets the new rate, never a 304 holding the old one.
+		const oldEtag = first.headers!.get('etag')!;
+		const edited = await db.transaction((tx) =>
+			updateTaxRate(tx, a.restaurantId, vatId, { rateBp: 900 }, a.ctx)
+		);
+		expect(edited).toEqual({ ok: true, changed: true });
+		const after = await call(
+			GET,
+			'/api/menu',
+			{ [DEVICE_COOKIE]: a.token },
+			{ 'if-none-match': oldEtag }
+		);
+		expect(after.status).toBe(200);
+		const reRated = JSON.parse(after.text) as Snapshot;
+		expect(reRated.version).toBeGreaterThan(set.version);
+		expect(reRated.taxRateBp).toBe(900);
+		expect(new Map(reRated.items.map((item) => [item.name, item])).get('Inherits')!.taxRateBp).toBe(
+			900
+		);
 	});
 
 	it('leaves an archived item out and keeps a sold-out one, flagged', async () => {

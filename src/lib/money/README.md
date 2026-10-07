@@ -8,12 +8,18 @@ and spec 6 has the POS total a bill in the browser.
 ## What lives here, and what does not
 
 **Here:** pure money arithmetic — integer minor units, allocation, THE rounding
-rule, and tax in both modes (inclusive and exclusive).
+rule, and tax in both modes (inclusive and exclusive); and tax rates as integer
+basis points: `formatTaxRate` (825 → `8.25%`) and `parsePercentToBp` (`'8.25'` →
+825, the one parser of a rate typed as a percent, built from digit strings, never
+a float). `taxBreakdown` in `order-totals.ts` splits an order's ALREADY-ROUNDED
+tax by rate for the receipt. Its rows always add up to the tax the sale stores
+and posts to 2100, because they are rounded cumulatively with the one rule.
 
-**Not here:** anything that touches the database. Reading a rate out of
-`restaurant_settings` or mapping a `bigint` column belongs in
-`src/lib/server/money/`, which may import this module; this module never
-imports that one.
+**Not here:** anything that touches the database. Reading a named rate out of
+`tax_rates` (`src/lib/server/menu/tax-rates.ts`, `src/lib/server/orders/validate.ts`)
+or mapping a `bigint` column belongs in `src/lib/server/**`, which may import
+this module (`src/lib/server/money/` is reserved for database-touching money
+helpers); this module never imports that one.
 
 ## It imports nothing
 

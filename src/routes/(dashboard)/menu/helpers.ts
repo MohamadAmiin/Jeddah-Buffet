@@ -1,8 +1,8 @@
 /**
- * Pure helpers for the menu page — the zod schemas, THE price parser and the
- * tax-rate label — in their own module so the unit project can reach them.
- * +page.server.ts imports the database client, which a plain-node Vitest project
- * cannot load; src/routes/login/helpers.ts is the precedent.
+ * Pure helpers for the menu page — the zod schemas, THE price parser, and the
+ * item's tax-rate choice and label — in their own module so the unit project can
+ * reach them. +page.server.ts imports the database client, which a plain-node
+ * Vitest project cannot load; src/routes/login/helpers.ts is the precedent.
  *
  * NO MONEY ARITHMETIC ON A JAVASCRIPT NUMBER (invariant 1). A typed price is
  * converted ONCE, here, by integer string surgery that ends in BigInt() and the
@@ -12,6 +12,8 @@
  */
 import { z } from 'zod';
 import { minor, type Minor } from '../../../lib/money';
+// $lib/money/tax by its relative path: the unit project resolves no $lib alias.
+import { formatTaxRate } from '../../../lib/money/tax';
 
 // `\d` without the u flag is ASCII-only, which is what rejects full-width digits.
 const PRICE_SHAPE = /^\d+(\.\d+)?$/;
@@ -62,34 +64,50 @@ export function parsePriceInput(
 	return { ok: true, minor: minor(BigInt(sign + major + fraction.padEnd(exponent, '0'))) };
 }
 
+const TAX_RATE_CHOICE_MESSAGE = 'That tax rate no longer exists. Reload the page.';
+const taxRateChoice = z.string().trim().pipe(z.uuid(TAX_RATE_CHOICE_MESSAGE));
+
 /**
- * "8.25%" for 825 basis points, "restaurant rate" for null. String surgery on the
- * integer's digits, so the page renders a label and computes nothing.
+ * The item panel's tax-rate select (tasks/settings-tax-payments-receipt T-32).
+ * A blank, null or absent choice is "Default" — stored as null, so the item
+ * FOLLOWS the restaurant's default rate even after the owner switches it. Any
+ * other value must be the uuid of a named rate, which PINS the item to that rate;
+ * the menu module then checks it is live and this restaurant's. The two are
+ * different choices and are never collapsed into each other. No number is
+ * parsed here: a rate is a row, not a figure typed on this page.
  */
-export function formatTaxRate(bp: number | null): string {
-	if (bp === null) return 'restaurant rate';
-	const digits = String(bp).padStart(3, '0');
-	const whole = digits.slice(0, -2);
-	const hundredths = digits.slice(-2).replace(/0+$/, '');
-	return hundredths ? `${whole}.${hundredths}%` : `${whole}%`;
-}
-
-const RATE_MESSAGE = 'The tax rate is whole basis points from 0 to 10000 — 825 means 8.25%.';
-const basisPoints = z.coerce
-	.number({ error: RATE_MESSAGE })
-	.int(RATE_MESSAGE)
-	.min(0, RATE_MESSAGE)
-	.max(10000, RATE_MESSAGE);
-
-/** A blank rate means "inherit the restaurant's rate", which is stored as null. */
-export function parseOptionalRate(
+export function parseTaxRateChoice(
 	raw: unknown
-): { ok: true; value: number | null } | { ok: false; message: string } {
+): { ok: true; value: string | null } | { ok: false; message: string } {
 	if (raw === null || raw === undefined || (typeof raw === 'string' && raw.trim() === '')) {
 		return { ok: true, value: null };
 	}
-	const parsed = basisPoints.safeParse(typeof raw === 'string' ? raw.trim() : raw);
-	return parsed.success ? { ok: true, value: parsed.data } : { ok: false, message: RATE_MESSAGE };
+	const parsed = taxRateChoice.safeParse(raw);
+	return parsed.success
+		? { ok: true, value: parsed.data }
+		: { ok: false, message: TAX_RATE_CHOICE_MESSAGE };
+}
+
+/**
+ * The label a tile shows for an item's rate: "Default (Tax 10.00%)" while the
+ * item follows the restaurant's default (or "Default (not chosen yet)" while the
+ * owner has picked none), else the named rate it is pinned to, "Exempt 0.00%".
+ * The percent is the money module's formatTaxRate; nothing is computed here.
+ * 'Unknown rate' is a guard, not a state: listMenu returns live items only and a
+ * live item never points at an archived rate (archiveTaxRate refuses `in_use`).
+ */
+export function itemTaxRateLabel(
+	taxRateId: string | null,
+	rates: ReadonlyArray<{ id: string; name: string; rateBp: number }>,
+	defaultRate: { name: string; rateBp: number } | null
+): string {
+	if (taxRateId === null) {
+		return defaultRate
+			? `Default (${defaultRate.name} ${formatTaxRate(defaultRate.rateBp)})`
+			: 'Default (not chosen yet)';
+	}
+	const rate = rates.find((candidate) => candidate.id === taxRateId);
+	return rate ? `${rate.name} ${formatTaxRate(rate.rateBp)}` : 'Unknown rate';
 }
 
 // 120, not 200: the sale validator caps itemName and modifierName at 120

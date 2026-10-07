@@ -22,6 +22,7 @@ import { resetThrottle } from '$lib/server/auth/throttle';
 import { DEVICE_COOKIE, registerDevice, revokeDevice } from '$lib/server/auth/pos-device';
 import { POST as pinPost } from './pin/+server';
 import { GET as employeesGet } from './employees/+server';
+import { GET as receiptLogoGet } from './receipt-logo/+server';
 import { POST as registerPost } from './register/+server';
 import { GET as menuVersionGet } from '../menu/version/+server';
 import { GET as menuGet } from '../menu/+server';
@@ -171,6 +172,12 @@ const DEVICE_GUARDED = [
 		method: 'GET',
 		body: () => undefined,
 		handler: employeesGet
+	},
+	{
+		routeId: '/api/pos/receipt-logo',
+		method: 'GET',
+		body: () => undefined,
+		handler: receiptLogoGet
 	},
 	{
 		routeId: '/api/menu/version',
