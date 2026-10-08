@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { db } from '$lib/server/db/client';
 import { requirePermission } from '$lib/server/permissions';
 import { requestContext, writeAudit } from '$lib/server/audit';
-import { getRegisteredDevice, revokeDevice } from '$lib/server/auth/pos-device';
+import { listDevices, revokeDevice } from '$lib/server/auth/pos-device';
 import {
 	getRestaurantWithSettings,
 	settingsComplete,
@@ -30,29 +30,29 @@ export const load: ServerLoad = async (event) => {
 	const restaurantId = event.locals.restaurantId;
 	if (!restaurantId) error(500, 'No restaurant in scope');
 
-	// The restaurant's MOST RECENT device, revoked or not: the page decides what a
-	// revoked row means (registered = device && revokedAt === null), and filtering it
-	// out here would make revokedAt permanently null and that predicate dead code.
-	const row = await getRegisteredDevice(db, restaurantId);
+	// EVERY till the restaurant ever registered, revoked ones included: a restaurant
+	// may run many tills (decision of 2026-10-08), the page decides what a revoked
+	// row means (live = revokedAt === null), and a revoked code is still the
+	// explanation of every invoice that carries it.
+	const rows = await listDevices(db, restaurantId);
 	// The launch gate: settingsComplete() is the one list of what a till needs
 	// before it may be opened, and the idle lock is settable on this page.
 	const settings = await settingsComplete(db, restaurantId);
 	const restaurant = await getRestaurantWithSettings(db, restaurantId);
 	if (!restaurant) error(404, 'Restaurant not found');
 
-	// AN EXPLICIT OBJECT LITERAL, never a spread row: pos_devices holds the token
-	// hash, and SvelteKit serialises load data into the page HTML and __data.json.
+	// AN EXPLICIT OBJECT LITERAL per row, never a spread: pos_devices holds the
+	// token hash, and SvelteKit serialises load data into the page HTML and
+	// __data.json.
 	return {
-		device: row
-			? {
-					id: row.id,
-					deviceCode: row.deviceCode,
-					label: row.label,
-					registeredAt: row.registeredAt,
-					lastSeenAt: row.lastSeenAt,
-					revokedAt: row.revokedAt
-				}
-			: null,
+		devices: rows.map((row) => ({
+			id: row.id,
+			deviceCode: row.deviceCode,
+			label: row.label,
+			registeredAt: row.registeredAt,
+			lastSeenAt: row.lastSeenAt,
+			revokedAt: row.revokedAt
+		})),
 		settings: { complete: settings.complete, missing: settings.missing },
 		// Passed through as stored — null until the owner chooses. No fallback
 		// number: a fallback is a column default wearing a disguise.

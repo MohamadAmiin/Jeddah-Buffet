@@ -86,14 +86,14 @@ async function statusOf(run: () => unknown): Promise<number | undefined> {
 }
 
 type DevicePageData = {
-	device: {
+	devices: {
 		id: string;
 		deviceCode: string;
 		label: string;
 		registeredAt: Date;
 		lastSeenAt: Date | null;
 		revokedAt: Date | null;
-	} | null;
+	}[];
 	settings: { complete: boolean; missing: string[] };
 	idleLockSeconds: number | null;
 	timeZone: string | null;
@@ -140,15 +140,16 @@ describe('the /device page', () => {
 		}
 	);
 
-	it('returns the device, the settings gate and the stored idle lock to the owner', async () => {
+	it('returns the devices, the settings gate and the stored idle lock to the owner', async () => {
 		const a = await makeRestaurant();
 
 		const result = await loadAs(principal(a.ownerId, a.restaurantId, 'owner'));
 
-		expect(result.device?.deviceCode).toBe('POS1');
-		expect(result.device?.label).toBe('Counter tablet');
-		expect(result.device?.revokedAt).toBeNull();
-		expect(result.device?.lastSeenAt).toBeNull();
+		expect(result.devices).toHaveLength(1);
+		expect(result.devices[0].deviceCode).toBe('POS1');
+		expect(result.devices[0].label).toBe('Counter tablet');
+		expect(result.devices[0].revokedAt).toBeNull();
+		expect(result.devices[0].lastSeenAt).toBeNull();
 		expect(result.settings).toEqual(NOTHING_SET);
 		// Null, exactly as stored ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â no number the owner never chose.
 		expect(result.idleLockSeconds).toBeNull();
@@ -176,8 +177,35 @@ describe('the /device page', () => {
 
 		const result = await loadAs(asOwner);
 
-		expect(result.device?.id).toBe(a.deviceId);
-		expect(result.device?.revokedAt).toBeInstanceOf(Date);
+		expect(result.devices).toHaveLength(1);
+		expect(result.devices[0].id).toBe(a.deviceId);
+		expect(result.devices[0].revokedAt).toBeInstanceOf(Date);
+	});
+
+	// MANY TILLS (decision of 2026-10-08): every device the restaurant registered,
+	// live ones first, and revoking one leaves the others exactly as they were.
+	it('lists every till, live first, and revoking one leaves the rest live', async () => {
+		const a = await makeRestaurant();
+		const asOwner = principal(a.ownerId, a.restaurantId, 'owner');
+		const second = await db.transaction((tx) =>
+			registerDevice(tx, { restaurantId: a.restaurantId, actorUserId: a.ownerId, label: 'Bar' })
+		);
+		const third = await db.transaction((tx) =>
+			registerDevice(tx, { restaurantId: a.restaurantId, actorUserId: a.ownerId, label: 'Patio' })
+		);
+		expect([second.deviceCode, third.deviceCode]).toEqual(['POS2', 'POS3']);
+
+		await revoke(makeEvent(asOwner, { deviceId: second.deviceId }));
+		const result = await loadAs(asOwner);
+
+		expect(result.devices.map((d) => [d.deviceCode, d.revokedAt === null])).toEqual([
+			['POS3', true],
+			['POS1', true],
+			['POS2', false]
+		]);
+		expect(await validateDeviceToken(db, a.token)).not.toBeNull();
+		expect(await validateDeviceToken(db, third.token)).not.toBeNull();
+		expect(await validateDeviceToken(db, second.token)).toBeNull();
 	});
 
 	it('saves an idle lock of 120 through updateSettings, with its audit row, taking it off the missing list', async () => {

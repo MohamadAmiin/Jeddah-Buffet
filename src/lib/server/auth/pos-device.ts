@@ -1,5 +1,5 @@
 import { randomBytes, createHash } from 'node:crypto';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import type { Cookies } from '@sveltejs/kit';
 import type { DbTx } from '../db/client';
 import type { Executor } from './session';
@@ -8,10 +8,13 @@ import { users } from '../db/schema/users';
 
 // POS DEVICE REGISTRATION AND REVOCATION (spec 7).
 //
-// The owner signs in ON the device once; the server issues a long-lived device
-// cookie, and from then on PIN login is accepted only from that registered device.
-// The owner can revoke it from the dashboard. This module owns the device token,
-// its hash, the device-code allocator and the cookie — and nothing else:
+// The owner signs in ON each device once; the server issues a long-lived device
+// cookie, and from then on PIN login is accepted only from a registered device.
+// A restaurant may register AS MANY tills as it has counters (decision of
+// 2026-10-08, departing from spec 31's one-device MVP): each gets its own code —
+// POS1, POS2, … — and so its own gap-free invoice sequence and its own shift. The
+// owner can revoke any of them from the dashboard. This module owns the device
+// token, its hash, the device-code allocator and the cookie — and nothing else:
 //
 //   - It writes NO audit rows. Registration and revocation are composite
 //     route-level actions, and the routes call writeAudit(tx, …) with the same tx
@@ -63,10 +66,11 @@ export function deviceTokenHash(token: string): string {
  * pick the invoice-number prefix. `expiresAt` is now + the cookie lifetime, so the
  * caller can set the cookie and show the date without recomputing it.
  *
- * It does NOT refuse, revoke or supersede an existing active device: spec 31's
- * one-device MVP is enforced by the registration route, with a `for update` select
- * and a 409, where a person can be told why. Registering over a live device here
- * would leave a second tablet armed with a valid cookie nobody knows about.
+ * It does NOT refuse, revoke or supersede an existing active device — a second,
+ * third or tenth till is an ordinary registration. The ONE refusal, a browser that
+ * already carries a live device cookie, lives in the registration route, where a
+ * person can be told why: registering over that cookie would leave the row it
+ * named live but orphaned.
  */
 export async function registerDevice(
 	tx: DbTx,
@@ -167,18 +171,18 @@ export type RegisteredDevice = {
 };
 
 /**
- * The restaurant's MOST RECENT device, revoked or not, or null when it never had
- * one. An EXPLICIT column list that leaves the token hash out, because the caller
- * is a dashboard page and SvelteKit serialises its load data into the HTML and
- * __data.json. A revoked row comes back with revokedAt set: the caller decides
- * what that means (registered = device !== null && revokedAt === null), and
- * filtering it out here would make that predicate dead code.
+ * EVERY device the restaurant ever registered, live ones first and newest first
+ * within each group, revoked rows included. An EXPLICIT column list that leaves
+ * the token hash out, because the caller is a dashboard page and SvelteKit
+ * serialises its load data into the HTML and __data.json. Revoked rows come back
+ * with revokedAt set: the caller decides what that means — see hasLiveDevice —
+ * and a revoked code is still the explanation of every invoice that carries it.
  */
-export async function getRegisteredDevice(
+export async function listDevices(
 	database: Executor,
 	restaurantId: string
-): Promise<RegisteredDevice | null> {
-	const rows = await database
+): Promise<RegisteredDevice[]> {
+	return database
 		.select({
 			id: posDevices.id,
 			deviceCode: posDevices.deviceCode,
@@ -189,9 +193,18 @@ export async function getRegisteredDevice(
 		})
 		.from(posDevices)
 		.where(eq(posDevices.restaurantId, restaurantId))
-		.orderBy(desc(posDevices.registeredAt))
-		.limit(1);
-	return rows[0] ?? null;
+		.orderBy(sql`${posDevices.revokedAt} is not null`, desc(posDevices.registeredAt));
+}
+
+/**
+ * THE one definition of "this restaurant has a registered till": at least one
+ * device that has not been revoked. /device and the /dashboard checklist both use
+ * it, so the two screens cannot disagree. The newest row alone cannot answer this
+ * any more — revoking the newest till while an older one is live must not report
+ * the restaurant as unregistered.
+ */
+export function hasLiveDevice(devices: readonly Pick<RegisteredDevice, 'revokedAt'>[]): boolean {
+	return devices.some((device) => device.revokedAt === null);
 }
 
 /**

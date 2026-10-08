@@ -54,6 +54,7 @@
 	import { startAutoPrint } from '$lib/pos/printing';
 	import { readLocalSession } from '$lib/pos/session';
 	import { readConfirmedLogoSha, readReceiptLogo } from '$lib/pos/settings';
+	import { captureInstallPrompt } from '$lib/pos/install.svelte';
 
 	let { children } = $props();
 
@@ -393,6 +394,11 @@
 		].filter((warning): warning is string => warning !== null)
 	);
 
+	// The browser's install prompt is captured from the shell, which is mounted
+	// before any screen: Chromium fires it once, soon after the worker registers,
+	// and a listener attached later would miss it. The sign-in screen offers it.
+	onMount(() => captureInstallPrompt());
+
 	onMount(() => {
 		if (!('serviceWorker' in navigator)) return;
 		const register = () => {
@@ -410,11 +416,16 @@
 
 <svelte:head>
 	<!-- Linked from the POS shell ONLY, so no dashboard page advertises the till as
-	     installable. KNOWN GAP, cosmetic and on one platform: Chromium accepts the
-	     SVG manifest icon, iOS Safari does not — it wants an apple-touch-icon PNG,
-	     which is not generated here, so an iPad home-screen install shows a page
-	     thumbnail instead of an icon. -->
+	     installable. The manifest carries the PNG icons Chromium and Android want;
+	     iOS Safari ignores manifest icons and reads the apple-touch-icon link and
+	     the apple-* metas below instead, so an iPad home-screen install gets the
+	     same mark and opens without Safari's chrome. -->
 	<link rel="manifest" href="/pos.webmanifest" />
+	<link rel="apple-touch-icon" href="/pos-icon-apple-180.png" />
+	<meta name="apple-mobile-web-app-capable" content="yes" />
+	<meta name="mobile-web-app-capable" content="yes" />
+	<meta name="apple-mobile-web-app-title" content="matcami POS" />
+	<meta name="apple-mobile-web-app-status-bar-style" content="default" />
 </svelte:head>
 
 <svelte:body use:tillBody />

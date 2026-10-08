@@ -1,8 +1,7 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
-import { and, eq, isNull } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '$lib/server/db/client';
-import { posDevices } from '$lib/server/db/schema/pos-devices';
 import { users } from '$lib/server/db/schema/users';
 import { requestContext, writeAudit } from '$lib/server/audit';
 import { loginWithPassword } from '$lib/server/auth/login';
@@ -30,6 +29,12 @@ import {
 // the existing loginWithPassword — which owns the per-IP throttle, the
 // constant-time dummy verify, the five-attempt lockout and the login.* audit rows.
 // There is no second password check anywhere.
+//
+// A restaurant may register MANY tills (decision of 2026-10-08, departing from
+// spec 31's one-device MVP): the owner repeats this once on every counter device,
+// and each gets the next unused code — POS1, POS2, … — with its own gap-free
+// invoice sequence and its own shift. The one refusal left is the browser that
+// already IS a live till, below.
 //
 // Email AND password, never email alone: an email address is public (printed on
 // receipts), and a registered device is exactly what spec 6 ships cached employee
@@ -64,15 +69,13 @@ export const POST: RequestHandler = async (event) => {
 	const { email, password, label } = parsed.data;
 
 	// A LIVE TILL IS NEVER REGISTERED OVER. If this browser already carries a device
-	// cookie that resolves to a non-revoked device — of ANY restaurant — the request
-	// is refused before a credential is checked. Registering would overwrite that
-	// cookie and leave the other restaurant's row live but orphaned: its /device page
-	// still showing a till it no longer has, its audit log silent, and its owner
-	// answered 409 on re-registering. The one-device check below is scoped to the
-	// CALLER's restaurant and cannot see this. The tablet's owner revokes it from
-	// their dashboard first; a revoked cookie resolves to null and passes.
-	// (Requested by the public-sign-up planning session: once anyone can create an
-	// owner account, this is a cross-company device takeover.)
+	// cookie that resolves to a non-revoked device — of ANY restaurant, this one
+	// included — the request is refused before a credential is checked. Registering
+	// would overwrite that cookie and leave the row it named live but orphaned: the
+	// /device page still showing a till that no longer answers, its audit log silent.
+	// The owner revokes that till from the dashboard first; a revoked cookie resolves
+	// to null and passes. (Requested by the public-sign-up planning session: once
+	// anyone can create an owner account, this is a cross-company device takeover.)
 	const presented = event.cookies.get(DEVICE_COOKIE);
 	if (presented && (await validateDeviceToken(db, presented))) {
 		return json({ error: 'device_already_registered' }, { status: 409 });
@@ -115,27 +118,13 @@ export const POST: RequestHandler = async (event) => {
 		return json({ error: 'invalid_credentials' }, { status: 403 });
 	}
 
-	// ONE transaction: refuse a second device, register, audit, and destroy the
-	// owner's dashboard sessions on this browser — all or nothing, so a registered
-	// device and the owner session that created it can never coexist.
+	// ONE transaction: register, audit, and destroy the owner's dashboard sessions
+	// on this browser — all or nothing, so a registered device and the owner session
+	// that created it can never coexist. No count of live devices is taken: a second
+	// till is an ordinary registration. Two registrations racing to the same code
+	// both allocate it and the second dies on the full (restaurant_id, device_code)
+	// unique index — the loud failure intended; the owner simply tries again.
 	const outcome = await db.transaction(async (tx) => {
-		// Spec 31's MVP is ONE registered POS device, and registerDevice delegates the
-		// refusal to this route by name. FOR UPDATE locks any active row against a
-		// concurrent revoke-and-register; when there is none, two racing registrations
-		// both allocate the same code and the second dies on the full
-		// (restaurant_id, device_code) unique index — the loud failure intended.
-		const active = await tx
-			.select({ id: posDevices.id })
-			.from(posDevices)
-			.where(and(eq(posDevices.restaurantId, result.restaurantId), isNull(posDevices.revokedAt)))
-			.for('update');
-		if (active.length > 0) {
-			// Leave no orphan session behind; the existing device and any session
-			// cookie already in this browser are left exactly as they were.
-			await invalidateSession(tx, sessionIdFromToken(result.token));
-			return { ok: false as const, reason: 'already_registered' as const };
-		}
-
 		// T-13's contract, matched rather than amended: actorUserId, label, and a
 		// deviceCode that comes BACK, never goes in.
 		const { deviceId, deviceCode, token, expiresAt } = await registerDevice(tx, {
@@ -165,16 +154,12 @@ export const POST: RequestHandler = async (event) => {
 		const existing = event.cookies.get(SESSION_COOKIE);
 		if (existing) await invalidateSession(tx, sessionIdFromToken(existing));
 
-		return { ok: true as const, deviceId, deviceCode, token, expiresAt };
+		return { deviceId, deviceCode, token, expiresAt };
 	});
 
-	// Responses are built AFTER the transaction, from what it returned.
-	if (!outcome.ok) {
-		return json({ error: 'device_already_registered' }, { status: 409 });
-	}
-
-	// The token lives ONLY in the HttpOnly device cookie, exactly as a session token
-	// does — never in the response body.
+	// The response is built AFTER the transaction, from what it returned. The token
+	// lives ONLY in the HttpOnly device cookie, exactly as a session token does —
+	// never in the response body.
 	setDeviceCookie(event.cookies, outcome.token, outcome.expiresAt);
 	deleteSessionCookie(event.cookies);
 	// deviceId — the pos_devices uuid — because a code like POS1 repeats in every
