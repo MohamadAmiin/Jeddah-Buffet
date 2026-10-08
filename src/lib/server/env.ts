@@ -138,7 +138,10 @@ if (!building && IS_PRODUCTION) {
 
 	if (parsed.protocol !== 'https:' && !isLoopback) {
 		throw new Error(
-			`ORIGIN must be https: in production (got "${parsed.protocol}://${parsed.hostname}"). The ` +
+			// ORIGIN verbatim, never recomposed from the parsed parts: protocol already
+			// carries its colon, so `${parsed.protocol}://` printed "http:://…" and sent
+			// the reader hunting a typo in a value that was never malformed.
+			`ORIGIN must be https: in production (got "${ORIGIN}"). The ` +
 				'session cookie is Secure for every origin except http://localhost, and a browser ' +
 				'discards a Secure cookie delivered over plain HTTP — which produces a silent endless ' +
 				'login loop. See docs/deployment.md.'
