@@ -35,7 +35,10 @@
 			case 403:
 				return 'That email and password did not sign in as this restaurant’s owner.';
 			case 409:
-				return 'A till is already registered for this restaurant. Revoke it from the POS page of the dashboard first, then register this device.';
+				// The ONE 409 left: this browser already carries a live till's cookie —
+				// its own restaurant's or another's. A second till for the same
+				// restaurant is an ordinary registration and never answers 409.
+				return 'This device is already registered as a till. To register it afresh, revoke it first from the POS page of its restaurant’s dashboard.';
 			case 429:
 				return retryAfterSeconds
 					? `Too many attempts. Wait ${Math.ceil(retryAfterSeconds / 60)} minute(s), then try again.`
@@ -88,11 +91,12 @@
 <main class="relative flex min-h-0 flex-1 overflow-y-auto p-3 md:p-4 lg:p-6">
 	<div class="m-auto grid w-full max-w-5xl items-center gap-6 md:grid-cols-2 lg:gap-12">
 		<div class="flex flex-col gap-4">
-			<p class="text-eyebrow text-ink-3 uppercase">One time, on this tablet</p>
+			<p class="text-eyebrow text-ink-3 uppercase">One time, on each device</p>
 			<h1 class="text-display">Register this device as the till</h1>
 			<p class="text-ink-2">
 				Sign in once with the restaurant owner’s email and password. After that, staff sign in here
-				with their PIN.
+				with their PIN. Every counter device is registered this way; each becomes its own till —
+				POS1, POS2, and so on — with its own invoice numbers and its own shift.
 			</p>
 			<!-- Said BEFORE the owner submits: an owner who discovers it afterwards
 			     assumes the app broke. -->

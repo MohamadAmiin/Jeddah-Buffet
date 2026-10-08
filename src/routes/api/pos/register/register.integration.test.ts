@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import type { RequestEvent } from '@sveltejs/kit';
-import { and, eq, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { testDb, closeTestDb } from '$lib/server/db/test/db';
 import { restaurants } from '$lib/server/db/schema/restaurants';
 import { users } from '$lib/server/db/schema/users';
@@ -193,29 +193,43 @@ describe('POST /api/pos/register', () => {
 		expect(JSON.stringify(ok.body)).not.toContain(cookie.value);
 	});
 
-	it('refuses a second registration with 409, then takes POS2 after the first is revoked', async () => {
-		const { restaurantId, ownerId } = await makeOwner('owner@cafe.com');
+	// MANY TILLS PER RESTAURANT (decision of 2026-10-08, departing from spec 31's
+	// one-device MVP): a second counter device is an ordinary registration, the
+	// first stays live, and each takes the next unused code.
+	it('registers a second till as POS2 while the first stays live, each with its own cookie', async () => {
+		const { restaurantId } = await makeOwner('owner@cafe.com');
 		const first = await register({
 			email: 'owner@cafe.com',
 			password: PASSWORD,
-			label: 'Tablet one'
+			label: 'Counter tablet'
 		});
 		const firstToken = first.set.find((c) => c.name === DEVICE_COOKIE)!.value;
 
+		// A DIFFERENT browser: no device cookie presented.
 		const second = await register({
 			email: 'owner@cafe.com',
 			password: PASSWORD,
-			label: 'Tablet two'
+			label: 'Bar tablet'
 		});
-		expect(second.status).toBe(409);
-		expect(second.body).toEqual({ error: 'device_already_registered' });
-		expect(second.set.find((c) => c.name === DEVICE_COOKIE)).toBeUndefined();
-		expect(await countWhere(posDevices, eq(posDevices.restaurantId, restaurantId))).toBe(1);
+		expect(second.status).toBe(201);
+		expect(second.body.deviceCode).toBe('POS2');
+		const secondToken = second.set.find((c) => c.name === DEVICE_COOKIE)!.value;
+		expect(secondToken).not.toBe(firstToken);
+
+		// Both live, both their own device, both audited.
+		expect(await validateDeviceToken(db, firstToken)).toMatchObject({ deviceCode: 'POS1' });
+		expect(await validateDeviceToken(db, secondToken)).toMatchObject({ deviceCode: 'POS2' });
+		expect(await countWhere(posDevices, eq(posDevices.restaurantId, restaurantId))).toBe(2);
 		expect(
 			await db.select().from(auditLog).where(eq(auditLog.event, 'pos.device.registered'))
-		).toHaveLength(1);
-		expect(await validateDeviceToken(db, firstToken)).toMatchObject({ deviceCode: 'POS1' });
+		).toHaveLength(2);
+	});
 
+	// A code is BURNED once used: POS1-000001 must never name two sales from two
+	// different devices, so a revoked till's successor takes the next number.
+	it('never reuses a revoked code — after POS1 is revoked the next till is POS2', async () => {
+		const { restaurantId, ownerId } = await makeOwner('owner@cafe.com');
+		await register({ email: 'owner@cafe.com', password: PASSWORD, label: 'Tablet one' });
 		const [device] = await db
 			.select({ id: posDevices.id })
 			.from(posDevices)
@@ -224,25 +238,45 @@ describe('POST /api/pos/register', () => {
 			revokeDevice(tx, { deviceId: device.id, restaurantId, actorUserId: ownerId })
 		);
 
-		const third = await register({
+		const next = await register({
 			email: 'owner@cafe.com',
 			password: PASSWORD,
-			label: 'Tablet three'
+			label: 'Tablet two'
 		});
-		expect(third.status).toBe(201);
-		expect(third.body.deviceCode).toBe('POS2');
+		expect(next.status).toBe(201);
+		expect(next.body.deviceCode).toBe('POS2');
 		const rows = await db
 			.select()
 			.from(posDevices)
 			.where(eq(posDevices.restaurantId, restaurantId));
 		expect(rows).toHaveLength(2);
-		expect(rows.filter((r) => r.revokedAt === null)).toHaveLength(1);
+		expect(rows.filter((r) => r.revokedAt === null).map((r) => r.deviceCode)).toEqual(['POS2']);
+	});
+
+	// The ONE 409 left: the browser that already IS a live till — of this very
+	// restaurant. Registering over its cookie would orphan the row it names.
+	it("refuses to register over the restaurant's OWN live till with 409, and touches nothing", async () => {
+		const { restaurantId } = await makeOwner('owner@cafe.com');
+		const first = await register({
+			email: 'owner@cafe.com',
+			password: PASSWORD,
+			label: 'Counter tablet'
+		});
+		const token = first.set.find((c) => c.name === DEVICE_COOKIE)!.value;
+
+		const again = await register(
+			{ email: 'owner@cafe.com', password: PASSWORD, label: 'Counter tablet again' },
+			{ cookies: { [DEVICE_COOKIE]: token } }
+		);
+
+		expect(again.status).toBe(409);
+		expect(again.body).toEqual({ error: 'device_already_registered' });
+		expect(again.set.find((c) => c.name === DEVICE_COOKIE)).toBeUndefined();
+		expect(await validateDeviceToken(db, token)).toMatchObject({ deviceCode: 'POS1' });
+		expect(await countWhere(posDevices, eq(posDevices.restaurantId, restaurantId))).toBe(1);
 		expect(
-			await countWhere(
-				posDevices,
-				and(eq(posDevices.restaurantId, restaurantId), eq(posDevices.deviceCode, 'POS2'))!
-			)
-		).toBe(1);
+			await db.select().from(auditLog).where(eq(auditLog.event, 'pos.device.registered'))
+		).toHaveLength(1);
 	});
 
 	it('refuses a non-JSON body with 415 and a body missing the label with 400', async () => {
