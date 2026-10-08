@@ -1,6 +1,6 @@
 # matcami
 
-Restaurant management and point of sale. One restaurant, one branch, one registered POS device,
+Restaurant management and point of sale. One restaurant, one branch, as many registered POS devices (tills) as it has counters,
 one owner plus one cashier and one waiter. Dine-in (tables) and takeaway.
 
 SvelteKit + TypeScript (UI **and** server) · Node.js · PostgreSQL · Drizzle ORM · IndexedDB and a
