@@ -4,7 +4,7 @@
 // readFileSync-on-source idiom is tokens.test.ts's and components.test.ts's. Each
 // assertion carries its reason, so nobody deletes one as trivia.
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -58,6 +58,34 @@ describe("the till's service worker, as written", () => {
 		expect(ground, 'the POS block declares no --c-bg').toBeDefined();
 		expect(manifest.background_color.toLowerCase()).toBe(ground!.toLowerCase());
 		expect(manifest.theme_color.toLowerCase()).toBe(ground!.toLowerCase());
+	});
+
+	// Installability (Chromium's criteria, and what Android and iOS actually draw):
+	// a 192 and a 512 PNG, one maskable, each a file that ships in static/ — a
+	// manifest naming an icon that is not there installs with a blank tile. The
+	// scope and start_url stay the one literal '/pos' (CLAUDE.md: a trailing slash
+	// here is never a fix).
+	it('names PNG icons at 192 and 512, one maskable, that all exist, and keeps the /pos scope', () => {
+		const manifest = JSON.parse(readFileSync(join(ROOT, 'static/pos.webmanifest'), 'utf8'));
+		expect(manifest.scope).toBe('/pos');
+		expect(manifest.start_url).toBe('/pos');
+		expect(manifest.id).toBe('/pos');
+		const icons: { src: string; sizes: string; type: string; purpose?: string }[] = manifest.icons;
+		expect(icons.some((i) => i.sizes === '192x192' && i.type === 'image/png')).toBe(true);
+		expect(icons.some((i) => i.sizes === '512x512' && i.type === 'image/png')).toBe(true);
+		expect(icons.some((i) => i.purpose === 'maskable')).toBe(true);
+		for (const icon of icons) {
+			expect(icon.src.startsWith('/')).toBe(true);
+			expect(
+				existsSync(join(ROOT, 'static', icon.src)),
+				`${icon.src} is missing from static/`
+			).toBe(true);
+		}
+		// iOS reads none of the above: the shell links an apple-touch-icon instead.
+		const shell = readFileSync(join(SRC, 'routes/(pos)/pos/+layout.svelte'), 'utf8');
+		const apple = /rel="apple-touch-icon"\s+href="([^"]+)"/.exec(shell);
+		expect(apple, 'the POS shell links no apple-touch-icon').not.toBeNull();
+		expect(existsSync(join(ROOT, 'static', apple![1]))).toBe(true);
 	});
 
 	// One registration, from the POS layout, scoped to exactly '/pos': a second call

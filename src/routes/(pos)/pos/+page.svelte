@@ -26,6 +26,7 @@
 	import { adoptServerSession } from '$lib/pos/session';
 	import { signOut } from '$lib/pos/employee.svelte';
 	import { hasPendingPairing } from '$lib/pos/print-client';
+	import { installStateFor, installable, isIos, promptInstall } from '$lib/pos/install.svelte';
 	import { KEY } from '$lib/components/pos/keys';
 
 	type DirectoryEntry = {
@@ -50,6 +51,25 @@
 
 	let status = $state<'loading' | 'ready' | 'cached' | 'not-registered' | 'offline' | 'error'>(
 		'loading'
+	);
+
+	// INSTALL AS AN APP. The shell captured the browser's prompt (install.svelte.ts);
+	// this screen is where it is offered, because it is the one every person on the
+	// till sees. The rule itself is pure and tested; only the inputs are read here,
+	// after mount, so the cached shell renders identically offline.
+	let ios = $state(false);
+	let secure = $state(false);
+	onMount(() => {
+		ios = isIos(navigator.userAgent, navigator.maxTouchPoints ?? 0);
+		secure = window.isSecureContext;
+	});
+	const installState = $derived(
+		installStateFor({
+			standalone: installable.standalone,
+			promptAvailable: installable.prompt !== null,
+			ios,
+			secure
+		})
 	);
 	let employees = $state<Choice[]>([]);
 	let cacheWarning = $state(false);
@@ -300,6 +320,28 @@
 			{#if employees.length === 0}
 				<p class="text-ink-2">
 					No active staff yet. The owner adds staff on the dashboard’s Employees page.
+				</p>
+			{/if}
+
+			{#if installState === 'prompt'}
+				<!-- Chromium handed over its install prompt: one key replays it. Beside the
+				     staff list, not above it — signing in stays the screen's first action. -->
+				<button
+					type="button"
+					onclick={promptInstall}
+					data-testid="install-app"
+					class="min-h-touch-min flex items-center gap-3 px-3 py-2 text-left {KEY}"
+				>
+					<span aria-hidden="true" class="font-mono">⤓</span>
+					<span class="flex flex-col">
+						<span class="text-ink font-semibold">Install app</span>
+						<span class="text-ink-2">Its own window and icon; starts offline.</span>
+					</span>
+				</button>
+			{:else if installState === 'manual-ios'}
+				<p class="bg-raise-2 text-ink-2 rounded-control px-3 py-2" data-testid="install-ios">
+					<span aria-hidden="true" class="font-mono">⤓</span>
+					To use the POS as an app on this iPad or iPhone, tap Share, then Add to Home Screen.
 				</p>
 			{/if}
 
