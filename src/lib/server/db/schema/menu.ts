@@ -16,6 +16,7 @@ import {
 	customType
 } from 'drizzle-orm/pg-core';
 import { restaurants } from './restaurants';
+import { taxRates } from './tax-rates';
 
 // THE MENU (spec 3, 5, 15, 17): categories, items, modifier groups, the item ↔
 // group links, and modifiers. The POS downloads all of it as one snapshot,
@@ -28,9 +29,13 @@ import { restaurants } from './restaurants';
 // mode 'number' would hand money to the one type invariant 1 forbids. A negative
 // price_delta_minor is legitimate ("No cheese −$0.50"); a negative price is not.
 //
-// TAX: menu_items.tax_rate_bp is NULLABLE and null means "inherit the restaurant
-// rate" (CLAUDE.md, "Decisions already made": one rate per restaurant in integer
-// basis points, plus this per-item override). 825 is 8.25%, never a fraction.
+// TAX: menu_items.tax_rate_id → tax_rates through the composite key
+// menu_items_tax_rate_fk. NULL means "the restaurant default"
+// (restaurant_settings.default_tax_rate_id). The integer column tax_rate_bp was
+// RETIRED by migration 0018. An order line still stores the NUMBER it was taxed
+// at (order_lines.tax_rate_bp) beside the rate's id and name (invariant 7).
+// The composite key keeps a non-NULL id inside the same restaurant;
+// PostgreSQL's default MATCH SIMPLE skips the check when the id is NULL.
 //
 // ARCHIVE, NEVER DELETE (invariant 2). archived_at exists so that the sales
 // plan's order lines, which reference menu_items.id and modifiers.id, never
@@ -152,8 +157,8 @@ export const menuItems = pgTable(
 		categoryId: uuid('category_id'),
 		name: text('name').notNull(),
 		priceMinor: bigint('price_minor', { mode: 'bigint' }).notNull(),
-		// NULL = inherit the restaurant's rate.
-		taxRateBp: integer('tax_rate_bp'),
+		// NULL = the restaurant default (restaurant_settings.default_tax_rate_id).
+		taxRateId: uuid('tax_rate_id'),
 		isAvailable: boolean('is_available').notNull().default(true),
 		sortOrder: integer('sort_order').notNull().default(0),
 		// NULL = no photo. A photo row is never edited; a new photo is a new id.
@@ -177,13 +182,15 @@ export const menuItems = pgTable(
 			name: 'menu_items_image_fk'
 		}).onDelete('restrict'),
 		index('menu_items_image_idx').on(table.imageId),
+		foreignKey({
+			columns: [table.restaurantId, table.taxRateId],
+			foreignColumns: [taxRates.restaurantId, taxRates.id],
+			name: 'menu_items_tax_rate_fk'
+		}).onDelete('restrict'),
+		index('menu_items_tax_rate_idx').on(table.taxRateId),
 		// A menu price is never negative; a discount is its own concept with its own
 		// approval rule (spec 14).
-		check('menu_items_price_minor_non_negative', sql`${table.priceMinor} >= 0`),
-		check(
-			'menu_items_tax_rate_bp_range',
-			sql`${table.taxRateBp} is null or (${table.taxRateBp} >= 0 and ${table.taxRateBp} <= 10000)`
-		)
+		check('menu_items_price_minor_non_negative', sql`${table.priceMinor} >= 0`)
 	]
 );
 

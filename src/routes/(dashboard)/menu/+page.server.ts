@@ -12,6 +12,7 @@ import {
 	createModifierGroup,
 	linkModifierGroup,
 	listMenu,
+	listTaxRates,
 	removeItemImage,
 	setItemAvailability,
 	setItemImage,
@@ -25,6 +26,7 @@ import { ROUNDING_RULE, minor, toBigInt } from '$lib/money';
 import { dishMargin } from '$lib/money/costing';
 import { recipeCosts } from '$lib/server/inventory';
 import { formatAmount, moneyFormatFor, type MoneyFormat } from '$lib/money/format';
+import { formatTaxRate } from '$lib/money/tax';
 import {
 	archiveCategorySchema,
 	archiveItemSchema,
@@ -34,11 +36,11 @@ import {
 	createModifierGroupSchema,
 	createModifierSchema,
 	firstMessage,
-	formatTaxRate,
 	itemIdSchema,
+	itemTaxRateLabel,
 	linkSchema,
-	parseOptionalRate,
 	parsePriceInput,
+	parseTaxRateChoice,
 	renameCategorySchema,
 	updateItemSchema
 } from './helpers';
@@ -80,9 +82,12 @@ async function menuScope(locals: App.Locals) {
 		restaurantId,
 		format,
 		taxMode: restaurant.taxMode,
-		taxRateBp: restaurant.taxRateBp
+		// T-13: the named default rate's id, or null while the owner has not chosen.
+		defaultTaxRateId: restaurant.defaultTaxRateId
 	};
 }
+
+const TAX_RATE_GONE_MESSAGE = 'That tax rate is no longer available.';
 
 /** A duplicate live category name reaches us as the partial unique index's 23505. */
 function isUniqueViolation(thrown: unknown): boolean {
@@ -92,9 +97,36 @@ function isUniqueViolation(thrown: unknown): boolean {
 
 export const load: ServerLoad = async (event) => {
 	requirePermission(event, 'admin.menu');
-	const { restaurantId, format, taxMode, taxRateBp } = await menuScope(event.locals);
+	const { restaurantId, format, taxMode, defaultTaxRateId } = await menuScope(event.locals);
 	const menu = await listMenu(db, restaurantId);
 	const amount = (value: bigint) => (format ? formatAmount(minor(value), format) : null);
+
+	// T-13: each item's RESOLVED named rate — its own, else the restaurant default,
+	// else none — by id over every rate, archived ones included (an item may still
+	// point at one). The same rule as readMenuSnapshot; no number is assumed.
+	const rates = await listTaxRates(db, restaurantId);
+	const byId = new Map(rates.map((rate) => [rate.id, rate]));
+	const rateOf = (item: { taxRateId: string | null }) => {
+		const id = item.taxRateId ?? defaultTaxRateId;
+		return id === null ? null : (byId.get(id) ?? null);
+	};
+
+	// T-32: the panel's choice, from the SAME list. '' is Default — stored NULL,
+	// so the item FOLLOWS the restaurant's default rate even after the owner
+	// switches it; a rate's id PINS the item to that rate (migration 0017 pins an
+	// override explicitly, by id). Two different choices, never collapsed. Only
+	// LIVE rates are offered; the default row's name is read, never a number.
+	const defaultRate = rates.find((rate) => rate.isDefault) ?? null;
+	const live = rates.filter((rate) => rate.archivedAt === null);
+	const rateOptions = [
+		{
+			value: '',
+			label: defaultRate
+				? `Default — ${defaultRate.name} ${formatTaxRate(defaultRate.rateBp)}`
+				: 'Default — not chosen yet'
+		},
+		...live.map((rate) => ({ value: rate.id, label: `${rate.name} ${formatTaxRate(rate.rateBp)}` }))
+	];
 
 	// COST AND MARGIN (tasks/inventory-cogs T-34), read-only: the recipe's cost at
 	// the ledger's current averages, from a SEPARATE reader — listMenu and the POS
@@ -106,9 +138,9 @@ export const load: ServerLoad = async (event) => {
 		const cost = costs.get(id);
 		return cost ? { text: amount(cost.costMinor), negative: cost.costMinor < 0n } : null;
 	};
-	const marginOf = (item: { id: string; priceMinor: bigint; taxRateBp: number | null }) => {
+	const marginOf = (item: { id: string; priceMinor: bigint; taxRateId: string | null }) => {
 		const cost = costs.get(item.id);
-		const rate = item.taxRateBp ?? taxRateBp;
+		const rate = rateOf(item)?.rateBp ?? null;
 		if (!cost) return null;
 		if (taxMode === null || rate === null) return { text: null, negative: false, unset: true };
 		const m = dishMargin(
@@ -122,6 +154,7 @@ export const load: ServerLoad = async (event) => {
 	// every photo a URL (the bytes are served by /menu/images/[id]).
 	return {
 		currency: format ? { code: format.code, exponent: format.exponent } : null,
+		rateOptions,
 		categories: menu.categories.map((category) => ({
 			id: category.id,
 			name: category.name,
@@ -133,8 +166,10 @@ export const load: ServerLoad = async (event) => {
 			categoryId: item.categoryId,
 			name: item.name,
 			price: amount(item.priceMinor),
-			taxRate: formatTaxRate(item.taxRateBp),
-			taxRateBp: item.taxRateBp,
+			// 'Default (Tax 10.00%)' while the item follows the default, else the named
+			// rate it is pinned to, 'Exempt 0.00%' (T-32).
+			taxRate: itemTaxRateLabel(item.taxRateId, rates, defaultRate),
+			taxRateId: item.taxRateId,
 			isAvailable: item.isAvailable,
 			imageUrl: item.imageId ? dashboardImageUrl(item.imageId) : null,
 			cost: costOf(item.id),
@@ -196,7 +231,10 @@ export const actions: Actions = {
 		if (!parsed.success) return fail(400, { message: firstMessage(parsed.error) });
 		const price = parsePriceInput(parsed.data.price, format.exponent);
 		if (!price.ok) return fail(400, { message: price.message });
-		const rate = parseOptionalRate(form.get('taxRateBp'));
+		// T-32: '' or no field = Default (null — the item follows the restaurant's
+		// default rate); an id must be a live rate of this restaurant, which
+		// createItem checks (invalid_tax_rate otherwise).
+		const rate = parseTaxRateChoice(form.get('taxRateId'));
 		if (!rate.ok) return fail(400, { message: rate.message });
 
 		const result = await db.transaction((tx) =>
@@ -205,10 +243,17 @@ export const actions: Actions = {
 				categoryId: parsed.data.categoryId,
 				name: parsed.data.name,
 				priceMinor: toBigInt(price.minor),
-				taxRateBp: rate.value
+				taxRateId: rate.value
 			})
 		);
-		if (!result.ok) return fail(400, { message: 'That category no longer exists.' });
+		if (!result.ok) {
+			return fail(400, {
+				message:
+					result.reason === 'invalid_tax_rate'
+						? TAX_RATE_GONE_MESSAGE
+						: 'That category no longer exists.'
+			});
+		}
 		// The id lets the panel upload the photo in its own request, after the item exists.
 		return { message: `${parsed.data.name} added.`, itemId: result.id };
 	},
@@ -233,27 +278,38 @@ export const actions: Actions = {
 			if (!price.ok) return fail(400, { message: price.message });
 			priceMinor = toBigInt(price.minor);
 		}
-		const rate = parseOptionalRate(form.get('taxRateBp'));
+		// T-32: the panel always carries the select; '' puts the item back on the
+		// restaurant's default rate (null), an id pins it to that rate.
+		const rate = parseTaxRateChoice(form.get('taxRateId'));
 		if (!rate.ok) return fail(400, { message: rate.message });
 
 		const { ip, userAgent } = requestContext(event);
-		// The price change and its menu.price_changed audit row commit together.
+		// The price change and its menu.price_changed audit row — and the rate change
+		// and its menu.item_tax_rate_changed row (T-13) — commit together.
 		const result = await db.transaction((tx) =>
 			updateItem(
 				tx,
 				restaurantId,
 				parsed.data.itemId,
-				// categoryId null moves the item to "No category".
+				// categoryId null moves the item to "No category"; taxRateId null is
+				// Default. An unchanged form writes nothing and audits nothing.
 				{
 					name: parsed.data.name,
 					priceMinor,
-					taxRateBp: rate.value,
+					taxRateId: rate.value,
 					categoryId: parsed.data.categoryId
 				},
 				{ actorUserId: user.userId, ip, userAgent }
 			)
 		);
-		if (!result.ok) return fail(400, { message: 'That item no longer exists.' });
+		if (!result.ok) {
+			return fail(400, {
+				message:
+					result.reason === 'invalid_tax_rate'
+						? TAX_RATE_GONE_MESSAGE
+						: 'That item no longer exists.'
+			});
+		}
 		return { message: result.changed ? `${parsed.data.name} saved.` : 'No change to save.' };
 	},
 

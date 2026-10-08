@@ -47,5 +47,15 @@ export const EVENT_TEXT: Record<AuditEventName, string> = {
 	'supplier.payment_reversed': 'Reversed a supplier payment',
 	'waste.recorded': 'Recorded waste',
 	'stock.counted': 'Posted a stock count',
-	'opening_stock.recorded': 'Recorded opening stock'
+	'opening_stock.recorded': 'Recorded opening stock',
+	'tax_rate.created': 'Tax rate added',
+	'tax_rate.updated': 'Tax rate changed',
+	'tax_rate.archived': 'Tax rate archived',
+	'menu.item_tax_rate_changed': 'Menu item tax rate changed',
+	'payment_method.created': 'Payment method added',
+	'payment_method.updated': 'Payment method changed',
+	'payment_method.archived': 'Payment method archived',
+	'receipt.lines_updated': 'Receipt header or footer lines changed',
+	'receipt.logo_updated': 'Receipt logo uploaded',
+	'receipt.logo_removed': 'Receipt logo removed'
 };

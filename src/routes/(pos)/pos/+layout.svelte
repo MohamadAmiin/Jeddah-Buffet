@@ -53,6 +53,7 @@
 	import { agentStatus, printerChip, type AgentState } from '$lib/pos/print-client';
 	import { startAutoPrint } from '$lib/pos/printing';
 	import { readLocalSession } from '$lib/pos/session';
+	import { readConfirmedLogoSha, readReceiptLogo } from '$lib/pos/settings';
 	import { captureInstallPrompt } from '$lib/pos/install.svelte';
 
 	let { children } = $props();
@@ -245,17 +246,32 @@
 	// pairs on /pos/printer and leaves); only the newest read may land. Nothing
 	// is shown before the first read completes.
 	let printer = $state<AgentState | null>(null);
+	// The logo gate's two facts, read with the status (settings-tax-payments-receipt
+	// T-24): a logo cached on this till, and whether the owner confirmed its test
+	// print — so the chip can say the agent is too old to print it, or that it
+	// still needs the test print. Only the newest read may land, as for the status.
+	let logoCached = $state(false);
+	let logoConfirmed = $state(false);
 	let latestPrinterRead = 0;
 	async function refreshPrinter() {
 		const mine = ++latestPrinterRead;
 		try {
-			const state = await agentStatus();
-			if (mine === latestPrinterRead) printer = state;
+			const [state, logo, confirmedSha] = await Promise.all([
+				agentStatus(),
+				readReceiptLogo().catch(() => null),
+				readConfirmedLogoSha().catch(() => null)
+			]);
+			if (mine !== latestPrinterRead) return;
+			printer = state;
+			logoCached = logo !== null;
+			logoConfirmed = logo !== null && confirmedSha === logo.sha256;
 		} catch {
 			if (mine === latestPrinterRead) printer = { state: 'unreachable' };
 		}
 	}
-	const printerPill = $derived(printer === null ? null : printerChip(printer));
+	const printerPill = $derived(
+		printer === null ? null : printerChip(printer, { logoCached, logoConfirmed })
+	);
 	onMount(() => {
 		void refreshPrinter();
 		const every = setInterval(() => void refreshPrinter(), 30_000);

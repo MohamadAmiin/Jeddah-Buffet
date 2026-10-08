@@ -21,6 +21,8 @@
 //
 // Never catches, never opens a transaction of its own, never reads
 // menu_items or restaurant_settings (spec 6: price at time of sale wins).
+// validateSale resolved the payment's method (id + name) and each line's rate
+// (id + name); recordSale still reads no settings or catalogue table.
 
 import { and, eq } from 'drizzle-orm';
 import type { DbTx } from '../db/client';
@@ -79,6 +81,8 @@ export async function recordSale(
 				quantity: line.quantity,
 				unitPriceMinor: line.unitPriceMinor,
 				taxRateBp: line.taxRateBp,
+				taxRateId: line.taxRateId,
+				taxRateName: line.taxRateName,
 				discountMinor: line.discountMinor,
 				status: 'new' as const
 			}))
@@ -102,7 +106,10 @@ export async function recordSale(
 		id: sale.payment.paymentId,
 		restaurantId: ctx.restaurantId,
 		orderId: sale.orderId,
+		// The KIND: payments_payment_method_fk checks it against the method row's kind.
 		method: sale.payment.method,
+		paymentMethodId: sale.payment.paymentMethodId,
+		paymentMethodName: sale.payment.paymentMethodName,
 		amountMinor: sale.payment.amountMinor,
 		tenderedMinor: sale.payment.tenderedMinor,
 		changeMinor: sale.payment.changeMinor,
@@ -138,6 +145,10 @@ export async function recordSale(
 
 	// Step 7 — journal entries (spec 24 rules).
 	const entryIds: string[] = [];
+	// By KIND, never by method id (decision 3): every mobile method posts Dr 1030
+	// Payment Clearing – Mobile Money, every card method Dr 1020 Payment Clearing –
+	// Card, cash Dr 1000 Cash on Hand; per-provider totals come from
+	// payments.payment_method_id (reports/sales.ts byPaymentMethod).
 	const event = eventForMethod(sale.payment.method);
 	const saleEntry = await postEntry(tx, {
 		restaurantId: ctx.restaurantId,
@@ -185,6 +196,8 @@ export async function recordSale(
 			invoiceNumber: sale.invoiceNumber,
 			orderType: sale.orderType,
 			method: sale.payment.method,
+			paymentMethodId: sale.payment.paymentMethodId,
+			paymentMethodName: sale.payment.paymentMethodName,
 			totalMinor: sale.totals.totalMinor.toString()
 		},
 		restaurantId: ctx.restaurantId,

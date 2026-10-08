@@ -2,16 +2,8 @@
 	import { enhance } from '$app/forms';
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
-	import {
-		ActionBar,
-		Alert,
-		Button,
-		Field,
-		Icon,
-		PageBody,
-		PageHeader,
-		SelectField
-	} from '$lib/components/ui';
+	import { ActionBar, Alert, Button, Field, Icon, PageBody, PageHeader } from '$lib/components/ui';
+	import { settingsSections, SETTINGS_SECTION_LINK } from './sections';
 
 	let { data, form } = $props();
 	let submitting = $state(false);
@@ -23,17 +15,6 @@
 	// carrying the WRONG meaning. page.status is 400 after a fail() and 200
 	// otherwise, so the outcome is read here without touching +page.server.ts.
 	const tone = $derived(page.status === 200 ? 'success' : 'danger');
-
-	// T-29: accepted tenders. Cash is always on. Each of card and mobile money is a
-	// tri-state: Not chosen (null on the wire — the till disables the key with the
-	// reason), Accepted, or Not accepted. No default anywhere.
-	const tenderOptions = [
-		{ value: 'unset', label: 'Not chosen' },
-		{ value: 'yes', label: 'Accepted' },
-		{ value: 'no', label: 'Not accepted' }
-	];
-	const tenderValue = (accepts: boolean | null) =>
-		accepts === null ? 'unset' : accepts ? 'yes' : 'no';
 
 	const SECTION = 'border-line grid gap-4 border-b pb-8 lg:grid-cols-3 lg:gap-8';
 	const FIELDS =
@@ -56,8 +37,27 @@
 <PageHeader
 	eyebrow="Setup"
 	title="Restaurant settings"
-	description="The facts every other screen depends on. Changing one is allowed and is recorded with its old and new values; none rewrites anything already posted."
-/>
+	description="The restaurant's name, the clock that decides its business day, and its one currency. Tax, payment methods and the receipt each have their own page."
+>
+	{#snippet below()}
+		<!-- The settings sub-navigation (gate decision 8). EXACT match only: every
+		     /settings/<page> starts with /settings/, so the inventory nav's prefix rule
+		     would light General on all four pages. -->
+		<nav aria-label="Settings sections" class="-mb-4 flex flex-wrap gap-x-6 gap-y-1 lg:-mb-5">
+			{#each settingsSections() as link (link.href)}
+				{@const here = page.url.pathname === link.href}
+				<!-- eslint-disable svelte/no-navigation-without-resolve -- every href above is a resolve() result -->
+				<a
+					href={link.href}
+					class={SETTINGS_SECTION_LINK}
+					aria-current={here ? 'page' : undefined}
+					data-current={here ? '' : undefined}>{link.label}</a
+				>
+				<!-- eslint-enable svelte/no-navigation-without-resolve -->
+			{/each}
+		</nav>
+	{/snippet}
+</PageHeader>
 
 <PageBody>
 	<form
@@ -101,53 +101,19 @@
 		</section>
 
 		<!--
-			Tax mode, tax rate and currency (spec 33 open decisions 3 and 4, answered
-			2026-09-15). NOT required: the columns are nullable and the owner may save
-			a rename without answering them. An empty field is "unset", never a default.
-			Tax mode is free text with a datalist, mirroring the time zone, because
-			Field renders an <input> only. There is NO idle-lock control here: it lives
-			on /device, beside the till it protects. Approval limits are still open
-			decision 6 and have no field at all.
+			The currency (spec 33 open decision 4, answered 2026-09-15). NOT required:
+			the column is nullable and the owner may save a rename without answering
+			it. An empty field is "unset", never a default. The tax mode and the default
+			tax rate are chosen on /settings/tax (tasks/settings-tax-payments-receipt
+			T-28), the payment methods on /settings/payments (T-29) and the receipt
+			text on /settings/receipt (T-31) — not here. There is NO idle-lock control
+			here: it lives on /device, beside the till it protects. Approval limits
+			are still open decision 6 and have no field at all.
 		-->
-		<section aria-labelledby="s-tax" class={SECTION}>
-			<div class="flex flex-col gap-1">
-				<h3 id="s-tax" class="text-section">Tax</h3>
-				<p class="text-body text-ink-2">
-					How the till adds tax to a price. Each sale keeps the rate it was sold at.
-				</p>
-			</div>
-			<div class={FIELDS}>
-				<Field
-					id="taxMode"
-					name="taxMode"
-					label="Tax mode"
-					list="tax-modes"
-					value={data.taxMode ?? ''}
-					hint="exclusive adds the tax on top of the price; inclusive means the price already contains it."
-				/>
-				<datalist id="tax-modes">
-					{#each data.taxModes as mode (mode)}
-						<option value={mode}></option>
-					{/each}
-				</datalist>
-				<Field
-					id="taxRateBp"
-					name="taxRateBp"
-					label="Tax rate (basis points)"
-					inputmode="numeric"
-					numeric
-					value={data.taxRateBp === null ? '' : String(data.taxRateBp)}
-					hint="825 means 8.25%. Whole basis points only."
-				/>
-			</div>
-		</section>
-
 		<section aria-labelledby="s-money" class={SECTION}>
 			<div class="flex flex-col gap-1">
-				<h3 id="s-money" class="text-section">Money and tenders</h3>
-				<p class="text-body text-ink-2">
-					The one currency, and which keys the till offers besides cash.
-				</p>
+				<h3 id="s-money" class="text-section">Money</h3>
+				<p class="text-body text-ink-2">The one currency every price, receipt and report uses.</p>
 			</div>
 			<div class={FIELDS}>
 				<Field
@@ -156,72 +122,6 @@
 					label="Currency code"
 					value={data.currencyCode ?? ''}
 					hint={`The one currency this restaurant uses. Supported: ${data.supportedCurrencies.join(', ')}.`}
-				/>
-				<div class="hidden md:block"></div>
-				<SelectField
-					id="acceptsCard"
-					name="acceptsCard"
-					label="Card terminal"
-					value={tenderValue(data.acceptsCard)}
-					options={tenderOptions}
-					hint="Accepted: the till offers a Card key and the cashier records what the terminal approved."
-				/>
-				<SelectField
-					id="acceptsMobile"
-					name="acceptsMobile"
-					label="Mobile money"
-					value={tenderValue(data.acceptsMobile)}
-					options={tenderOptions}
-					hint="Accepted: the till offers a Mobile key and the cashier records the confirmed transfer."
-				/>
-			</div>
-		</section>
-
-		<!--
-			T-21 (menu-and-printing): what the receipt prints under the restaurant's
-			name. All optional; a blank field clears the line. Spec 33 decision 3 —
-			what a receipt must legally show — is still open, so this is the default
-			layout's text, not a legal form.
-		-->
-		<section aria-labelledby="s-receipt" class={SECTION}>
-			<div class="flex flex-col gap-1">
-				<h3 id="s-receipt" class="text-section">Receipt</h3>
-				<p class="text-body text-ink-2">
-					What every receipt prints under the restaurant's name. A blank field prints nothing.
-				</p>
-			</div>
-			<div class={FIELDS}>
-				<Field
-					id="receiptAddress"
-					name="receiptAddress"
-					label="Address"
-					value={data.receiptAddress}
-					maxlength="120"
-					hint="Printed under the restaurant's name. Leave blank to print none."
-				/>
-				<Field
-					id="receiptPhone"
-					name="receiptPhone"
-					label="Phone"
-					value={data.receiptPhone}
-					maxlength="40"
-					inputmode="tel"
-				/>
-				<Field
-					id="taxRegistrationNumber"
-					name="taxRegistrationNumber"
-					label="Tax registration number"
-					value={data.taxRegistrationNumber}
-					maxlength="40"
-					hint="Printed on every receipt when set. What a receipt must legally show is still being confirmed with an accountant."
-				/>
-				<Field
-					id="receiptFooter"
-					name="receiptFooter"
-					label="Footer line"
-					value={data.receiptFooter}
-					maxlength="120"
-					hint="For example: Mahadsanid! Thank you!"
 				/>
 			</div>
 		</section>

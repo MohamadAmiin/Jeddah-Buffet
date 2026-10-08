@@ -3,6 +3,7 @@
 // the snapshot (spec 5), so a hand-placed key cannot become a second source of
 // truth.
 
+import { formatTaxRate } from '../money/tax';
 import type { LocalMenu } from './store';
 
 export type MenuItem = LocalMenu['items'][number];
@@ -29,15 +30,43 @@ export function itemsByCategory(menu: LocalMenu): CategoryTab[] {
 	return tabs;
 }
 
-/** The rate a line snapshots: the item's own when it is a number (0 is a rate,
- *  not "unset"), else the snapshot's; throws naming the item when both are null. */
+/** What a cart line snapshots. `id` and `name` are null only when the rate came
+ *  from a format-1 copy. */
+export type ResolvedTaxRate = { id: string | null; name: string | null; rateBp: number };
+
+/** The rate a line snapshots (invariant 7), always as a NEW object, resolved in
+ *  this order: (1) the item's named `taxRate` — on a format-2 copy it is already
+ *  the EFFECTIVE rate, the restaurant default included; (2) the item's own legacy
+ *  number (a format-1 copy); (3) the menu's named `defaultTaxRate`; (4) the menu's
+ *  legacy number (a format-1 copy). Steps 2 and 4 keep an offline till selling
+ *  from an older copy (invariant 5); their id and name are null and the server
+ *  infers the rate. 0 is a rate, not "unset", at every step. Throws naming the
+ *  item when nothing is set — no rate is ever assumed. */
 export function resolveTaxRate(
-	item: Pick<MenuItem, 'name' | 'taxRateBp'>,
-	snapshot: Pick<LocalMenu, 'taxRateBp'>
-): number {
-	if (typeof item.taxRateBp === 'number') return item.taxRateBp;
-	if (typeof snapshot.taxRateBp === 'number') return snapshot.taxRateBp;
+	item: Pick<MenuItem, 'name' | 'taxRate' | 'taxRateBp'>,
+	menu: Pick<LocalMenu, 'defaultTaxRate' | 'taxRateBp'>
+): ResolvedTaxRate {
+	if (item.taxRate !== null) {
+		return { id: item.taxRate.id, name: item.taxRate.name, rateBp: item.taxRate.rateBp };
+	}
+	if (typeof item.taxRateBp === 'number') return { id: null, name: null, rateBp: item.taxRateBp };
+	if (menu.defaultTaxRate !== null) {
+		const rate = menu.defaultTaxRate;
+		return { id: rate.id, name: rate.name, rateBp: rate.rateBp };
+	}
+	if (typeof menu.taxRateBp === 'number') return { id: null, name: null, rateBp: menu.taxRateBp };
 	throw new TypeError(`No tax rate for "${item.name}" and none set for the restaurant`);
+}
+
+/** The tax text of one check line: the rate STORED on the line, then the
+ *  rate's name when the line has one — `10.00%` or `10.00% (VAT)`. The number
+ *  comes first on purpose: the check reads `@ 8.00 · tax 10.00%`, and
+ *  e2e/pos-sale.spec.ts asserts that text. A line saved by the previous build
+ *  has no name key at all, and prints the number alone. */
+export function lineTaxRateText(line: { taxRateBp: number; taxRateName?: string | null }): string {
+	const text = formatTaxRate(line.taxRateBp);
+	const name = line.taxRateName ?? null;
+	return name === null ? text : `${text} (${name})`;
 }
 
 /** The item's modifier groups in the order of item.modifierGroupIds. */
@@ -53,12 +82,6 @@ export function modifierGroupsFor(item: MenuItem, menu: LocalMenu): MenuGroup[] 
 	});
 }
 
-/** Basis points to "x.xx%": 825 → "8.25%". A rate is not money. */
-export function formatTaxRate(rateBp: number): string {
-	if (!Number.isInteger(rateBp) || rateBp < 0 || rateBp > 10_000) {
-		throw new TypeError('tax rate must be an integer number of basis points from 0 to 10000');
-	}
-	const whole = Math.trunc(rateBp / 100);
-	const fraction = String(rateBp % 100).padStart(2, '0');
-	return `${whole}.${fraction}%`;
-}
+// formatTaxRate lives in src/lib/money/tax.ts (settings-tax-payments-receipt T-08);
+// re-exported so the till's existing imports keep working. Not a copy.
+export { formatTaxRate } from '../money/tax';

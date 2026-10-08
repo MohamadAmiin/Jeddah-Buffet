@@ -108,6 +108,8 @@ export type AuditEvent =
 				invoiceNumber: string;
 				orderType: OrderType;
 				method: 'cash' | 'card' | 'mobile';
+				paymentMethodId: string;
+				paymentMethodName: string;
 				totalMinor: string;
 			};
 	  }
@@ -206,7 +208,45 @@ export type AuditEvent =
 	| {
 			event: 'opening_stock.recorded';
 			details: { entryId: string; ingredientId: string; qty: string; valueMinor: string };
-	  };
+	  }
+	// tasks/settings-tax-payments-receipt (T-10)
+	| { event: 'tax_rate.created'; details: { name: string; rateBp: number } }
+	| {
+			event: 'tax_rate.updated';
+			details: { changes: Record<string, { old: unknown; new: unknown }> };
+	  }
+	| { event: 'tax_rate.archived'; details: { name: string; rateBp: number } }
+	// tasks/settings-tax-payments-receipt (T-13): an item's named rate changed. A
+	// null id means "the restaurant's default rate".
+	| {
+			event: 'menu.item_tax_rate_changed';
+			details: {
+				itemId: string;
+				name: string;
+				oldTaxRateId: string | null;
+				newTaxRateId: string | null;
+			};
+	  }
+	// tasks/settings-tax-payments-receipt (T-11)
+	| {
+			event: 'payment_method.created';
+			details: { name: string; kind: 'card' | 'mobile'; merchantNumber: string | null };
+	  }
+	| {
+			event: 'payment_method.updated';
+			details: { changes: Record<string, { old: unknown; new: unknown }> };
+	  }
+	| { event: 'payment_method.archived'; details: { name: string; kind: 'card' | 'mobile' } }
+	// tasks/settings-tax-payments-receipt (T-12)
+	| {
+			event: 'receipt.lines_updated';
+			details: { section: 'header' | 'footer'; old: string[]; new: string[] };
+	  }
+	| {
+			event: 'receipt.logo_updated';
+			details: { sha256: string; widthDots: number; heightDots: number };
+	  }
+	| { event: 'receipt.logo_removed'; details: { sha256: string } };
 
 export type AuditEventName = AuditEvent['event'];
 
@@ -257,7 +297,17 @@ export const AUDIT_EVENT_NAMES = [
 	'supplier.payment_reversed',
 	'waste.recorded',
 	'stock.counted',
-	'opening_stock.recorded'
+	'opening_stock.recorded',
+	'tax_rate.created',
+	'tax_rate.updated',
+	'tax_rate.archived',
+	'menu.item_tax_rate_changed',
+	'payment_method.created',
+	'payment_method.updated',
+	'payment_method.archived',
+	'receipt.lines_updated',
+	'receipt.logo_updated',
+	'receipt.logo_removed'
 ] as const satisfies readonly AuditEventName[];
 
 type AssertTrue<T extends true> = T;

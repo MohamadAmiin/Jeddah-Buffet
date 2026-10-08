@@ -37,7 +37,14 @@
 		type PairingRefusal,
 		type SubmitResult
 	} from '$lib/pos/print-client';
+	import { logoForAgent } from '$lib/pos/printing';
 	import { renderTestPage } from '$lib/pos/receipt';
+	import {
+		confirmReceiptLogo,
+		readConfirmedLogoSha,
+		readReceiptLogo,
+		withdrawReceiptLogoConfirmation
+	} from '$lib/pos/settings';
 	import { readCachedSetting } from '$lib/pos/store';
 	import { KEY } from '$lib/components/pos/keys';
 
@@ -54,8 +61,25 @@
 	let restaurantName = $state('Restaurant');
 	let deviceCode = $state('');
 	let timeZone = $state('UTC');
+	// THE LOGO CONFIRMATION GATE (settings-tax-payments-receipt T-24; RESEARCH.md):
+	// a receipt carries the cached logo only after the owner has watched a test
+	// page print it correctly and said so HERE — on a printer that does not
+	// implement `GS v 0` the raster bytes are read as ordinary data, so the one
+	// unconfirmed print happens on this page, in front of the owner. `logoSha` is
+	// the fingerprint of the logo the last test page carried (what "The logo
+	// printed correctly" records); `logoSent` is true after a test page that
+	// carried the logo, which is the only time the two answer keys are offered.
+	// A confirmation vouches for ONE printer, so it is withdrawn again by "It did
+	// not print correctly" (for the logo that page carried) and by every pairing
+	// saved or forgotten (print-client.ts) — the gate cannot tell printers apart.
+	let logoCached = $state(false);
+	let logoConfirmed = $state(false);
+	let logoSha = $state<string | null>(null);
+	let logoSent = $state(false);
 
-	const chip = $derived(status === null ? null : printerChip(status));
+	const chip = $derived(
+		status === null ? null : printerChip(status, { logoCached, logoConfirmed })
+	);
 
 	onMount(() => {
 		// Read the link BEFORE anything can navigate away from it.
@@ -71,11 +95,13 @@
 			if (fromLink) dropFragment();
 			isOwner = signedIn.current.isOwner;
 			if (isOwner) {
-				const [saved, name, code, zone] = await Promise.all([
+				const [saved, name, code, zone, logo, confirmedSha] = await Promise.all([
 					readAgentSettings().catch(() => null),
 					readCachedSetting('restaurantName').catch(() => null),
 					readCachedSetting('deviceCode').catch(() => null),
-					readCachedSetting('timeZone').catch(() => null)
+					readCachedSetting('timeZone').catch(() => null),
+					readReceiptLogo().catch(() => null),
+					readConfirmedLogoSha().catch(() => null)
 				]);
 				if (saved) {
 					url = saved.url;
@@ -84,6 +110,8 @@
 				if (typeof name === 'string') restaurantName = name;
 				if (typeof code === 'string') deviceCode = code;
 				if (typeof zone === 'string') timeZone = zone;
+				logoCached = logo !== null;
+				logoConfirmed = logo !== null && confirmedSha === logo.sha256;
 				// A cashier's screen leaves the link waiting; only the owner's takes it.
 				const pending = takePairing();
 				if (pending) await pair(pending);
@@ -164,6 +192,11 @@
 	async function pair(settings: AgentSettings) {
 		try {
 			await saveAgentSettings(settings);
+			// Saving withdrew the logo confirmation, and an answer to a test page
+			// printed before this pairing is no longer offered: it may have been
+			// another printer.
+			logoConfirmed = false;
+			logoSent = false;
 			url = settings.url;
 			paired = true;
 			announceChange();
@@ -212,6 +245,7 @@
 		busy = true;
 		failure = '';
 		results = [];
+		logoSent = false;
 		try {
 			status = await agentStatus();
 			if (status.state !== 'ready') {
@@ -219,15 +253,50 @@
 				return;
 			}
 			const printers = status.status.printers;
+			// The cached logo, whenever the agent can print it — confirmed or not:
+			// this is the one page that may carry an unconfirmed logo, and only the
+			// RECEIPT printer's page gets it. The fingerprint is read beside it and
+			// counts only when that record's three fields ARE the image this page
+			// carries (the server's sha256 covers exactly the shape and the bitmap):
+			// a logo refreshed between the two reads is offered no confirmation,
+			// so "The logo printed correctly" never records a logo nobody watched.
+			const [{ cached, confirmed, logo }, cachedLogo] = await Promise.all([
+				logoForAgent(status.status, 'test'),
+				readReceiptLogo().catch(() => null)
+			]);
+			logoCached = cached;
+			logoConfirmed = confirmed;
+			logoSha =
+				logo !== null &&
+				cachedLogo !== null &&
+				cachedLogo.widthDots === logo.widthDots &&
+				cachedLogo.heightDots === logo.heightDots &&
+				cachedLogo.bitmap === logo.bitmap
+					? cachedLogo.sha256
+					: null;
 			const now = new Date().toISOString();
 			const base = { restaurantName, deviceCode, now, timeZone };
 			const receipt = await submitJob({
 				id: `test:${crypto.randomUUID()}`,
 				printer: 'receipt',
-				lines: renderTestPage({ ...base, width: printers.receipt.width, printer: 'receipt' }),
+				lines: renderTestPage({ ...base, width: printers.receipt.width, printer: 'receipt', logo }),
 				cut: true
 			});
 			results = [describe('receipt', receipt)];
+			if (receipt === 'queued' || receipt === 'duplicate') {
+				if (logo !== null) {
+					results = [
+						...results,
+						'● The logo was sent — it should print at the top of the receipt test page.'
+					];
+					logoSent = logoSha !== null;
+				} else if (cached) {
+					results = [
+						...results,
+						'◆ The logo was left off — update the print agent on this PC to version 2'
+					];
+				}
+			}
 			if (printers.kitchen) {
 				const kitchen = await submitJob({
 					id: `test:${crypto.randomUUID()}`,
@@ -244,13 +313,69 @@
 		}
 	}
 
+	/** "The logo printed correctly": record the sent logo's fingerprint; receipts carry it from now on. */
+	async function logoPrinted() {
+		if (busy || logoSha === null) return;
+		busy = true;
+		failure = '';
+		try {
+			await confirmReceiptLogo(logoSha);
+			logoConfirmed = true;
+			logoSent = false;
+			results = [...results, '● Receipts will print the logo'];
+			// The layout's chip re-polls on this: its "Test-print the logo" warning clears.
+			announceChange();
+		} catch (err) {
+			failure = `✕ ${err instanceof Error ? err.message : 'The confirmation could not be saved'}`;
+		} finally {
+			busy = false;
+		}
+	}
+
+	/**
+	 * "It did not print correctly": withdraw ANY confirmation, not only the one of
+	 * the logo this test page carried. A failed raster print means this printer
+	 * cannot print a logo at all, so no logo confirmed on another printer — this
+	 * one, or one restored later with the same fingerprint — may keep reaching its
+	 * receipts. Receipts print without the logo until a test print is confirmed again.
+	 */
+	async function logoNotPrinted() {
+		if (busy || logoSha === null) return;
+		busy = true;
+		failure = '';
+		try {
+			await withdrawReceiptLogoConfirmation();
+			// Read back exactly as onMount and the layout derive it, so this chip is right at once.
+			const [logo, confirmedSha] = await Promise.all([
+				readReceiptLogo().catch(() => null),
+				readConfirmedLogoSha().catch(() => null)
+			]);
+			logoCached = logo !== null;
+			logoConfirmed = logo !== null && confirmedSha === logo.sha256;
+			logoSent = false;
+			results = [
+				...results,
+				'✕ Receipts will print without the logo. Remove it on the dashboard (Settings → Receipt).'
+			];
+			// The layout's chip re-polls on this: its "Test-print the logo" warning returns.
+			announceChange();
+		} catch {
+			failure = '✕ The answer could not be saved — try again';
+		} finally {
+			busy = false;
+		}
+	}
+
 	async function forget() {
 		if (busy) return;
 		busy = true;
 		failure = '';
 		results = [];
+		logoSent = false;
 		try {
 			await clearAgentSettings();
+			// Forgetting withdrew the logo confirmation too (print-client.ts).
+			logoConfirmed = false;
 			paired = false;
 			// `url` stays: "Pair this till" asks the agent this till just left, which
 			// matters when the agent is not on the default port.
@@ -357,6 +482,35 @@
 						</li>
 					{/each}
 				</ul>
+			{/if}
+			{#if logoSent}
+				<!-- Offered only after a test page that carried the logo: the owner's answer
+				     is what lets a receipt print it (the logo confirmation gate). -->
+				<div
+					class="flex flex-wrap items-center gap-3"
+					role="group"
+					aria-label="Did the logo print correctly?"
+					data-testid="logo-check"
+				>
+					<button
+						type="button"
+						class={secondary}
+						disabled={busy}
+						data-testid="logo-printed"
+						onclick={() => void logoPrinted()}
+					>
+						The logo printed correctly
+					</button>
+					<button
+						type="button"
+						class={secondary}
+						disabled={busy}
+						data-testid="logo-not-printed"
+						onclick={() => void logoNotPrinted()}
+					>
+						It did not print correctly
+					</button>
+				</div>
 			{/if}
 
 			{#if paired}

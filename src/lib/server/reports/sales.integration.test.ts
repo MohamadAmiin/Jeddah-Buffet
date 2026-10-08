@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { db } from '../db/client';
-import { closeTestDb } from '../db/test/db';
+import { closeTestDb, testDb } from '../db/test/db';
 import {
 	seedSalesRestaurant,
 	openSessionAt,
@@ -10,6 +11,9 @@ import {
 	withSecondDevice,
 	type SalesFixture
 } from '../db/test/sales';
+import { seedPaymentMethod } from '../db/test/settings';
+import { orders, payments } from '../db/schema/orders';
+import { archivePaymentMethod, updatePaymentMethod } from '../restaurants';
 import { ORDER_TYPES } from '../../sync-ops';
 import { defaultReportDate, salesReport } from './sales';
 
@@ -131,6 +135,106 @@ async function seedThreeSessions(f: SalesFixture) {
 	return { s1, s2, s3 };
 }
 
+/**
+ * A paid order and its payment as stored BEFORE named methods: payment_method_id
+ * and payment_method_name both NULL (payments_payment_method_pair). Copied from
+ * insertPaidCashOrder in src/lib/server/pos-sessions/sessions.integration.test.ts.
+ * An INSERT, never an update: payments are append-only (0012; invariant 2).
+ */
+async function insertPrePlanPayment(
+	f: SalesFixture,
+	posSessionId: string,
+	o: { method: 'cash' | 'mobile'; amountMinor: bigint; at: Date }
+): Promise<void> {
+	const [orderRow] = await testDb()
+		.insert(orders)
+		.values({
+			restaurantId: f.restaurantId,
+			posSessionId,
+			deviceId: f.deviceId,
+			employeeUserId: f.staffId,
+			orderType: 'takeaway',
+			status: 'paid',
+			taxMode: f.taxMode,
+			currencyCode: 'USD',
+			menuVersion: f.menuVersion,
+			subtotalMinor: o.amountMinor,
+			discountMinor: 0n,
+			taxMinor: 0n,
+			totalMinor: o.amountMinor,
+			openedAt: o.at,
+			paidAt: o.at
+		})
+		.returning({ id: orders.id });
+	await testDb()
+		.insert(payments)
+		.values({
+			restaurantId: f.restaurantId,
+			orderId: orderRow.id,
+			method: o.method,
+			amountMinor: o.amountMinor,
+			tenderedMinor: o.method === 'cash' ? o.amountMinor : null,
+			changeMinor: o.method === 'cash' ? 0n : null,
+			paidAt: o.at
+		});
+}
+
+/**
+ * seedThreeSessions, then (settings-tax-payments-receipt T-17) two named mobile
+ * methods with one sale each on S2 — Tea ×1 by 'EVC Plus' (220), Tea ×2 by 'Zaad'
+ * (440) — and two pre-plan payments on S2: mobile 300 and cash 500.
+ */
+async function seedNamedAndPrePlanPayments(f: SalesFixture) {
+	const { s2 } = await seedThreeSessions(f);
+	const ctx = { actorUserId: f.ownerId, ip: null, userAgent: null };
+	const evcId = await db.transaction((tx) =>
+		seedPaymentMethod(tx, f.restaurantId, { name: 'EVC Plus', kind: 'mobile' }, ctx)
+	);
+	const zaadId = await db.transaction((tx) =>
+		seedPaymentMethod(tx, f.restaurantId, { name: 'Zaad', kind: 'mobile' }, ctx)
+	);
+	const tea = (quantity: number) => [
+		{
+			menuItemId: f.items.tea,
+			itemName: 'Tea',
+			quantity,
+			unitPriceMinor: 200n,
+			taxRateBp: f.taxRateBp
+		}
+	];
+	await recordSaleAt(db, f, {
+		posSessionId: s2,
+		occurredAt: new Date('2026-09-28T18:00:00Z'),
+		invoiceSeq: 4,
+		method: 'mobile',
+		paymentMethod: { id: evcId, name: 'EVC Plus' },
+		orderType: 'takeaway',
+		tableLabel: null,
+		lines: tea(1)
+	});
+	await recordSaleAt(db, f, {
+		posSessionId: s2,
+		occurredAt: new Date('2026-09-28T19:00:00Z'),
+		invoiceSeq: 5,
+		method: 'mobile',
+		paymentMethod: { id: zaadId, name: 'Zaad' },
+		orderType: 'takeaway',
+		tableLabel: null,
+		lines: tea(2)
+	});
+	await insertPrePlanPayment(f, s2, {
+		method: 'mobile',
+		amountMinor: 300n,
+		at: new Date('2026-09-28T20:00:00Z')
+	});
+	await insertPrePlanPayment(f, s2, {
+		method: 'cash',
+		amountMinor: 500n,
+		at: new Date('2026-09-28T20:30:00Z')
+	});
+	return { s2, evcId, zaadId, ctx };
+}
+
 let fx: SalesFixture;
 beforeEach(async () => {
 	fx = await seedSalesRestaurant(db);
@@ -176,6 +280,127 @@ describe('salesReport — totals and business date grouping', () => {
 		]);
 		const sumTenders = report.byTender.reduce((acc, r) => acc + r.amount, 0n);
 		expect(sumTenders).toBe(report.totals.takings);
+	});
+
+	// settings-tax-payments-receipt T-17 (spec 26 "Sales by Payment Method").
+	it('byPaymentMethod groups by named method, cash first, unrecorded rows last', async () => {
+		const { evcId, zaadId } = await seedNamedAndPrePlanPayments(fx);
+		const report = await salesReport(db, fx.restaurantId, '2026-09-28');
+		expect(report.byPaymentMethod).toEqual([
+			// 935 (sale A) + 660 (sale C) + the folded pre-plan 500.
+			{
+				paymentMethodId: fx.paymentMethods.cash.id,
+				name: 'Cash',
+				kind: 'cash',
+				archived: false,
+				amount: 2095n,
+				count: 3
+			},
+			{
+				paymentMethodId: fx.paymentMethods.card.id,
+				name: 'Card',
+				kind: 'card',
+				archived: false,
+				amount: 1760n,
+				count: 1
+			},
+			{
+				paymentMethodId: evcId,
+				name: 'EVC Plus',
+				kind: 'mobile',
+				archived: false,
+				amount: 220n,
+				count: 1
+			},
+			{
+				paymentMethodId: zaadId,
+				name: 'Zaad',
+				kind: 'mobile',
+				archived: false,
+				amount: 440n,
+				count: 1
+			},
+			{
+				paymentMethodId: null,
+				name: 'Mobile money (method not recorded)',
+				kind: 'mobile',
+				archived: false,
+				amount: 300n,
+				count: 1
+			}
+		]);
+		// Nothing dropped: the section sums to what customers paid.
+		const sumMethods = report.byPaymentMethod.reduce((acc, r) => acc + r.amount, 0n);
+		expect(sumMethods).toBe(4815n);
+		expect(sumMethods).toBe(report.totals.takings);
+		// byTender is still by KIND, unchanged.
+		expect(report.byTender).toEqual([
+			{ method: 'cash', amount: 2095n, count: 3 },
+			{ method: 'card', amount: 1760n, count: 1 },
+			{ method: 'mobile', amount: 960n, count: 3 }
+		]);
+	});
+
+	it("the section shows a method's current name; payments keep the name they were taken under", async () => {
+		const { evcId, zaadId, ctx } = await seedNamedAndPrePlanPayments(fx);
+		const results = await db.transaction(async (tx) => [
+			await updatePaymentMethod(tx, fx.restaurantId, evcId, { name: 'EVC Plus Hormuud' }, ctx),
+			await archivePaymentMethod(tx, fx.restaurantId, zaadId, ctx)
+		]);
+		expect(results).toEqual([{ ok: true, changed: true }, { ok: true }]);
+
+		const report = await salesReport(db, fx.restaurantId, '2026-09-28');
+		// Grouped by the method ROW: the rename relabels EVC Plus's one row instead of
+		// splitting its takings in two, and the archived Zaad keeps its row.
+		expect(report.byPaymentMethod).toEqual([
+			{
+				paymentMethodId: fx.paymentMethods.cash.id,
+				name: 'Cash',
+				kind: 'cash',
+				archived: false,
+				amount: 2095n,
+				count: 3
+			},
+			{
+				paymentMethodId: fx.paymentMethods.card.id,
+				name: 'Card',
+				kind: 'card',
+				archived: false,
+				amount: 1760n,
+				count: 1
+			},
+			{
+				paymentMethodId: evcId,
+				name: 'EVC Plus Hormuud',
+				kind: 'mobile',
+				archived: false,
+				amount: 220n,
+				count: 1
+			},
+			{
+				paymentMethodId: zaadId,
+				name: 'Zaad',
+				kind: 'mobile',
+				archived: true,
+				amount: 440n,
+				count: 1
+			},
+			{
+				paymentMethodId: null,
+				name: 'Mobile money (method not recorded)',
+				kind: 'mobile',
+				archived: false,
+				amount: 300n,
+				count: 1
+			}
+		]);
+
+		// The payment keeps the name it was taken under (invariant 2: never rewritten).
+		const stored = await db
+			.select({ name: payments.paymentMethodName })
+			.from(payments)
+			.where(eq(payments.paymentMethodId, evcId));
+		expect(stored).toEqual([{ name: 'EVC Plus' }]);
 	});
 
 	it('byOrderType, byEmployee, byItem, byCategory', async () => {
@@ -357,6 +582,12 @@ describe('salesReport — tenant isolation and edge cases', () => {
 		expect(otherReport.byItem).toEqual([
 			{ menuItemId: other.items.special, itemName: 'Special', quantity: 1, amount: 999n }
 		]);
+		// T-17: every method in its report is one of ITS methods.
+		const otherMethodIds = Object.values(other.paymentMethods).map((m) => m.id);
+		expect(otherReport.byPaymentMethod.length).toBeGreaterThan(0);
+		for (const row of otherReport.byPaymentMethod) {
+			expect(otherMethodIds).toContain(row.paymentMethodId);
+		}
 
 		// The first restaurant is unchanged.
 		const firstReport = await salesReport(db, fx.restaurantId, '2026-09-28');
@@ -378,6 +609,7 @@ describe('salesReport — tenant isolation and edge cases', () => {
 			{ method: 'card', amount: 0n, count: 0 },
 			{ method: 'mobile', amount: 0n, count: 0 }
 		]);
+		expect(report.byPaymentMethod).toEqual([]);
 		expect(report.byOrderType).toEqual([
 			{ orderType: 'dine_in', amount: 0n, count: 0 },
 			{ orderType: 'takeaway', amount: 0n, count: 0 },
@@ -402,6 +634,7 @@ describe('MANDATORY (spec 29) — money arithmetic', () => {
 		expect(typeof report.totals.takings).toBe('bigint');
 		expect(typeof report.totals.grossSales).toBe('bigint');
 		expect(typeof report.byTender[0].amount).toBe('bigint');
+		expect(typeof report.byPaymentMethod[0].amount).toBe('bigint');
 		expect(() => JSON.stringify(report)).toThrow();
 	});
 });

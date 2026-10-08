@@ -146,6 +146,31 @@
 			</section>
 
 			<section class={cardClass}>
+				<h3 class={cardTitle}>By payment method</h3>
+				<table class="w-full text-sm">
+					<caption class="sr-only">By payment method</caption>
+					<thead class="bg-raise-2">
+						<tr>
+							<th scope="col" class={th}>Method</th>
+							<th scope="col" class={th}>Type</th>
+							<th scope="col" class={thMoney}>Payments</th>
+							<th scope="col" class={thMoney}>Amount ({data.currency?.code})</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each data.byPaymentMethod as row (row.key)}
+							<tr>
+								<td class={td}>{row.label}</td>
+								<td class={td}>{row.kind}</td>
+								<td class={tdMoney}>{row.count}</td>
+								<td class={tdMoney}>{row.amount}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</section>
+
+			<section class={cardClass}>
 				<h3 class={cardTitle}>By order type</h3>
 				<table class="w-full text-sm">
 					<caption class="sr-only">By order type</caption>

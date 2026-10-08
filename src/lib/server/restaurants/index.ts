@@ -1,8 +1,9 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { Executor } from '../auth/session';
 import type { DbTx } from '../db/client';
 import { restaurants } from '../db/schema/restaurants';
 import { restaurantSettings } from '../db/schema/restaurant-settings';
+import { taxRates } from '../db/schema/tax-rates';
 import { roles, rolePermissions } from '../db/schema/roles';
 import { writeAudit } from '../audit';
 import { ensureChart } from '../accounting/chart';
@@ -10,8 +11,13 @@ import { TAX_MODES, type TaxMode } from '../../money/tax';
 import { SUPPORTED_CURRENCIES } from '../../money/format';
 import { DEFAULT_ROLES } from '../permissions/keys';
 import { isValidTimeZone, canonicalTimeZone } from './time-zone';
+import { ensureCashMethod } from './payment-methods';
+import { RECEIPT_SHOW_COLUMNS, RECEIPT_SHOW_SELECTION, receiptShowFrom } from './receipt';
+import { RECEIPT_SHOW_KEYS, type ReceiptShow } from '../../receipt-layout';
 
 export { isValidTimeZone, canonicalTimeZone, timeZoneSuggestions } from './time-zone';
+export * from './payment-methods';
+export * from './receipt';
 
 // This module holds restaurant identity and settings and the onRestaurantCreated
 // initializer list. It calls audit/ and, for the chart seed only, accounting/chart
@@ -19,6 +25,12 @@ export { isValidTimeZone, canonicalTimeZone, timeZoneSuggestions } from './time-
 // permissions/keys.ts. The two lists it reads from the isomorphic src/lib/money
 // (TAX_MODES, SUPPORTED_CURRENCIES) call nothing. It is called by routes and by
 // auth/register.ts. CLAUDE.md's "Where code lives" does not list it; T-26 adds it.
+//
+// It also owns payment-methods.ts (the owner-named payment methods and the
+// built-in Cash row, tasks/settings-tax-payments-receipt T-11) and, from T-12,
+// receipt.ts (the receipt layout). Both are re-exported from here, and the module
+// still calls only audit/ and accounting/chart — never menu/: payment methods and
+// the receipt layout reach the till in the settings bundle, not the menu snapshot.
 //
 // CONVENTION, applied throughout src/lib/server: functions that WRITE take DbTx,
 // so a plain `db` handle cannot be passed where a transaction is required;
@@ -36,19 +48,26 @@ export type RestaurantWithSettings = {
 	posIdleLockSeconds: number | null;
 	/** Spec 33 open decision 3: null until the owner chooses, and never defaulted. */
 	taxMode: TaxMode | null;
-	/** ONE rate per restaurant, in integer basis points (825 = 8.25%), or null. */
-	taxRateBp: number | null;
+	/**
+	 * The named default rate (restaurant_settings.default_tax_rate_id, a tax_rates
+	 * row of this restaurant); null until the owner picks one, never defaulted
+	 * (tasks/settings-tax-payments-receipt T-13, risk 5).
+	 */
+	defaultTaxRateId: string | null;
 	/** An ISO 4217 code the money formatter supports, or null. */
 	currencyCode: string | null;
-	/** null until the owner chooses on /settings; no default anywhere. */
-	acceptsCard: boolean | null;
-	/** null until the owner chooses on /settings; no default anywhere. */
-	acceptsMobile: boolean | null;
 	/** Receipt header text (menu-and-printing T-21): optional, null until set. */
 	receiptAddress: string | null;
 	receiptPhone: string | null;
 	taxRegistrationNumber: string | null;
-	receiptFooter: string | null;
+	/**
+	 * The nine receipt display switches (tasks/settings-tax-payments-receipt
+	 * T-12), as ONE nested object built by receiptShowFrom — never the nine flat
+	 * columns.
+	 */
+	receiptShow: ReceiptShow;
+	/** The heading above the receipt's payment-numbers block; null = no heading. */
+	receiptPaymentNumbersHeading: string | null;
 	createdAt: Date;
 };
 
@@ -70,14 +89,15 @@ export async function getRestaurantWithSettings(
 			timeZone: restaurantSettings.timeZone,
 			posIdleLockSeconds: restaurantSettings.posIdleLockSeconds,
 			taxMode: restaurantSettings.taxMode,
-			taxRateBp: restaurantSettings.taxRateBp,
+			defaultTaxRateId: restaurantSettings.defaultTaxRateId,
 			currencyCode: restaurantSettings.currencyCode,
-			acceptsCard: restaurantSettings.acceptsCard,
-			acceptsMobile: restaurantSettings.acceptsMobile,
 			receiptAddress: restaurantSettings.receiptAddress,
 			receiptPhone: restaurantSettings.receiptPhone,
 			taxRegistrationNumber: restaurantSettings.taxRegistrationNumber,
-			receiptFooter: restaurantSettings.receiptFooter,
+			// T-12: the nine switches arrive nested and leave as ONE receiptShow
+			// object; the logo's bitmap is never selected here.
+			receiptShowColumns: RECEIPT_SHOW_SELECTION,
+			receiptPaymentNumbersHeading: restaurantSettings.receiptPaymentNumbersHeading,
 			createdAt: restaurants.createdAt
 		})
 		.from(restaurants)
@@ -87,9 +107,14 @@ export async function getRestaurantWithSettings(
 
 	const row = rows[0];
 	if (!row) return null;
+	const { receiptShowColumns, ...rest } = row;
 	// The column is text; the CHECK restaurant_settings_tax_mode_valid admits exactly
 	// TAX_MODES or NULL, which is what makes this narrowing true.
-	return { ...row, taxMode: row.taxMode as TaxMode | null };
+	return {
+		...rest,
+		taxMode: row.taxMode as TaxMode | null,
+		receiptShow: receiptShowFrom(receiptShowColumns)
+	};
 }
 
 export type SettingsChanges = {
@@ -99,16 +124,20 @@ export type SettingsChanges = {
 	// Typed loosely ON PURPOSE: each is validated inside updateSettings, whoever
 	// the caller is.
 	taxMode?: string;
-	taxRateBp?: number;
+	// T-13: the id of a LIVE tax_rates row of this restaurant. There is no way back
+	// to null: once chosen, the default can be replaced but not unset.
+	defaultTaxRateId?: string;
 	currencyCode?: string;
-	acceptsCard?: boolean;
-	acceptsMobile?: boolean;
 	// Receipt header text (T-21): a string is trimmed, '' clears the field to
 	// null; undefined means "not submitted, leave it alone".
 	receiptAddress?: string | null;
 	receiptPhone?: string | null;
 	taxRegistrationNumber?: string | null;
-	receiptFooter?: string | null;
+	// tasks/settings-tax-payments-receipt T-12: the receipt display switches —
+	// only the submitted keys, each a boolean — and the payment-numbers heading,
+	// trimmed like the receipt header text ('' clears it to null).
+	receiptShow?: Partial<ReceiptShow>;
+	receiptPaymentNumbersHeading?: string | null;
 };
 
 export type UpdateSettingsContext = {
@@ -129,7 +158,6 @@ export type UpdateSettingsResult =
 				| 'invalid_tax_mode'
 				| 'invalid_tax_rate'
 				| 'invalid_currency'
-				| 'invalid_tender'
 				| 'invalid_receipt_field';
 	  };
 
@@ -139,15 +167,22 @@ export type UpdateSettingsResult =
 const POS_IDLE_LOCK_MIN_SECONDS = 30;
 const POS_IDLE_LOCK_MAX_SECONDS = 1800;
 
+/** Copied from src/lib/server/menu/images.ts: an id is shape-checked before any SQL. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // Receipt header text (menu-and-printing T-21): the column bounds, repeated
 // here so a value is refused BEFORE the database would (the CHECKs in
 // restaurant-settings.ts carry the same numbers). Control characters are
 // refused because this text goes to an ESC/POS printer, which obeys them.
+// receiptPaymentNumbersHeading (tasks/settings-tax-payments-receipt T-12) is
+// receipt text of exactly the same kind — trimmed, '' clears it, at most 40, no
+// control character (restaurant_settings_receipt_payment_numbers_heading_length)
+// — so it rides the same loop.
 const RECEIPT_LIMITS = {
 	receiptAddress: 120,
 	receiptPhone: 40,
 	taxRegistrationNumber: 40,
-	receiptFooter: 120
+	receiptPaymentNumbersHeading: 40
 } as const;
 type ReceiptField = keyof typeof RECEIPT_LIMITS;
 
@@ -222,15 +257,41 @@ export async function updateSettings(
 		}
 	}
 
-	if (changes.taxRateBp !== undefined) {
-		// Postgres would silently ROUND a decimal into the integer column; this guard
-		// and the form's zod .int() are the real defences.
-		const bp = changes.taxRateBp;
-		if (!Number.isSafeInteger(bp) || bp < 0 || bp > 10_000) {
+	// T-13 (tasks/settings-tax-payments-receipt): the restaurant's DEFAULT tax rate is
+	// a pointer at a named tax_rates row, never a number. The id is shape-checked
+	// before any SQL (a malformed one would raise 22P02 and abort the caller's
+	// transaction), then the row is read DIRECTLY from the table and locked FOR
+	// SHARE — restaurants/ may not import menu/, so this is not assertLiveTaxRate,
+	// but it is the same lock: archiveTaxRate takes the rate FOR UPDATE first, so a
+	// rate being archived cannot become the default, and a rate being made the
+	// default cannot be archived (risk 8).
+	//
+	// There is NO way back to null. A rate, once chosen, can be replaced by another
+	// but never unset, and the chosen rate cannot be archived (archiveTaxRate's
+	// is_default refusal) — so a restaurant that has answered "which rate" can never
+	// silently fall back to selling at no rate (risk 5).
+	let defaultTaxRateId: string | undefined;
+	if (changes.defaultTaxRateId !== undefined) {
+		const taxRateId: unknown = changes.defaultTaxRateId;
+		if (typeof taxRateId !== 'string' || !UUID.test(taxRateId)) {
 			return { ok: false, reason: 'invalid_tax_rate' };
 		}
-		if (bp !== current.taxRateBp) {
-			diff.taxRateBp = { old: current.taxRateBp, new: bp };
+		const [rate] = await tx
+			.select({ id: taxRates.id })
+			.from(taxRates)
+			.where(
+				and(
+					eq(taxRates.id, taxRateId),
+					eq(taxRates.restaurantId, restaurantId),
+					isNull(taxRates.archivedAt)
+				)
+			)
+			.for('share')
+			.limit(1);
+		if (!rate) return { ok: false, reason: 'invalid_tax_rate' };
+		if (rate.id !== current.defaultTaxRateId) {
+			defaultTaxRateId = rate.id;
+			diff.defaultTaxRateId = { old: current.defaultTaxRateId, new: rate.id };
 		}
 	}
 
@@ -243,21 +304,12 @@ export async function updateSettings(
 		}
 	}
 
-	// T-29: accepted tenders. `false` is a chosen answer ("not accepted") and
-	// diffs against null ("not chosen"); undefined means "not submitted, leave
-	// it alone", like every other optional field here. NO default anywhere:
-	// nothing in this module, the schema or the page turns null into false.
-	for (const key of ['acceptsCard', 'acceptsMobile'] as const) {
-		const value = changes[key];
-		if (value === undefined) continue;
-		if (typeof value !== 'boolean') return { ok: false, reason: 'invalid_tender' };
-		if (value !== current[key]) diff[key] = { old: current[key], new: value };
-	}
-
 	// T-21: receipt header text. A string is trimmed; '' clears the field (null);
 	// a control character or a length over the column's bound is refused before
 	// anything is written. NEVER bumps menu_version — the receipt header is not in
 	// the till's menu snapshot; it reaches the till through GET /api/pos/employees.
+	// The same holds for the payment-numbers heading (in this loop) and the nine
+	// receipt switches (below) that T-12 added: neither ever bumps menu_version.
 	const receipt: Partial<Record<ReceiptField, string | null>> = {};
 	for (const key of Object.keys(RECEIPT_LIMITS) as ReceiptField[]) {
 		const value = changes[key];
@@ -274,6 +326,41 @@ export async function updateSettings(
 		if (next !== current[key]) {
 			diff[key] = { old: current[key], new: next };
 			receipt[key] = next;
+		}
+	}
+
+	// tasks/settings-tax-payments-receipt T-12: the receipt display switches. Only
+	// the submitted keys; each must be one of RECEIPT_SHOW_KEYS with a boolean
+	// value, or nothing is written. A changed key diffs as receiptShow.<key>.
+	// NEVER bumps menu_version, like the receipt text above.
+	const showColumns: Partial<Record<(typeof RECEIPT_SHOW_COLUMNS)[keyof ReceiptShow], boolean>> =
+		{};
+	if (changes.receiptShow !== undefined) {
+		const submitted: unknown = changes.receiptShow;
+		if (
+			typeof submitted !== 'object' ||
+			submitted === null ||
+			Array.isArray(submitted) ||
+			(Object.getPrototypeOf(submitted) !== Object.prototype &&
+				Object.getPrototypeOf(submitted) !== null)
+		) {
+			return { ok: false, reason: 'invalid_receipt_field' };
+		}
+		const entries = Object.entries(submitted);
+		for (const [key, value] of entries) {
+			if (!(RECEIPT_SHOW_KEYS as readonly string[]).includes(key)) {
+				return { ok: false, reason: 'invalid_receipt_field' };
+			}
+			// undefined means "not submitted", as for every optional field here.
+			if (value !== undefined && typeof value !== 'boolean') {
+				return { ok: false, reason: 'invalid_receipt_field' };
+			}
+		}
+		for (const key of RECEIPT_SHOW_KEYS) {
+			const value = (submitted as Partial<ReceiptShow>)[key];
+			if (value === undefined || value === current.receiptShow[key]) continue;
+			diff[`receiptShow.${key}`] = { old: current.receiptShow[key], new: value };
+			showColumns[RECEIPT_SHOW_COLUMNS[key]] = value;
 		}
 	}
 
@@ -294,19 +381,28 @@ export async function updateSettings(
 	// 11). Adding the column to the payload without widening the condition would
 	// write the audit row and nothing else — and the owner could then never satisfy
 	// settingsComplete().
-	const bumpMenuVersion = Boolean(diff.taxMode || diff.taxRateBp || diff.currencyCode);
+	//
+	// The receipt switches and the payment-numbers heading (T-12) are NOT in the
+	// bump: like the receipt header text, they reach the till in the settings
+	// bundle of GET /api/pos/employees, not in the menu snapshot.
+	//
+	// The DEFAULT tax rate (T-13) IS in the bump: it reaches the till inside the
+	// menu snapshot (readMenuSnapshot resolves every item's rate through it), so a
+	// change must make every till re-download it — otherwise every later sale
+	// arrives at the SAME version with a different rate, a HARD price_tamper
+	// instead of a soft stale_menu_price (risk 4).
+	const bumpMenuVersion = Boolean(diff.taxMode || diff.defaultTaxRateId || diff.currencyCode);
 	if (
 		diff.timeZone ||
 		diff.posIdleLockSeconds ||
 		diff.taxMode ||
-		diff.taxRateBp ||
+		diff.defaultTaxRateId ||
 		diff.currencyCode ||
-		diff.acceptsCard ||
-		diff.acceptsMobile ||
 		diff.receiptAddress ||
 		diff.receiptPhone ||
 		diff.taxRegistrationNumber ||
-		diff.receiptFooter
+		Object.keys(diff).some((k) => k.startsWith('receiptShow.')) ||
+		diff.receiptPaymentNumbersHeading
 	) {
 		await tx
 			.update(restaurantSettings)
@@ -314,22 +410,27 @@ export async function updateSettings(
 				...(diff.timeZone ? { timeZone: canonical! } : {}),
 				...(diff.posIdleLockSeconds ? { posIdleLockSeconds: changes.posIdleLockSeconds! } : {}),
 				...(diff.taxMode ? { taxMode: changes.taxMode! } : {}),
-				...(diff.taxRateBp ? { taxRateBp: changes.taxRateBp! } : {}),
+				...(diff.defaultTaxRateId ? { defaultTaxRateId: defaultTaxRateId! } : {}),
 				...(diff.currencyCode ? { currencyCode: changes.currencyCode! } : {}),
-				...(diff.acceptsCard ? { acceptsCard: changes.acceptsCard! } : {}),
-				...(diff.acceptsMobile ? { acceptsMobile: changes.acceptsMobile! } : {}),
 				// T-21: each receipt field only when it changed; null clears it.
 				...(diff.receiptAddress ? { receiptAddress: receipt.receiptAddress ?? null } : {}),
 				...(diff.receiptPhone ? { receiptPhone: receipt.receiptPhone ?? null } : {}),
 				...(diff.taxRegistrationNumber
 					? { taxRegistrationNumber: receipt.taxRegistrationNumber ?? null }
 					: {}),
-				...(diff.receiptFooter ? { receiptFooter: receipt.receiptFooter ?? null } : {}),
-				// T-29: the ONE menu-version bump on the server side. Inline SQL so
+				// T-12: only the switch columns that changed, through RECEIPT_SHOW_COLUMNS,
+				// and the heading when it changed (null clears it).
+				...showColumns,
+				...(diff.receiptPaymentNumbersHeading
+					? { receiptPaymentNumbersHeading: receipt.receiptPaymentNumbersHeading ?? null }
+					: {}),
+				// T-29: the ONE menu-version bump in this module. Inline SQL so
 				// two concurrent saves cannot both read 7 and both write 8. The
 				// convention amendment (CLAUDE.md, 2026-09-28, T-02): restaurants/
 				// may bump menu_version by an inline SQL increment rather than
-				// calling menu/, which it may not import.
+				// calling menu/, which it may not import. The tax mode, the default
+				// rate (T-13) and the currency are all in the till's snapshot, so a
+				// change to any of them makes every till re-download it.
 				...(bumpMenuVersion ? { menuVersion: sql`${restaurantSettings.menuVersion} + 1` } : {}),
 				updatedAt: now
 			})
@@ -378,7 +479,9 @@ export async function settingsComplete(
 	if (current.posIdleLockSeconds === null) missing.push('POS idle lock');
 	// AFTER the idle lock, in this order: tests deep-equal the array.
 	if (current.taxMode === null) missing.push('tax mode');
-	if (current.taxRateBp === null) missing.push('tax rate');
+	// T-13: the named DEFAULT rate, in the same position the retired number held.
+	// A rate that exists but is not the default does not count (risk 5).
+	if (current.defaultTaxRateId === null) missing.push('tax rate');
 	if (current.currencyCode === null) missing.push('currency');
 
 	return { complete: missing.length === 0, missing };
@@ -430,10 +533,11 @@ async function insertDefaultRoles(tx: DbTx, restaurantId: string): Promise<void>
 /**
  * Ordered initializers run INSIDE the registration transaction.
  *
- * Ships with the settings row, the default role rows and the chart of
- * accounts. The list exists so later plans can add idempotent per-restaurant
- * initialization here, rather than writing a migration that cross-joins every
- * existing restaurant and then silently does nothing for the next one created.
+ * Ships with the settings row, the default role rows, the chart of accounts
+ * and the built-in Cash payment method. The list exists so later plans can add
+ * idempotent per-restaurant initialization here, rather than writing a
+ * migration that cross-joins every existing restaurant and then silently does
+ * nothing for the next one created.
  */
 export const restaurantInitializers: Array<
 	(tx: DbTx, restaurantId: string, input: RestaurantInitializerInput) => Promise<void>
@@ -454,6 +558,14 @@ export const restaurantInitializers: Array<
 	// for exactly this entry — it still calls no other module.
 	async function seedChartOfAccounts(tx, restaurantId) {
 		await ensureChart(tx, restaurantId);
+	},
+	// The built-in Cash payment method (tasks/settings-tax-payments-receipt T-11).
+	// Cash is a built-in tender, not an answer to an open decision: spec 33
+	// decision 4's tender set always includes cash, and which card and mobile
+	// methods a restaurant takes stays the owner's configuration on
+	// /settings/payments. Idempotent; migration 0017 seeded existing restaurants.
+	async function seedCashMethod(tx, restaurantId) {
+		await ensureCashMethod(tx, restaurantId);
 	}
 ];
 
@@ -476,3 +588,6 @@ export async function onRestaurantCreated(
 // The chart of accounts HAS landed here (T-12 of tasks/pos-sales, by decision of
 // 2026-09-28): seeded through the initializer list for new restaurants and
 // backfilled by migration 0012 for existing ones.
+// Cash IS seeded here (seedCashMethod). NO tax rate is ever seeded here, in any
+// form: a silent 0% default would post Cr 2100 Tax Payable = 0 on every sale,
+// which no reversing entry recovers (tasks/settings-tax-payments-receipt risk 5).

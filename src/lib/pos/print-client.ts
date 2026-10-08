@@ -21,12 +21,19 @@
 // re-registered till must be paired again — deliberate: a token for a till that
 // was handed to another restaurant must not survive (T-28 Watch out).
 //
+// A PAIRING SAVED OR FORGOTTEN WITHDRAWS THE RECEIPT-LOGO CONFIRMATION
+// (settings.ts withdrawReceiptLogoConfirmation; settings-tax-payments-receipt
+// Risk 6). The owner's "The logo printed correctly" vouched for the printer it
+// was watched on; a new pairing may lead to another printer, and one without
+// `GS v 0` reads the raster as data that could hold the drawer pulse.
+//
 // Chrome 142+ gates a public-origin page's requests to 127.0.0.1 behind a
 // one-time "local network access" permission (RESEARCH.md). A refused request
 // throws a TypeError exactly like an agent that is not running, so the client
 // asks the Permissions API which it was — and never reports `blocked` unless the
 // browser itself said `denied`.
 import type { PrintLine } from './receipt';
+import { withdrawReceiptLogoConfirmation } from './settings';
 import { cacheSettings, readCachedSetting } from './store';
 
 export const PRINT_AGENT_URL_KEY = 'printAgentUrl';
@@ -38,9 +45,22 @@ export type AgentSettings = { url: string; token: string };
 /** The agent's `GET /status` body (print-agent/src/server.ts AgentStatus). */
 export type PrinterStatus = { width: 32 | 48; reachable: boolean; queued: number };
 export type AgentStatus = {
-	agentVersion: 1;
+	/**
+	 * 1 prints text; 2 adds the validated image line (print-agent T-25), which
+	 * is what lets a page carry the logo. The body is an unvalidated cast, so
+	 * every reader asks agentPrintsImages rather than trusting the field.
+	 */
+	agentVersion: number;
 	printers: { receipt: PrinterStatus; kitchen: PrinterStatus | null };
 };
+
+/** The first agent version that accepts an image line (print-agent T-25). */
+export const IMAGE_AGENT_VERSION = 2;
+
+/** True only when the status carries a NUMBER at or above IMAGE_AGENT_VERSION. */
+export function agentPrintsImages(status: AgentStatus): boolean {
+	return typeof status.agentVersion === 'number' && status.agentVersion >= IMAGE_AGENT_VERSION;
+}
 
 export type AgentState =
 	| { state: 'not_set_up' }
@@ -90,7 +110,13 @@ export async function readAgentSettings(): Promise<AgentSettings | null> {
 	return { url, token };
 }
 
-/** Throws — and stores nothing — unless the address is loopback and the token is 64 hex. */
+/**
+ * Throws — and stores nothing — unless the address is loopback and the token is
+ * 64 hex. A pairing that IS saved withdraws the receipt-logo confirmation
+ * first, whatever it replaces (see the header): withdrawn before the write, so
+ * a failure between the two leaves the gate closed — never a new pairing under
+ * an old confirmation.
+ */
 export async function saveAgentSettings(settings: AgentSettings): Promise<void> {
 	const url = settings.url.trim();
 	const token = settings.token.trim();
@@ -102,13 +128,16 @@ export async function saveAgentSettings(settings: AgentSettings): Promise<void> 
 	if (!isAgentToken(token)) {
 		throw new Error('The pairing link is damaged — open the link the agent printed again');
 	}
+	await withdrawReceiptLogoConfirmation();
 	await cacheSettings([
 		{ key: PRINT_AGENT_URL_KEY, value: url },
 		{ key: PRINT_AGENT_TOKEN_KEY, value: token }
 	]);
 }
 
+/** "Forget pairing": the logo confirmation goes first, as in saveAgentSettings, then the pairing. */
 export async function clearAgentSettings(): Promise<void> {
+	await withdrawReceiptLogoConfirmation();
 	await cacheSettings([
 		{ key: PRINT_AGENT_URL_KEY, value: null },
 		{ key: PRINT_AGENT_TOKEN_KEY, value: null }
@@ -346,17 +375,41 @@ export type PrinterChip = {
 	tone: 'ok' | 'offline' | 'danger' | 'neutral';
 };
 
-/** One glyph AND one sentence per state: colour never carries the meaning alone. */
-export function printerChip(state: AgentState): PrinterChip {
+export type PrinterChipOptions = {
+	/** A logo is cached on this till (settings.ts readReceiptLogo). */
+	logoCached?: boolean;
+	/** The owner confirmed that logo's test print on /pos/printer (readConfirmedLogoSha). */
+	logoConfirmed?: boolean;
+};
+
+/**
+ * One glyph AND one sentence per state: colour never carries the meaning alone.
+ * A ready agent too old to print the cached logo, or one whose logo the owner
+ * has not test-printed and confirmed yet, says so in the offline tone — the
+ * till bar lists that sentence among its warnings. Receipts still print, without
+ * the logo (T-24).
+ */
+export function printerChip(state: AgentState, opts: PrinterChipOptions = {}): PrinterChip {
 	switch (state.state) {
 		case 'ready': {
 			const { receipt, kitchen } = state.status.printers;
 			const waiting = receipt.queued + (kitchen?.queued ?? 0);
-			return {
-				glyph: '●',
-				text: waiting > 0 ? `Printer ready · ${waiting} waiting` : 'Printer ready',
-				tone: 'ok'
-			};
+			const suffix = waiting > 0 ? ` · ${waiting} waiting` : '';
+			if (opts.logoCached && !agentPrintsImages(state.status)) {
+				return {
+					glyph: '◆',
+					text: `Update the print agent to print the logo${suffix}`,
+					tone: 'offline'
+				};
+			}
+			if (opts.logoCached && agentPrintsImages(state.status) && !opts.logoConfirmed) {
+				return {
+					glyph: '◆',
+					text: `Test-print the logo before receipts use it${suffix}`,
+					tone: 'offline'
+				};
+			}
+			return { glyph: '●', text: `Printer ready${suffix}`, tone: 'ok' };
 		}
 		case 'unreachable':
 			return { glyph: '◆', text: 'Printer unreachable', tone: 'offline' };

@@ -11,15 +11,20 @@
 // and the report (T-35). Its ONLY imports are `./index` and `./tax`; not
 // `$lib/...`, not `../sync-ops`, no path under `$lib/server` (ESLint errors
 // on it in this directory), not a `node:` builtin, not a package. Reads no
-// setting, resolves no null rate (menu_items.tax_rate_bp = null "inherit the
-// restaurant rate" is the caller's job).
+// setting, resolves no null rate (choosing the line's rate — the item's own or
+// the restaurant default — is the caller's job).
 //
-// This file rounds through roundToMinor only, three times per order.
+// This file rounds through roundToMinor only: computeOrderTotals rounds three
+// times per order (total, tax, discount); taxBreakdown rounds once per rate
+// group, CUMULATIVELY, so its rows split the tax computeOrderTotals rounded and
+// add back to it exactly — it never rounds a line
+// (tasks/settings-tax-payments-receipt T-09).
 
 import {
 	add,
 	addExact,
 	exact,
+	minor,
 	multiplyByInteger,
 	roundToMinor,
 	subtract,
@@ -122,4 +127,49 @@ export function totalsEqual(
 	return (
 		a.subtotal === b.subtotal && a.discount === b.discount && a.tax === b.tax && a.total === b.total
 	);
+}
+
+export type TaxBreakdownRow = { rateBp: number; name: string | null; tax: Minor };
+
+/**
+ * The order's tax split by rate, for the receipt. `lineRates[i]` describes
+ * `totals.lines[i]`. Lines are grouped by (rateBp, name) in first-appearance
+ * order. Each group's EXACT tax is summed, and the groups are rounded
+ * CUMULATIVELY with the one rule: r_k = roundToMinor(S_k, rule), where S_k
+ * is the exact tax of groups 1..k, and row k = r_k − r_{k−1}. So the rows
+ * add up to roundToMinor(S_n) = totals.tax by construction. It never rounds
+ * a line, and it never rounds a group on its own. Pass the SAME rule
+ * computeOrderTotals got (ROUNDING_RULE).
+ */
+export function taxBreakdown(
+	totals: OrderTotals,
+	lineRates: ReadonlyArray<{ rateBp: number; name: string | null }>,
+	rule: RoundingRule
+): TaxBreakdownRow[] {
+	if (lineRates.length !== totals.lines.length) {
+		throw new RangeError('taxBreakdown needs exactly one rate per order line');
+	}
+	const groups = new Map<string, { rateBp: number; name: string | null; exactTax: Exact }>();
+	totals.lines.forEach((line, i) => {
+		const { rateBp, name } = lineRates[i];
+		const key = JSON.stringify([rateBp, name]);
+		const group = groups.get(key);
+		if (group) group.exactTax = addExact(group.exactTax, line.tax);
+		else groups.set(key, { rateBp, name, exactTax: line.tax });
+	});
+	const rows: TaxBreakdownRow[] = [];
+	let running = exact(0n);
+	let previous = minor(0n);
+	for (const group of groups.values()) {
+		running = addExact(running, group.exactTax);
+		const rounded = roundToMinor(running, rule);
+		rows.push({ rateBp: group.rateBp, name: group.name, tax: subtract(rounded, previous) });
+		previous = rounded;
+	}
+	if (previous !== totals.tax) {
+		throw new Error(
+			'taxBreakdown: the rows do not reconcile with totals.tax (same lines, same rule?)'
+		);
+	}
+	return rows;
 }

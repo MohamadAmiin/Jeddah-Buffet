@@ -11,7 +11,7 @@
 // is stored by T-19 and flagged; everything HARD is refused by T-21 and
 // (for card/mobile) returned as 422 or (for cash) stored as unrecorded.
 
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import type { DbTx } from '../db/client';
 import { checkEmployee } from '../permissions/employee';
@@ -19,6 +19,9 @@ import { orders as _orders } from '../db/schema/orders';
 import { posSessions } from '../db/schema/pos-sessions';
 import { restaurantSettings } from '../db/schema/restaurant-settings';
 import { menuItems, modifiers as modifiersTable, menuItemModifierGroups } from '../db/schema/menu';
+// Read directly: orders/ may not import restaurants/ or menu/ (CLAUDE.md).
+import { paymentMethods } from '../db/schema/payment-methods';
+import { taxRates } from '../db/schema/tax-rates';
 import {
 	SOFT_FLAGS,
 	HARD_FLAGS,
@@ -68,6 +71,11 @@ export type ParsedSaleLine = {
 	quantity: number;
 	unitPriceMinor: Minor;
 	taxRateBp: number;
+	/** The named rate the line was taxed under, and its name as printed (T-15,
+	 * lineRateSnapshot). Both null only for a pre-plan line whose number matches
+	 * no resolved rate. */
+	taxRateId: string | null;
+	taxRateName: string | null;
 	discountMinor: Minor;
 	modifiers: ParsedSaleLineModifier[];
 };
@@ -95,7 +103,12 @@ export type ParsedSale = {
 	};
 	payment: {
 		paymentId: string;
+		/** The KIND: it alone picks the posting rule and the offline rule. */
 		method: 'cash' | 'card' | 'mobile';
+		/** WHICH method took it (T-15, Step 7): never null — every payment recorded
+		 * from now on names its method; its kind equals `method`. */
+		paymentMethodId: string;
+		paymentMethodName: string;
 		amountMinor: Minor;
 		tenderedMinor: Minor | null;
 		changeMinor: Minor | null;
@@ -126,6 +139,16 @@ const modifierSchema = z.object({
 	priceDeltaMinor: minorString
 });
 
+// A display name a till snapshots onto the sale (a rate's or a method's name) —
+// the same bounds as the DB columns (1–40) and no control characters, which
+// would command an ESC/POS printer on a reprint.
+const snapshotName = z
+	.string()
+	.trim()
+	.min(1)
+	.max(40)
+	.refine((s) => !/[\u0000-\u001f\u007f-\u009f]/.test(s), 'control characters are not allowed');
+
 const lineSchema = z.object({
 	lineId: z.string().uuid(),
 	lineNo: z.number().int().min(1),
@@ -134,6 +157,12 @@ const lineSchema = z.object({
 	quantity: z.number().int().min(1).max(999),
 	unitPriceMinor: nonNegativeMinor,
 	taxRateBp: z.number().int().min(0).max(10_000),
+	// OPTIONAL (settings-tax-payments-receipt T-15), the `note` precedent: every
+	// till queued before this plan omits the key, and that payload must still
+	// record (invariant 5). An id must be a rate of this restaurant (Step 7b).
+	taxRateId: z.string().uuid().nullable().optional(),
+	// OPTIONAL, the `note` precedent: a pre-plan till omits it (invariant 5).
+	taxRateName: snapshotName.nullable().optional(),
 	discountMinor: zeroMinor,
 	modifiers: z.array(modifierSchema).max(20)
 });
@@ -142,6 +171,12 @@ const paymentSchema = z
 	.object({
 		paymentId: z.string().uuid(),
 		method: z.enum(PAYMENT_METHODS as unknown as [string, ...string[]]),
+		// OPTIONAL (settings-tax-payments-receipt T-15), the `note` precedent: every
+		// till queued before this plan omits the key, and that payload must still
+		// record (invariant 5). Step 7 then resolves the method from the kind.
+		paymentMethodId: z.string().uuid().nullable().optional(),
+		// OPTIONAL, the `note` precedent: a pre-plan till omits it (invariant 5).
+		paymentMethodName: snapshotName.nullable().optional(),
 		amountMinor: nonNegativeMinor,
 		tenderedMinor: minorString.nullable(),
 		changeMinor: minorString.nullable()
@@ -161,6 +196,25 @@ const paymentSchema = z
 			});
 		}
 	});
+
+// Step 7's payment-method row. `kind` is the CHECKed literal
+// (payment_methods_kind_valid) the wire `method` must equal.
+const METHOD_COLS = {
+	id: paymentMethods.id,
+	name: paymentMethods.name,
+	kind: paymentMethods.kind,
+	enabled: paymentMethods.enabled,
+	archivedAt: paymentMethods.archivedAt,
+	sortOrder: paymentMethods.sortOrder
+};
+type MethodRow = {
+	id: string;
+	name: string;
+	kind: string;
+	enabled: boolean;
+	archivedAt: Date | null;
+	sortOrder: number;
+};
 
 /**
  * The kitchen note as the server stores it — the SAME cleaning the till applies
@@ -228,6 +282,28 @@ function pushOnce(flags: SoftFlag[], flag: SoftFlag): void {
 	if (!flags.includes(flag)) flags.push(flag);
 }
 
+/** What a recorded line stores as its rate's id and name (spec 17: the line keeps
+ * its own snapshot). The till's values win. A line without an id (a pre-plan
+ * payload) is attributed to the item's resolved rate ONLY when it was taxed at
+ * that rate's number; otherwise it keeps its number with no id. */
+function lineRateSnapshot(
+	line: { taxRateBp: number; taxRateId?: string | null; taxRateName?: string | null },
+	resolved: { id: string; name: string; rateBp: number } | null,
+	rateById: ReadonlyMap<string, { id: string; name: string; rateBp: number }>
+): { taxRateId: string | null; taxRateName: string | null } {
+	if (line.taxRateId != null) {
+		// Step 7b proved every line id is in rateById.
+		return {
+			taxRateId: line.taxRateId,
+			taxRateName: line.taxRateName ?? rateById.get(line.taxRateId)!.name
+		};
+	}
+	if (resolved !== null && resolved.rateBp === line.taxRateBp) {
+		return { taxRateId: resolved.id, taxRateName: line.taxRateName ?? resolved.name };
+	}
+	return { taxRateId: null, taxRateName: line.taxRateName ?? null };
+}
+
 export async function validateSale(
 	tx: DbTx,
 	ctx: SyncContext,
@@ -273,11 +349,9 @@ export async function validateSale(
 	const [settings] = await tx
 		.select({
 			taxMode: restaurantSettings.taxMode,
-			taxRateBp: restaurantSettings.taxRateBp,
+			defaultTaxRateId: restaurantSettings.defaultTaxRateId,
 			currencyCode: restaurantSettings.currencyCode,
-			menuVersion: restaurantSettings.menuVersion,
-			acceptsCard: restaurantSettings.acceptsCard,
-			acceptsMobile: restaurantSettings.acceptsMobile
+			menuVersion: restaurantSettings.menuVersion
 		})
 		.from(restaurantSettings)
 		.where(eq(restaurantSettings.restaurantId, ctx.restaurantId))
@@ -292,7 +366,7 @@ export async function validateSale(
 		.select({
 			id: menuItems.id,
 			priceMinor: menuItems.priceMinor,
-			taxRateBp: menuItems.taxRateBp
+			taxRateId: menuItems.taxRateId
 		})
 		.from(menuItems)
 		.where(and(eq(menuItems.restaurantId, ctx.restaurantId), inArray(menuItems.id, itemIds)));
@@ -302,6 +376,39 @@ export async function validateSale(
 			return { ok: false, hard: 'unknown_item', detail: id };
 		}
 	}
+
+	// Rate lookup (tasks/settings-tax-payments-receipt T-13). Each item's rate is
+	// RESOLVED the way readMenuSnapshot (src/lib/server/menu/index.ts) resolves it
+	// for the till: the item's own named rate, else the restaurant's default, else
+	// none. NO archived filter — an archived rate still on an item is still the
+	// rate a stale till charged (spec 6). orders/ may not import menu/, so the rule
+	// is written here a second time; the test "validator and snapshot agree" in
+	// validate.integration.test.ts keeps the two equal.
+	// T-15 widened the id list, not the rule: the SAME one query also loads every
+	// rate a line names (`lineRateIds`, checked in Step 7b), still with no archived
+	// filter, and each row's name for the line's snapshot (Step 13). No query runs
+	// when no id is wanted.
+	const lineRateIds = Array.from(
+		new Set(payload.lines.map((l) => l.taxRateId).filter((id): id is string => id != null))
+	);
+	const rateIds = Array.from(
+		new Set([
+			...itemRows
+				.map((item) => item.taxRateId ?? settings.defaultTaxRateId)
+				.filter((id): id is string => id !== null),
+			...lineRateIds
+		])
+	);
+	const rateRows: { id: string; name: string; rateBp: number }[] =
+		rateIds.length === 0
+			? []
+			: await tx
+					.select({ id: taxRates.id, name: taxRates.name, rateBp: taxRates.rateBp })
+					.from(taxRates)
+					.where(and(eq(taxRates.restaurantId, ctx.restaurantId), inArray(taxRates.id, rateIds)));
+	const rateById: ReadonlyMap<string, { id: string; name: string; rateBp: number }> = new Map(
+		rateRows.map((r) => [r.id, r])
+	);
 
 	// Step 6 — modifiers: every (menuItemId, modifierId) pair must belong to a
 	// group linked to that item.
@@ -351,13 +458,72 @@ export async function validateSale(
 		}
 	}
 
-	// Step 7 — accepted tenders. null counts as off.
-	const method = payload.payments[0].method as 'cash' | 'card' | 'mobile';
-	if (method === 'card' && settings.acceptsCard !== true) {
-		return { ok: false, hard: 'invalid_payload', detail: 'tender_not_accepted' };
+	// Step 7 — the payment method. `method` (the wire KIND) alone decides the
+	// posting rule and the offline rule; the row says WHICH method took it. A
+	// lookup BY ID filters on neither archived_at nor enabled: a cash sale is a
+	// fact (spec 6) and the Cash row can be neither (payment_methods_cash_rules).
+	const wirePayment = payload.payments[0];
+	const method = wirePayment.method as 'cash' | 'card' | 'mobile';
+	let methodRow: MethodRow | undefined;
+	if (wirePayment.paymentMethodId != null) {
+		[methodRow] = await tx
+			.select(METHOD_COLS)
+			.from(paymentMethods)
+			.where(
+				and(
+					eq(paymentMethods.restaurantId, ctx.restaurantId),
+					eq(paymentMethods.id, wirePayment.paymentMethodId)
+				)
+			)
+			.limit(1);
+		if (!methodRow) return { ok: false, hard: 'invalid_payload', detail: 'unknown_payment_method' };
+		if (methodRow.kind !== method) {
+			return { ok: false, hard: 'invalid_payload', detail: 'payment_method_kind_mismatch' };
+		}
+		if (method !== 'cash' && (methodRow.archivedAt !== null || !methodRow.enabled)) {
+			return { ok: false, hard: 'invalid_payload', detail: 'tender_not_accepted' };
+		}
+	} else if (method === 'cash') {
+		// A pre-plan cash payload, or the till's synthetic Cash: the one Cash row.
+		[methodRow] = await tx
+			.select(METHOD_COLS)
+			.from(paymentMethods)
+			.where(
+				and(eq(paymentMethods.restaurantId, ctx.restaurantId), eq(paymentMethods.kind, 'cash'))
+			)
+			.limit(1);
+		// Unreachable in practice: 0017 and seedCashMethod give every restaurant its
+		// Cash row. HARD, so the cash sale is stored `unrecorded`, never dropped.
+		if (!methodRow) return { ok: false, hard: 'invalid_payload', detail: 'cash_method_missing' };
+	} else {
+		// A pre-plan card/mobile payload: the first live, enabled method of the kind.
+		[methodRow] = await tx
+			.select(METHOD_COLS)
+			.from(paymentMethods)
+			.where(
+				and(
+					eq(paymentMethods.restaurantId, ctx.restaurantId),
+					eq(paymentMethods.kind, method),
+					isNull(paymentMethods.archivedAt),
+					eq(paymentMethods.enabled, true)
+				)
+			)
+			.orderBy(asc(paymentMethods.sortOrder), asc(paymentMethods.name), asc(paymentMethods.id))
+			.limit(1);
+		if (!methodRow) return { ok: false, hard: 'invalid_payload', detail: 'tender_not_accepted' };
 	}
-	if (method === 'mobile' && settings.acceptsMobile !== true) {
-		return { ok: false, hard: 'invalid_payload', detail: 'tender_not_accepted' };
+	// The till's name wins (it is what the receipt printed); the row's otherwise.
+	const paymentMethodName = wirePayment.paymentMethodName ?? methodRow.name;
+
+	// Step 7b — the named rate each line says it was taxed under. HARD whatever
+	// the menu version, so before Step 8: an id that is not a rate of THIS
+	// restaurant (foreign or invented) names nothing the till could have cached.
+	// An archived rate of this restaurant IS found — the lookup above has no
+	// archived filter — so a stale till's offline sale still records (spec 6).
+	for (const id of lineRateIds) {
+		if (!rateById.has(id)) {
+			return { ok: false, hard: 'invalid_payload', detail: 'unknown_tax_rate' };
+		}
 	}
 
 	// Step 8 — price / tax-rate / tax-mode comparison. A difference at the SAME
@@ -377,8 +543,20 @@ export async function validateSale(
 			}
 		}
 		if (firstDiff) break;
-		const resolvedRate = item.taxRateBp ?? settings.taxRateBp;
-		if (resolvedRate === null || line.taxRateBp !== resolvedRate) {
+		// T-13: the resolved named rate (see the rate lookup above). No rate resolves
+		// while the restaurant has no default and the item no rate of its own — a
+		// difference like any other, never a fallback number (risk 5).
+		const rateId = item.taxRateId ?? settings.defaultTaxRateId;
+		const resolved = rateId === null ? null : (rateById.get(rateId) ?? null);
+		if (resolved === null || line.taxRateBp !== resolved.rateBp) {
+			firstDiff = `line:${line.lineId}:tax_rate`;
+			break;
+		}
+		// T-15: a named rate must be the item's resolved one too (rateId above), not
+		// merely one with the same number. The SAME detail as the number check, so
+		// the version rule below decides: HARD price_tamper at the same menuVersion,
+		// SOFT stale_menu_price (recorded) at another.
+		if (line.taxRateId != null && line.taxRateId !== rateId) {
 			firstDiff = `line:${line.lineId}:tax_rate`;
 			break;
 		}
@@ -448,6 +626,11 @@ export async function validateSale(
 	}
 
 	// Step 13 — build the ParsedSale.
+	// The item's resolved rate, exactly as Step 8 resolves it; null when none.
+	const resolvedFor = (l: { menuItemId: string }) => {
+		const id = itemById.get(l.menuItemId)!.taxRateId ?? settings.defaultTaxRateId;
+		return id === null ? null : (rateById.get(id) ?? null);
+	};
 	const sale: ParsedSale = {
 		orderId: payload.orderId,
 		posSessionId: payload.posSessionId,
@@ -470,6 +653,7 @@ export async function validateSale(
 			quantity: l.quantity,
 			unitPriceMinor: minor(l.unitPriceMinor),
 			taxRateBp: l.taxRateBp,
+			...lineRateSnapshot(l, resolvedFor(l), rateById),
 			discountMinor: minor(l.discountMinor),
 			modifiers: l.modifiers.map((m) => ({
 				modifierId: m.modifierId,
@@ -486,6 +670,8 @@ export async function validateSale(
 		payment: {
 			paymentId: payment.paymentId,
 			method,
+			paymentMethodId: methodRow.id,
+			paymentMethodName,
 			amountMinor: minor(payment.amountMinor),
 			tenderedMinor: payment.tenderedMinor === null ? null : minor(payment.tenderedMinor),
 			changeMinor: payment.changeMinor === null ? null : minor(payment.changeMinor)

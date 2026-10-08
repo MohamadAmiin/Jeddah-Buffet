@@ -315,7 +315,8 @@ export function createQueue(options: QueueOptions): Queue {
 			if (seen.has(job.id) || queuedIds().has(job.id)) return 'duplicate';
 			const target: Target =
 				job.printer === 'kitchen' && options.printers.kitchen ? 'kitchen' : 'receipt';
-			const bytes = encodeJob(job.lines, { cut: job.cut });
+			// The same printer whose width parseJob validated the job against.
+			const bytes = encodeJob(job.lines, { cut: job.cut, columns: workers[target].printer.width });
 			seq += 1;
 			const name = `${String(seq).padStart(12, '0')}-${createHash('sha1').update(job.id).digest('hex')}.json`;
 			const file = join(queueDir, name);
@@ -348,7 +349,7 @@ export function createQueue(options: QueueOptions): Queue {
 				: null;
 			// With no kitchen printer, kitchen jobs ride the receipt worker — count them there.
 			if (!options.printers.kitchen) receipt.queued += workers.kitchen.jobs.length;
-			return { agentVersion: 1, printers: { receipt, kitchen } };
+			return { agentVersion: 2, printers: { receipt, kitchen } };
 		},
 		close: async () => {
 			closed = true;

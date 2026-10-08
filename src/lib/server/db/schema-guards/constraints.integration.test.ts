@@ -1,3 +1,4 @@
+import { readFileSync, readdirSync } from 'node:fs';
 import { describe, it, expect, afterAll } from 'vitest';
 import pg from 'pg';
 import { eq } from 'drizzle-orm';
@@ -261,15 +262,6 @@ describe('restaurant_settings constraints', () => {
 		expect(error.constraint).toBe('restaurant_settings_tax_mode_valid');
 	});
 
-	it.each([-1, 10001])('rejects a tax rate of %i basis points', async (bp) => {
-		const id = await makeSettings();
-		const error = await expectError(
-			`update restaurant_settings set tax_rate_bp = $2 where restaurant_id = $1`,
-			[id, bp]
-		);
-		expect(error.constraint).toBe('restaurant_settings_tax_rate_bp_range');
-	});
-
 	it('rejects a currency code that is not three uppercase letters', async () => {
 		const id = await makeSettings();
 		const error = await expectError(
@@ -279,25 +271,29 @@ describe('restaurant_settings constraints', () => {
 		expect(error.constraint).toBe('restaurant_settings_currency_code_format');
 	});
 
-	it('lets all three be unset, and accepts valid values at both ends of the range', async () => {
+	it('lets both be unset, and accepts valid values', async () => {
 		const id = await makeSettings();
 		await pool.query(
-			`update restaurant_settings set tax_mode = null, tax_rate_bp = null, currency_code = null
+			`update restaurant_settings set tax_mode = null, currency_code = null
 			 where restaurant_id = $1`,
 			[id]
 		);
-		for (const bp of [0, 825, 10000]) {
-			await pool.query(
-				`update restaurant_settings set tax_mode = 'inclusive', tax_rate_bp = $2, currency_code = 'USD'
-				 where restaurant_id = $1`,
-				[id, bp]
-			);
-		}
-		const { rows } = await pool.query(
-			`select tax_mode, tax_rate_bp, currency_code from restaurant_settings where restaurant_id = $1`,
+		const unset = await pool.query(
+			`select tax_mode, currency_code from restaurant_settings where restaurant_id = $1`,
 			[id]
 		);
-		expect(rows[0]).toEqual({ tax_mode: 'inclusive', tax_rate_bp: 10000, currency_code: 'USD' });
+		expect(unset.rows[0]).toEqual({ tax_mode: null, currency_code: null });
+
+		await pool.query(
+			`update restaurant_settings set tax_mode = 'inclusive', currency_code = 'USD'
+			 where restaurant_id = $1`,
+			[id]
+		);
+		const { rows } = await pool.query(
+			`select tax_mode, currency_code from restaurant_settings where restaurant_id = $1`,
+			[id]
+		);
+		expect(rows[0]).toEqual({ tax_mode: 'inclusive', currency_code: 'USD' });
 	});
 
 	it('allows exactly the tax modes the money module knows', async () => {
@@ -325,8 +321,7 @@ describe('receipt header and kitchen note (menu-and-printing T-20)', () => {
 	const RECEIPT_COLUMNS = [
 		['receipt_address', 120, 'restaurant_settings_receipt_address_length'],
 		['receipt_phone', 40, 'restaurant_settings_receipt_phone_length'],
-		['tax_registration_number', 40, 'restaurant_settings_tax_registration_number_length'],
-		['receipt_footer', 120, 'restaurant_settings_receipt_footer_length']
+		['tax_registration_number', 40, 'restaurant_settings_tax_registration_number_length']
 	] as const;
 
 	it.each(RECEIPT_COLUMNS)(
@@ -415,17 +410,6 @@ describe('menu constraints (T-37)', () => {
 			[r, c]
 		);
 		expect(error.constraint).toBe('menu_items_price_minor_non_negative');
-	});
-
-	it('rejects an item tax rate above 10000 basis points', async () => {
-		const r = await makeRestaurant();
-		const c = await makeCategory(r);
-		const error = await expectError(
-			`insert into menu_items (restaurant_id, category_id, name, price_minor, tax_rate_bp)
-			 values ($1, $2, 'Tea', 850, 10001)`,
-			[r, c]
-		);
-		expect(error.constraint).toBe('menu_items_tax_rate_bp_range');
 	});
 
 	it("rejects an item in another restaurant's category", async () => {
@@ -2025,35 +2009,6 @@ describe('pos_sync_ops constraints (T-08)', () => {
 		);
 		expect(rowCount).toBe(1);
 	});
-
-	it('accepts_card and accepts_mobile land null with no default, and toggle freely', async () => {
-		const r = await makeRestaurant('sync-ops-settings');
-		await pool.query(
-			`insert into restaurant_settings (restaurant_id, time_zone) values ($1, 'UTC')`,
-			[r]
-		);
-		const { rows } = await pool.query<{
-			accepts_card: boolean | null;
-			accepts_mobile: boolean | null;
-		}>(`select accepts_card, accepts_mobile from restaurant_settings where restaurant_id = $1`, [
-			r
-		]);
-		expect(rows[0].accepts_card).toBeNull();
-		expect(rows[0].accepts_mobile).toBeNull();
-
-		const on = await pool.query(
-			`update restaurant_settings set accepts_card = true, accepts_mobile = false
-			 where restaurant_id = $1`,
-			[r]
-		);
-		expect(on.rowCount).toBe(1);
-		const off = await pool.query(
-			`update restaurant_settings set accepts_card = null, accepts_mobile = null
-			 where restaurant_id = $1`,
-			[r]
-		);
-		expect(off.rowCount).toBe(1);
-	});
 });
 
 describe('accounting constraints (T-08)', () => {
@@ -2553,5 +2508,629 @@ describe('inventory constraints (inventory-cogs T-07)', () => {
 				expect((error as pg.DatabaseError).constraint).toBe('journal_entries_source_type_valid');
 			}
 		});
+	});
+});
+
+describe('named tax rates, payment methods and receipt layout (settings-tax-payments-receipt T-06)', () => {
+	async function makeSettingsRow(r: string): Promise<void> {
+		await pool.query(
+			`insert into restaurant_settings (restaurant_id, time_zone) values ($1, 'UTC')`,
+			[r]
+		);
+	}
+
+	async function makeRate(r: string, name = 'VAT', rateBp = 500): Promise<string> {
+		const { rows } = await pool.query<{ id: string }>(
+			'insert into tax_rates (restaurant_id, name, rate_bp) values ($1, $2, $3) returning id',
+			[r, name, rateBp]
+		);
+		return rows[0].id;
+	}
+
+	async function makeMethod(
+		r: string,
+		name: string,
+		kind: string,
+		{
+			enabled = true,
+			merchantNumber = null
+		}: { enabled?: boolean; merchantNumber?: string | null } = {}
+	): Promise<string> {
+		const { rows } = await pool.query<{ id: string }>(
+			`insert into payment_methods (restaurant_id, name, kind, enabled, merchant_number)
+			 values ($1, $2, $3, $4, $5) returning id`,
+			[r, name, kind, enabled, merchantNumber]
+		);
+		return rows[0].id;
+	}
+
+	type LogoRow = {
+		widthDots: number;
+		heightDots: number;
+		byteSize?: number;
+		bitmap?: Buffer;
+		sha256?: string;
+	};
+
+	// By default the byte count and the bitmap MATCH the shape, so a refused row
+	// breaks only the CHECK under test: PostgreSQL evaluates CHECKs in name order,
+	// and receipt_logos_byte_size_matches sorts first.
+	function insertLogo(r: string, logo: LogoRow): Promise<pg.QueryResult> {
+		const byteSize = logo.byteSize ?? Math.floor(logo.widthDots / 8) * logo.heightDots;
+		return pool.query(
+			`insert into receipt_logos (restaurant_id, width_dots, height_dots, byte_size, bitmap, sha256)
+			 values ($1, $2, $3, $4, $5, $6)`,
+			[
+				r,
+				logo.widthDots,
+				logo.heightDots,
+				byteSize,
+				logo.bitmap ?? Buffer.alloc(byteSize),
+				logo.sha256 ?? 'a'.repeat(64)
+			]
+		);
+	}
+
+	/** The PostgreSQL error a pending statement fails with, failing if it succeeded. */
+	async function refusalOf(statement: Promise<unknown>): Promise<pg.DatabaseError> {
+		try {
+			await statement;
+		} catch (error) {
+			return error as pg.DatabaseError;
+		}
+		throw new Error('Expected this statement to be rejected, but it succeeded');
+	}
+
+	const INSERT_PAYMENT = `insert into payments (
+			restaurant_id, order_id, method, amount_minor, tendered_minor, change_minor, paid_at,
+			payment_method_id, payment_method_name
+		) values ($1, $2, $3, 1100, $4, $5, now(), $6, $7)`;
+
+	it('tax_rates: 0 and 10000 basis points are accepted; -1 and 10001 are refused', async () => {
+		const r = await makeRestaurant('rates-range');
+		await makeRate(r, 'Exempt', 0);
+		await makeRate(r, 'Everything', 10000);
+		for (const rateBp of [-1, 10001]) {
+			const error = await expectError(
+				'insert into tax_rates (restaurant_id, name, rate_bp) values ($1, $2, $3)',
+				[r, `Rate ${rateBp}`, rateBp]
+			);
+			expect(error.code).toBe('23514');
+			expect(error.constraint).toBe('tax_rates_rate_bp_range');
+		}
+		const { rows } = await pool.query<{ rate_bp: number }>(
+			'select rate_bp from tax_rates where restaurant_id = $1 order by rate_bp',
+			[r]
+		);
+		expect(rows.map((row) => row.rate_bp)).toEqual([0, 10000]);
+	});
+
+	it('tax_rates: an empty name, 41 characters and a control character are refused; 40 pass', async () => {
+		const r = await makeRestaurant('rates-names');
+		for (const name of ['', 'x'.repeat(41), 'VAT\u001b']) {
+			const error = await expectError(
+				'insert into tax_rates (restaurant_id, name, rate_bp) values ($1, $2, 500)',
+				[r, name]
+			);
+			expect(error.code).toBe('23514');
+			expect(error.constraint).toBe('tax_rates_name_valid');
+		}
+		expect(await makeRate(r, 'x'.repeat(40))).toBeTruthy();
+	});
+
+	it('tax_rates: two live rates may not share a name in any case; an archived one frees it', async () => {
+		const a = await makeRestaurant('rates-unique-A');
+		const b = await makeRestaurant('rates-unique-B');
+		const first = await makeRate(a, 'VAT');
+		const error = await expectError(
+			`insert into tax_rates (restaurant_id, name, rate_bp) values ($1, 'vat', 500)`,
+			[a]
+		);
+		expect(error.code).toBe('23505');
+		expect(error.constraint).toBe('tax_rates_name_unique');
+
+		await pool.query('update tax_rates set archived_at = now() where id = $1', [first]);
+		expect(await makeRate(a, 'VAT')).toBeTruthy();
+		expect(await makeRate(b, 'VAT')).toBeTruthy();
+	});
+
+	it("menu_items.tax_rate_id: NULL inserts; another restaurant's rate is refused", async () => {
+		const a = await makeRestaurant('item-rate-A');
+		const b = await makeRestaurant('item-rate-B');
+		const { rows } = await pool.query<{ tax_rate_id: string | null }>(
+			`insert into menu_items (restaurant_id, category_id, name, price_minor, tax_rate_id)
+			 values ($1, null, 'Tea', 850, null) returning tax_rate_id`,
+			[a]
+		);
+		expect(rows[0].tax_rate_id).toBeNull();
+
+		const rateOfB = await makeRate(b);
+		const error = await expectError(
+			`insert into menu_items (restaurant_id, category_id, name, price_minor, tax_rate_id)
+			 values ($1, null, 'Coffee', 900, $2)`,
+			[a, rateOfB]
+		);
+		expect(error.code).toBe('23503');
+		expect(error.constraint).toBe('menu_items_tax_rate_fk');
+
+		const rateOfA = await makeRate(a);
+		const { rows: own } = await pool.query<{ tax_rate_id: string | null }>(
+			`insert into menu_items (restaurant_id, category_id, name, price_minor, tax_rate_id)
+			 values ($1, null, 'Coffee', 900, $2) returning tax_rate_id`,
+			[a, rateOfA]
+		);
+		expect(own[0].tax_rate_id).toBe(rateOfA);
+	});
+
+	it("restaurant_settings.default_tax_rate_id: lands NULL with no default; another restaurant's rate is refused; its own is accepted", async () => {
+		const a = await makeRestaurant('default-rate-A');
+		const b = await makeRestaurant('default-rate-B');
+		await makeSettingsRow(a);
+		const { rows } = await pool.query<{ default_tax_rate_id: string | null }>(
+			'select default_tax_rate_id from restaurant_settings where restaurant_id = $1',
+			[a]
+		);
+		expect(rows[0].default_tax_rate_id).toBeNull();
+
+		const rateOfB = await makeRate(b);
+		const error = await expectError(
+			'update restaurant_settings set default_tax_rate_id = $2 where restaurant_id = $1',
+			[a, rateOfB]
+		);
+		expect(error.code).toBe('23503');
+		expect(error.constraint).toBe('restaurant_settings_default_tax_rate_fk');
+
+		const rateOfA = await makeRate(a);
+		const { rowCount } = await pool.query(
+			'update restaurant_settings set default_tax_rate_id = $2 where restaurant_id = $1',
+			[a, rateOfA]
+		);
+		expect(rowCount).toBe(1);
+	});
+
+	it('order_lines: the rate id and name are NULL on a line written the pre-plan way; a foreign rate and a bad name are refused', async () => {
+		const r = await makeRestaurant('line-rate');
+		const o = await makeOwner(r, 'line-rate@example.com');
+		const d = await makeDevice(r, o);
+		const s = await makeSession(r, d, o);
+		const orderId = await makeOrder(r, s, d, o);
+		const menuItemId = await makeMenuItem(r);
+		const lineId = await makeLine(r, orderId, menuItemId, { lineNo: 1 });
+		const { rows } = await pool.query<{
+			tax_rate_id: string | null;
+			tax_rate_name: string | null;
+		}>('select tax_rate_id, tax_rate_name from order_lines where id = $1', [lineId]);
+		expect(rows[0]).toEqual({ tax_rate_id: null, tax_rate_name: null });
+
+		const insertLine = `insert into order_lines (restaurant_id, order_id, line_no, menu_item_id,
+			 item_name, quantity, unit_price_minor, tax_rate_bp, discount_minor, status, tax_rate_id,
+			 tax_rate_name)
+			 values ($1, $2, $3, $4, 'Tea', 1, 850, 500, 0, 'new', $5, $6)`;
+
+		const other = await makeRestaurant('line-rate-other');
+		const rateOfOther = await makeRate(other);
+		const foreign = await expectError(insertLine, [r, orderId, 2, menuItemId, rateOfOther, 'VAT']);
+		expect(foreign.code).toBe('23503');
+		expect(foreign.constraint).toBe('order_lines_tax_rate_fk');
+
+		const ownRate = await makeRate(r);
+		for (const name of ['x'.repeat(41), '']) {
+			const error = await expectError(insertLine, [r, orderId, 3, menuItemId, ownRate, name]);
+			expect(error.code).toBe('23514');
+			expect(error.constraint).toBe('order_lines_tax_rate_name_length');
+		}
+	});
+
+	it('payment_methods: the kind CHECK lists exactly PAYMENT_METHODS', async () => {
+		const r = await makeRestaurant('method-kinds');
+		const error = await expectError(
+			`insert into payment_methods (restaurant_id, name, kind, enabled)
+			 values ($1, 'Cheque', 'cheque', true)`,
+			[r]
+		);
+		expect(error.code).toBe('23514');
+		expect(error.constraint).toBe('payment_methods_kind_valid');
+
+		// A restaurant with no cash row: one method of each kind, named after it.
+		for (const kind of PAYMENT_METHODS) {
+			expect(await makeMethod(r, kind, kind)).toBeTruthy();
+		}
+
+		const { rows } = await pool.query<{ def: string }>(
+			`select pg_get_constraintdef(oid) as def from pg_constraint
+			 where conname = 'payment_methods_kind_valid'`
+		);
+		expect(rows).toHaveLength(1);
+		const literals = [...rows[0].def.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort();
+		expect(literals).toEqual([...PAYMENT_METHODS].sort());
+	});
+
+	it('payment_methods: enabled has no default', async () => {
+		const r = await makeRestaurant('method-enabled');
+		const error = await expectError(
+			`insert into payment_methods (restaurant_id, name, kind) values ($1, 'EVC Plus', 'mobile')`,
+			[r]
+		);
+		expect(error.code).toBe('23502');
+		expect(error.column).toBe('enabled');
+	});
+
+	it('payment_methods: one cash row per restaurant', async () => {
+		const a = await makeRestaurant('one-cash-A');
+		const b = await makeRestaurant('one-cash-B');
+		await makeMethod(a, 'Cash', 'cash');
+		// Another name, so payment_methods_name_unique cannot answer first.
+		const error = await expectError(
+			`insert into payment_methods (restaurant_id, name, kind, enabled)
+			 values ($1, 'Till cash', 'cash', true)`,
+			[a]
+		);
+		expect(error.code).toBe('23505');
+		expect(error.constraint).toBe('payment_methods_one_cash');
+		expect(await makeMethod(b, 'Cash', 'cash')).toBeTruthy();
+	});
+
+	it('payment_methods: the cash row is always enabled, live and numberless', async () => {
+		const r = await makeRestaurant('cash-rules');
+		for (const statement of [
+			`insert into payment_methods (restaurant_id, name, kind, enabled)
+			 values ($1, 'Cash', 'cash', false)`,
+			`insert into payment_methods (restaurant_id, name, kind, enabled, archived_at)
+			 values ($1, 'Cash', 'cash', true, now())`,
+			`insert into payment_methods (restaurant_id, name, kind, enabled, merchant_number)
+			 values ($1, 'Cash', 'cash', true, '123')`
+		]) {
+			const error = await expectError(statement, [r]);
+			expect(error.code).toBe('23514');
+			expect(error.constraint).toBe('payment_methods_cash_rules');
+		}
+
+		const { rowCount } = await pool.query(
+			`insert into payment_methods (restaurant_id, name, kind, enabled, archived_at, merchant_number)
+			 values ($1, 'Old terminal', 'card', false, now(), '123')`,
+			[r]
+		);
+		expect(rowCount).toBe(1);
+	});
+
+	it('payment_methods: names and merchant numbers are 1–40 with no control characters; live names are unique', async () => {
+		const r = await makeRestaurant('method-text');
+		for (const name of ['', 'x'.repeat(41), 'EVC\nPlus']) {
+			const error = await refusalOf(makeMethod(r, name, 'mobile'));
+			expect(error.code).toBe('23514');
+			expect(error.constraint).toBe('payment_methods_name_valid');
+		}
+		for (const merchantNumber of ['', 'x'.repeat(41), '61\u001bp']) {
+			const error = await refusalOf(makeMethod(r, 'Zaad', 'mobile', { merchantNumber }));
+			expect(error.code).toBe('23514');
+			expect(error.constraint).toBe('payment_methods_merchant_number_valid');
+		}
+		expect(
+			await makeMethod(r, 'y'.repeat(40), 'card', { merchantNumber: '9'.repeat(40) })
+		).toBeTruthy();
+
+		await makeMethod(r, 'EVC Plus', 'mobile', { merchantNumber: '612345678' });
+		const duplicate = await refusalOf(makeMethod(r, 'evc plus', 'mobile'));
+		expect(duplicate.code).toBe('23505');
+		expect(duplicate.constraint).toBe('payment_methods_name_unique');
+	});
+
+	it("MANDATORY (spec 29 — posting rules for every business event, the database half): payments_payment_method_fk ties a payment's kind to its method row", async () => {
+		const r = await makeRestaurant('payment-method-fk');
+		const o = await makeOwner(r, 'payment-method-fk@example.com');
+		const d = await makeDevice(r, o);
+		const s = await makeSession(r, d, o);
+		const orderId = await makeOrder(r, s, d, o);
+		const card = await makeMethod(r, 'Card terminal', 'card');
+		const mobile = await makeMethod(r, 'EVC Plus', 'mobile', { merchantNumber: '612345678' });
+		const cash = await makeMethod(r, 'Cash', 'cash');
+		const other = await makeRestaurant('payment-method-fk-other');
+		const cardOfOther = await makeMethod(other, 'Card terminal', 'card');
+
+		// The kind on the payment picks the posting row (Dr 1020 for card); a
+		// mobile method id under method 'card' would post a wallet to the card
+		// clearing account.
+		const kindMismatch = await expectError(INSERT_PAYMENT, [
+			r,
+			orderId,
+			'card',
+			null,
+			null,
+			mobile,
+			'EVC Plus'
+		]);
+		expect(kindMismatch.code).toBe('23503');
+		expect(kindMismatch.constraint).toBe('payments_payment_method_fk');
+
+		const cardPaid = await pool.query(INSERT_PAYMENT, [
+			r,
+			orderId,
+			'card',
+			null,
+			null,
+			card,
+			'Visa'
+		]);
+		expect(cardPaid.rowCount).toBe(1);
+
+		const cashPaid = await pool.query(INSERT_PAYMENT, [
+			r,
+			orderId,
+			'cash',
+			2000,
+			900,
+			cash,
+			'Cash'
+		]);
+		expect(cashPaid.rowCount).toBe(1);
+
+		const foreign = await expectError(INSERT_PAYMENT, [
+			r,
+			orderId,
+			'card',
+			null,
+			null,
+			cardOfOther,
+			'Card terminal'
+		]);
+		expect(foreign.code).toBe('23503');
+		expect(foreign.constraint).toBe('payments_payment_method_fk');
+
+		// A row recorded before this plan: MATCH SIMPLE skips the key when the id is NULL.
+		const prePlan = await pool.query(INSERT_PAYMENT, [r, orderId, 'card', null, null, null, null]);
+		expect(prePlan.rowCount).toBe(1);
+	});
+
+	it('payments: the method id and name come as a pair; the name is 1–40', async () => {
+		const r = await makeRestaurant('payment-method-pair');
+		const o = await makeOwner(r, 'payment-method-pair@example.com');
+		const d = await makeDevice(r, o);
+		const s = await makeSession(r, d, o);
+		const orderId = await makeOrder(r, s, d, o);
+		const card = await makeMethod(r, 'Card terminal', 'card');
+
+		const idOnly = await expectError(INSERT_PAYMENT, [r, orderId, 'card', null, null, card, null]);
+		expect(idOnly.code).toBe('23514');
+		expect(idOnly.constraint).toBe('payments_payment_method_pair');
+
+		const nameOnly = await expectError(INSERT_PAYMENT, [
+			r,
+			orderId,
+			'card',
+			null,
+			null,
+			null,
+			'Visa'
+		]);
+		expect(nameOnly.code).toBe('23514');
+		expect(nameOnly.constraint).toBe('payments_payment_method_pair');
+
+		const longName = await expectError(INSERT_PAYMENT, [
+			r,
+			orderId,
+			'card',
+			null,
+			null,
+			card,
+			'x'.repeat(41)
+		]);
+		expect(longName.code).toBe('23514');
+		expect(longName.constraint).toBe('payments_payment_method_name_length');
+	});
+
+	// Proved from the catalogue, never by deleting a tax_rates or payment_methods
+	// row: from migration 0017 their BEFORE DELETE triggers answer first (P0001).
+	it('every new foreign key is ON DELETE RESTRICT and MATCH SIMPLE', async () => {
+		const names = [
+			'menu_items_tax_rate_fk',
+			'order_lines_tax_rate_fk',
+			'payments_payment_method_fk',
+			'restaurant_settings_default_tax_rate_fk'
+		];
+		const { rows } = await pool.query<{
+			conname: string;
+			confdeltype: string;
+			confmatchtype: string;
+		}>(
+			`select conname, confdeltype, confmatchtype from pg_constraint
+			 where conname = any($1) order by conname`,
+			[names]
+		);
+		expect(rows).toHaveLength(4);
+		expect(rows.map((row) => row.conname)).toEqual(names);
+		for (const row of rows) {
+			expect(row.confdeltype).toBe('r');
+			expect(row.confmatchtype).toBe('s');
+		}
+	});
+
+	it('receipt_lines: section, position 1–5, body 1–120 without control characters, one line per slot; DELETE is allowed', async () => {
+		const r = await makeRestaurant('receipt-lines');
+		const insertLine =
+			'insert into receipt_lines (restaurant_id, section, position, body) values ($1, $2, $3, $4)';
+
+		const badSection = await expectError(insertLine, [r, 'middle', 1, 'Thank you']);
+		expect(badSection.code).toBe('23514');
+		expect(badSection.constraint).toBe('receipt_lines_section_valid');
+
+		for (const position of [0, 6]) {
+			const error = await expectError(insertLine, [r, 'footer', position, 'Thank you']);
+			expect(error.code).toBe('23514');
+			expect(error.constraint).toBe('receipt_lines_position_range');
+		}
+
+		for (const body of ['', 'x'.repeat(121), 'Thanks\u001bp']) {
+			const error = await expectError(insertLine, [r, 'footer', 1, body]);
+			expect(error.code).toBe('23514');
+			expect(error.constraint).toBe('receipt_lines_body_valid');
+		}
+
+		await pool.query(insertLine, [r, 'footer', 1, 'x'.repeat(120)]);
+		const duplicate = await expectError(insertLine, [r, 'footer', 1, 'Come again']);
+		expect(duplicate.code).toBe('23505');
+		expect(duplicate.constraint).toBe('receipt_lines_pk');
+
+		const removed = await pool.query('delete from receipt_lines where restaurant_id = $1', [r]);
+		expect(removed.rowCount).toBe(1);
+	});
+
+	it('receipt_logos: the shape is exact; one per restaurant; DELETE is allowed', async () => {
+		const r = await makeRestaurant('receipt-logo');
+
+		for (const widthDots of [7, 12, 392]) {
+			const error = await refusalOf(insertLogo(r, { widthDots, heightDots: 1 }));
+			expect(error.code).toBe('23514');
+			expect(error.constraint).toBe('receipt_logos_width_dots_valid');
+		}
+
+		for (const heightDots of [0, 161]) {
+			const error = await refusalOf(insertLogo(r, { widthDots: 8, heightDots }));
+			expect(error.code).toBe('23514');
+			expect(error.constraint).toBe('receipt_logos_height_dots_range');
+		}
+
+		for (const byteSize of [3, 2]) {
+			const error = await refusalOf(
+				insertLogo(r, { widthDots: 8, heightDots: 2, byteSize, bitmap: Buffer.alloc(3) })
+			);
+			expect(error.code).toBe('23514');
+			expect(error.constraint).toBe('receipt_logos_byte_size_matches');
+		}
+
+		const upper = await refusalOf(
+			insertLogo(r, { widthDots: 8, heightDots: 1, sha256: 'A'.repeat(64) })
+		);
+		expect(upper.code).toBe('23514');
+		expect(upper.constraint).toBe('receipt_logos_sha256_format');
+
+		const stored = await insertLogo(r, { widthDots: 384, heightDots: 160 });
+		expect(stored.rowCount).toBe(1);
+		const { rows } = await pool.query<{ byte_size: number; bytes: number }>(
+			`select byte_size, octet_length(bitmap) as bytes from receipt_logos where restaurant_id = $1`,
+			[r]
+		);
+		expect(rows[0]).toEqual({ byte_size: 7680, bytes: 7680 });
+
+		const second = await refusalOf(insertLogo(r, { widthDots: 8, heightDots: 1 }));
+		expect(second.code).toBe('23505');
+		expect(second.constraint).toBe('receipt_logos_pkey');
+
+		const removed = await pool.query('delete from receipt_logos where restaurant_id = $1', [r]);
+		expect(removed.rowCount).toBe(1);
+	});
+
+	it('restaurant_settings: the nine receipt switches land true; the heading is NULL or 1–40 without control characters', async () => {
+		const r = await makeRestaurant('receipt-switches');
+		await makeSettingsRow(r);
+		const switches = [
+			'receipt_show_cashier',
+			'receipt_show_table',
+			'receipt_show_business_date',
+			'receipt_show_order_type',
+			'receipt_show_unit_price',
+			'receipt_show_currency_line',
+			'receipt_show_device_line',
+			'receipt_show_payment_numbers',
+			'receipt_tax_breakdown'
+		];
+		const { rows } = await pool.query<Record<string, boolean | string | null>>(
+			`select ${switches.join(', ')}, receipt_payment_numbers_heading
+			 from restaurant_settings where restaurant_id = $1`,
+			[r]
+		);
+		expect(rows[0]).toEqual({
+			...Object.fromEntries(switches.map((column) => [column, true])),
+			receipt_payment_numbers_heading: null
+		});
+
+		const nullSwitch = await expectError(
+			'update restaurant_settings set receipt_show_cashier = null where restaurant_id = $1',
+			[r]
+		);
+		expect(nullSwitch.code).toBe('23502');
+		expect(nullSwitch.column).toBe('receipt_show_cashier');
+
+		for (const heading of ['', 'x'.repeat(41), 'Pay\u0007']) {
+			const error = await expectError(
+				'update restaurant_settings set receipt_payment_numbers_heading = $2 where restaurant_id = $1',
+				[r, heading]
+			);
+			expect(error.code).toBe('23514');
+			expect(error.constraint).toBe('restaurant_settings_receipt_payment_numbers_heading_length');
+		}
+
+		for (const heading of ['x'.repeat(40), null]) {
+			const { rowCount } = await pool.query(
+				'update restaurant_settings set receipt_payment_numbers_heading = $2 where restaurant_id = $1',
+				[r, heading]
+			);
+			expect(rowCount).toBe(1);
+		}
+	});
+
+	it('migration 0016 adds only nullable columns to posted tables and changes no row', () => {
+		const dir = new URL('../migrations/', import.meta.url);
+		const files = readdirSync(dir).filter((file) => /^0016_.*\.sql$/.test(file));
+		expect(files).toHaveLength(1);
+		const text = readFileSync(new URL(files[0], dir), 'utf8');
+
+		expect(text).not.toMatch(/^\s*(UPDATE|DELETE|TRUNCATE)\b/im);
+		expect(text).not.toMatch(/\bDROP\b/i);
+
+		const added = [
+			...text.matchAll(
+				/ALTER TABLE "(orders|order_lines|payments|invoices)" ADD COLUMN "([a-z_]+)"[^;]*;/g
+			)
+		];
+		expect(added.map((m) => `${m[1]}.${m[2]}`).sort()).toEqual([
+			'order_lines.tax_rate_id',
+			'order_lines.tax_rate_name',
+			'payments.payment_method_id',
+			'payments.payment_method_name'
+		]);
+		for (const [statement] of added) {
+			expect(statement).not.toMatch(/NOT NULL/);
+			expect(statement).not.toMatch(/DEFAULT/);
+		}
+	});
+});
+
+describe('retired columns (settings-tax-payments-receipt T-33)', () => {
+	// Migration 0018 dropped the five columns that named tax rates, payment methods
+	// and receipt lines replaced, together with their three CHECKs (CLAUDE.md,
+	// "Settings 9"). order_lines.tax_rate_bp is NOT one of them: it is the number
+	// each past sale line was taxed at (invariant 7), and the positive control
+	// proves 0018 left it exactly as it was.
+	it('the five replaced columns no longer exist', async () => {
+		const { rows } = await pool.query(
+			`select table_name, column_name from information_schema.columns
+			 where (table_name = 'restaurant_settings'
+			        and column_name in ('tax_rate_bp', 'accepts_card', 'accepts_mobile', 'receipt_footer'))
+			    or (table_name = 'menu_items' and column_name = 'tax_rate_bp')`
+		);
+		expect(rows).toEqual([]);
+	});
+
+	it('their three CHECKs no longer exist', async () => {
+		const { rows } = await pool.query(
+			`select conname from pg_constraint
+			 where conname in ('restaurant_settings_tax_rate_bp_range',
+			                   'restaurant_settings_receipt_footer_length',
+			                   'menu_items_tax_rate_bp_range')`
+		);
+		expect(rows).toEqual([]);
+	});
+
+	it('positive control: order_lines.tax_rate_bp stays integer NOT NULL, with its range CHECK', async () => {
+		const { rows } = await pool.query(
+			`select is_nullable, data_type from information_schema.columns
+			 where table_name = 'order_lines' and column_name = 'tax_rate_bp'`
+		);
+		expect(rows).toEqual([{ is_nullable: 'NO', data_type: 'integer' }]);
+
+		const checks = await pool.query(
+			`select conname from pg_constraint where conname = 'order_lines_tax_rate_bp_range'`
+		);
+		expect(checks.rows).toEqual([{ conname: 'order_lines_tax_rate_bp_range' }]);
 	});
 });

@@ -35,6 +35,8 @@
 	const restored = getContext<Promise<void>>(RESTORED_CONTEXT) ?? Promise.resolve();
 
 	type Kind = 'receipt' | 'kitchen';
+	// The label by KIND for a sale recorded before it stored its method's name
+	// (settings-tax-payments-receipt T-19). Display only: nothing here decides by it.
 	const TENDER_LABEL: Record<string, string> = {
 		cash: 'Cash',
 		card: 'Card',
@@ -101,8 +103,12 @@
 	}
 
 	function tenderOf(order: LocalOrder<Cart>): string {
-		const method = order.sale?.payload.payments[0]?.method;
-		return method ? (TENDER_LABEL[method] ?? method) : '—';
+		const payment = order.sale?.payload.payments[0];
+		if (!payment) return '—';
+		// A sale recorded after T-19 stored the owner-named method it was taken with.
+		const name = payment.paymentMethodName;
+		if (typeof name === 'string' && name !== '') return name;
+		return TENDER_LABEL[payment.method] ?? payment.method;
 	}
 
 	/** Why the reprint buttons of this row are disabled, or null when they are not. */

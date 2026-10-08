@@ -10,10 +10,11 @@
 //
 // Spec 10, 17, 25, 26, 27. Invariants 1, 7, 11.
 
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, or, sql } from 'drizzle-orm';
 import type { Executor } from '../auth/session';
 import { restaurantSettings } from '../db/schema/restaurant-settings';
 import { orders, orderLines, orderLineModifiers, payments } from '../db/schema/orders';
+import { paymentMethods } from '../db/schema/payment-methods';
 import { posSessions } from '../db/schema/pos-sessions';
 import { posSyncOps } from '../db/schema/pos-sync';
 import { posDevices } from '../db/schema/pos-devices';
@@ -33,6 +34,14 @@ export type SalesReport = {
 		orderCount: number;
 	};
 	byTender: { method: 'cash' | 'card' | 'mobile'; amount: Minor; count: number }[];
+	byPaymentMethod: {
+		paymentMethodId: string | null;
+		name: string;
+		kind: 'cash' | 'card' | 'mobile';
+		archived: boolean;
+		amount: Minor;
+		count: number;
+	}[];
 	byOrderType: { orderType: OrderType; amount: Minor; count: number }[];
 	byEmployee: { userId: string | null; displayName: string; amount: Minor; count: number }[];
 	byItem: { menuItemId: string; itemName: string; quantity: number; amount: Minor }[];
@@ -50,6 +59,16 @@ export type SalesReport = {
 	}[];
 	flagged: { count: number; unrecordedCount: number };
 };
+
+// The name of a "by payment method" row that has no method row: card and mobile
+// payments recorded before named methods (tasks/settings-tax-payments-receipt),
+// whose payment_method_id is NULL and is never backfilled (invariant 2). Cash
+// reads 'Cash' only for a restaurant with no Cash row to fold into.
+const UNRECORDED_NAME = {
+	cash: 'Cash',
+	card: 'Card (method not recorded)',
+	mobile: 'Mobile money (method not recorded)'
+} as const;
 
 export async function defaultReportDate(
 	database: Executor,
@@ -144,6 +163,64 @@ export async function salesReport(
 			method: m,
 			amount: hit ? minor(BigInt(hit.amount)) : minor(0n),
 			count: hit ? hit.count : 0
+		};
+	});
+
+	// BY PAYMENT METHOD (spec 26). Grouped by the method row, named by its CURRENT
+	// name. A payment recorded before named methods has no id: cash folds into the
+	// one built-in Cash row (exactly one per restaurant, payment_methods_one_cash);
+	// card and mobile stay one row per kind, named as unrecorded.
+	const methodRows = await database
+		.select({
+			paymentMethodId: paymentMethods.id,
+			name: paymentMethods.name,
+			kind: payments.method,
+			archived: sql<boolean>`${paymentMethods.archivedAt} is not null`,
+			amount: sql<string>`coalesce(sum(${payments.amountMinor}), 0)::bigint`,
+			count: sql<number>`count(*)::int`
+		})
+		.from(payments)
+		.innerJoin(orders, eq(orders.id, payments.orderId))
+		.innerJoin(posSessions, eq(posSessions.id, orders.posSessionId))
+		.leftJoin(
+			paymentMethods,
+			and(
+				eq(paymentMethods.restaurantId, payments.restaurantId),
+				or(
+					eq(paymentMethods.id, payments.paymentMethodId),
+					and(
+						isNull(payments.paymentMethodId),
+						eq(payments.method, 'cash'),
+						eq(paymentMethods.kind, 'cash')
+					)
+				)
+			)
+		)
+		.where(salesFilter)
+		.groupBy(
+			paymentMethods.id,
+			paymentMethods.name,
+			paymentMethods.sortOrder,
+			paymentMethods.archivedAt,
+			payments.method
+		)
+		.orderBy(
+			sql`case when ${payments.method} = 'cash' then 0 when ${paymentMethods.id} is not null then 1 else 2 end`,
+			sql`${paymentMethods.sortOrder} nulls last`,
+			sql`lower(${paymentMethods.name})`,
+			payments.method
+		);
+	// No zero-fill: a method with no payments on this date has no row.
+	const byPaymentMethod: SalesReport['byPaymentMethod'] = methodRows.map((r) => {
+		// payments_method_valid admits exactly these three literals.
+		const kind = r.kind as 'cash' | 'card' | 'mobile';
+		return {
+			paymentMethodId: r.paymentMethodId,
+			name: r.name ?? UNRECORDED_NAME[kind],
+			kind,
+			archived: r.archived === true,
+			amount: minor(BigInt(r.amount)),
+			count: r.count
 		};
 	});
 
@@ -340,6 +417,7 @@ export async function salesReport(
 		businessDate,
 		totals: { grossSales, discounts, netSales, tax, takings, orderCount },
 		byTender,
+		byPaymentMethod,
 		byOrderType,
 		byEmployee,
 		byItem,

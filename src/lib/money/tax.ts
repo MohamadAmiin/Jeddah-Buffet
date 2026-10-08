@@ -14,6 +14,10 @@
 // setting (on the POS, from the cached menu snapshot). There is no default: a
 // default here would answer the tax-mode question for every owner who never chose.
 //
+// Rates typed by a person are parsed ONCE, by parsePercentToBp, and shown by
+// formatTaxRate (moved here from src/lib/pos/menu-view.ts by
+// tasks/settings-tax-payments-receipt T-08, which re-exports it). Neither rounds.
+//
 // Imported as '$lib/money/tax'. index.ts does not re-export this file: this file
 // imports index.ts, and a cycle in the module everything imports is not worth a
 // shorter import path.
@@ -77,4 +81,33 @@ export function taxOnAmount(amount: Exact, rateBp: number, mode: TaxMode): LineT
 /** The whole-amount wrapper an order line calls: taxOnAmount(exact(amount), …) and nothing else. */
 export function taxOnLine(amount: Minor, rateBp: number, mode: TaxMode): LineTax {
 	return taxOnAmount(exact(amount), rateBp, mode);
+}
+
+/** Basis points to "x.xx%": 825 → "8.25%". A rate is not money. */
+export function formatTaxRate(rateBp: number): string {
+	if (!Number.isInteger(rateBp) || rateBp < 0 || rateBp > 10_000) {
+		throw new TypeError('tax rate must be an integer number of basis points from 0 to 10000');
+	}
+	const whole = Math.trunc(rateBp / 100);
+	const fraction = String(rateBp % 100).padStart(2, '0');
+	return `${whole}.${fraction}%`;
+}
+
+const PERCENT_SHAPE = /^(\d{1,3})(?:\.(\d{1,2}))?$/;
+
+/**
+ * THE parser of a rate the owner TYPES as a percent: '8.25' → 825, '5' → 500,
+ * '0' → 0 (a 0% rate is legal), '100' → 10000. Null for anything else.
+ * Digit strings only: the basis points ARE the digits, the whole part followed
+ * by the fraction padded to two, so '8' + '25' is '825' and no decimal string
+ * ever becomes a number. A third decimal is REFUSED, never rounded. Rounding
+ * here would be a second rounding site (invariant 7). Returns null, never
+ * throws: a bad form field is a message, not a crash.
+ */
+export function parsePercentToBp(input: string): number | null {
+	const match = typeof input === 'string' ? PERCENT_SHAPE.exec(input.trim()) : null;
+	if (!match) return null;
+	const [, whole, fraction = ''] = match;
+	const bp = Number.parseInt(whole + fraction.padEnd(2, '0'), 10);
+	return bp <= 10_000 ? bp : null;
 }

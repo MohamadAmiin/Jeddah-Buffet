@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { compareVersions, parseSnapshot, SnapshotError } from './menu-snapshot';
 import {
 	bindDevice,
+	inTransaction,
 	openPosDb,
 	readBoundDeviceId,
 	readCachedEmployees,
@@ -14,6 +15,7 @@ import {
 	readMenu,
 	replaceMenu,
 	syncMenu,
+	withDb,
 	type CachedEmployee
 } from './store';
 
@@ -36,6 +38,7 @@ const item = {
 	name: 'Tea',
 	priceMinor: '850',
 	taxRateBp: null,
+	taxRate: { id: 'rate-tax', name: 'Tax', rateBp: 825 },
 	isAvailable: true,
 	sortOrder: 0,
 	modifierGroupIds: ['g1']
@@ -45,12 +48,14 @@ const item = {
 function payload(overrides: Record<string, unknown> = {}) {
 	return {
 		version: 7,
+		format: 2,
 		restaurantId: 'restaurant-A',
 		takenAt: '2026-09-15T18:00:00.000Z',
 		currency: 'USD',
 		currencyExponent: 2,
 		taxMode: 'exclusive',
 		taxRateBp: 825,
+		defaultTaxRate: { id: 'rate-tax', name: 'Tax', rateBp: 825 },
 		categories: [{ id: 'c1', name: 'Drinks', sortOrder: 0 }],
 		items: [item],
 		modifierGroups: [
@@ -106,6 +111,58 @@ describe('parseSnapshot — validates, never converts', () => {
 
 	it.each([undefined, 7.5, '7'])('rejects a version of %j', (version) => {
 		expect(() => parseSnapshot(payload({ version }))).toThrow(/version/);
+	});
+
+	// tasks/settings-tax-payments-receipt T-18: named tax rates.
+	it("parses format 2: the header's default rate and each item's resolved rate", () => {
+		const snapshot = parseSnapshot(payload());
+		expect(snapshot.format).toBe(2);
+		expect(snapshot.defaultTaxRate).toEqual({ id: 'rate-tax', name: 'Tax', rateBp: 825 });
+		expect(snapshot.items[0].taxRate).toEqual({ id: 'rate-tax', name: 'Tax', rateBp: 825 });
+
+		// A PRESENT null is "no rate": no default picked, and an item with neither.
+		const none = parseSnapshot(
+			payload({ defaultTaxRate: null, items: [{ ...item, taxRate: null }] })
+		);
+		expect(none.defaultTaxRate).toBeNull();
+		expect(none.items[0].taxRate).toBeNull();
+	});
+
+	it('reads a snapshot from a server before named rates as format 1 with null rates', () => {
+		const snapshot = parseSnapshot(
+			payload({
+				format: undefined,
+				defaultTaxRate: undefined,
+				items: [{ ...item, taxRate: undefined }]
+			})
+		);
+		expect(snapshot.format).toBe(1);
+		expect(snapshot.defaultTaxRate).toBeNull();
+		expect(snapshot.items[0].taxRate).toBeNull();
+		expect(snapshot.taxRateBp).toBe(825);
+	});
+
+	it('refuses a present rate of the wrong shape', () => {
+		const refusal = (overrides: Record<string, unknown>): Error => {
+			try {
+				parseSnapshot(payload(overrides));
+			} catch (error) {
+				expect(error).toBeInstanceOf(SnapshotError);
+				return error as Error;
+			}
+			throw new Error('parseSnapshot accepted a malformed rate');
+		};
+
+		expect(refusal({ format: 'two' }).message).toMatch(/format/);
+		expect(refusal({ defaultTaxRate: { id: 1, name: 'Tax', rateBp: 825 } }).message).toMatch(
+			/defaultTaxRate\.id/
+		);
+		expect(
+			refusal({ items: [{ ...item, taxRate: { id: 'r', name: 'VAT', rateBp: '500' } }] }).message
+		).toMatch(/items\[0\]\.taxRate\.rateBp/);
+		expect(refusal({ items: [{ ...item, taxRate: 500 }] }).message).toMatch(
+			/items\[0\]\.taxRate is not an object/
+		);
 	});
 });
 
@@ -302,6 +359,79 @@ describe('the menu in IndexedDB', () => {
 
 		await expect(syncMenu(fakeFetch)).rejects.toThrow(/priceMinor/);
 		expect((await readMenu())!.version).toBe(7);
+	});
+
+	// tasks/settings-tax-payments-receipt T-18: named tax rates (menu format 2).
+	it('round-trips format, the default rate and the item rate through replaceMenu and readMenu', async () => {
+		await replaceMenu(parseSnapshot(payload()));
+
+		const menu = await readMenu();
+
+		expect(menu!.format).toBe(2);
+		expect(menu!.defaultTaxRate).toEqual({ id: 'rate-tax', name: 'Tax', rateBp: 825 });
+		expect(menu!.items[0].taxRate).toEqual({ id: 'rate-tax', name: 'Tax', rateBp: 825 });
+		expect(menu!.taxRateBp).toBe(825);
+	});
+
+	it('reads a copy written by the previous build', async () => {
+		// The rows exactly as the build before named rates wrote them: a header with
+		// no format and no defaultTaxRate, an item with no taxRate.
+		await withDb((db) =>
+			inTransaction(db, ['menu', 'settings'], 'readwrite', (tx) => {
+				const menu = tx.objectStore('menu');
+				menu.put({
+					id: 'snapshot',
+					kind: 'snapshot',
+					data: { currency: 'USD', currencyExponent: 2, taxMode: 'exclusive', taxRateBp: 825 }
+				});
+				menu.put({
+					id: 'item:i1',
+					kind: 'item',
+					data: {
+						id: 'i1',
+						categoryId: 'c1',
+						imageId: null,
+						name: 'Tea',
+						priceMinor: '850',
+						taxRateBp: null,
+						isAvailable: true,
+						sortOrder: 0,
+						modifierGroupIds: []
+					}
+				});
+				const settings = tx.objectStore('settings');
+				settings.put({ key: 'menuVersion', value: 7 });
+				settings.put({ key: 'menuRestaurantId', value: 'restaurant-A' });
+			})
+		);
+
+		const menu = await readMenu();
+
+		expect(menu!.format).toBe(1);
+		expect(menu!.defaultTaxRate).toBeNull();
+		expect(menu!.items[0].taxRate).toBeNull();
+		expect(menu!.items[0].priceMinor).toBe(850n);
+	});
+
+	it('replaces a format-1 copy at an EQUAL version', async () => {
+		await replaceMenu(parseSnapshot(payload({ format: undefined })));
+		expect((await readMenu())!.format).toBe(1);
+
+		const calls: string[] = [];
+		const server = { version: 7, restaurantId: 'restaurant-A' };
+		const fakeFetch = (async (url: string) => {
+			calls.push(url);
+			const body = url === '/api/menu/version' ? server : payload({ ...server });
+			return new Response(JSON.stringify(body), { status: 200 });
+		}) as unknown as typeof fetch;
+
+		expect(await syncMenu(fakeFetch)).toBe('replaced');
+		expect(calls).toEqual(['/api/menu/version', '/api/menu']);
+		expect((await readMenu())!.format).toBe(2);
+
+		calls.length = 0;
+		expect(await syncMenu(fakeFetch)).toBe('up-to-date');
+		expect(calls).toEqual(['/api/menu/version']);
 	});
 
 	it('drops the menu with everything else when the device changes', async () => {

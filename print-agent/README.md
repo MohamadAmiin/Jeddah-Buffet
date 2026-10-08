@@ -5,7 +5,10 @@
 The print agent is the small local program that owns the receipt printer, the kitchen printer and
 the cash drawer (spec 11). The browser never talks to hardware: the till sends a finished receipt or
 kitchen ticket to the agent as plain text lines, and the agent turns it into ESC/POS bytes, sends it
-to the printer, and opens the drawer on a cash sale. It runs on the **same PC as the till's Chrome**
+to the printer, and opens the drawer on a cash sale. From version 2, a receipt may also carry the
+restaurant's logo as a small black-and-white picture. The agent accepts it only in an exact, checked
+size — its shape and its byte count, not the dots themselves — and prints it with printer commands
+it writes itself (sections 9 and 10). It runs on the **same PC as the till's Chrome**
 and listens on `127.0.0.1` only — nothing on the network can reach it, and the till must present its
 pairing secret on every request. Nobody types that secret: the owner presses **Pair this till** on
 the till's Printer screen and the agent hands it over, once (section 5).
@@ -196,13 +199,15 @@ rule is needed for it.
 
 The till shows one chip for printing, always with a glyph so colour never carries the meaning alone:
 
-| Chip                              | Meaning                                                                     | Fix                                                                                                      |
-| --------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `● Printer ready` (· _n_ waiting) | The agent answers and the printer accepts connections; _n_ jobs are queued. | —                                                                                                        |
-| `◆ Printer unreachable`           | The agent is stopped, or the printer is off or has a different IP.          | Section 4 (`systemctl status …`), then check the printer's power, network cable and IP in `config.json`. |
-| `✕ Printing blocked by Chrome`    | Chrome denied local network access for the till's address.                  | Section 5, second paragraph.                                                                             |
-| `✕ Printer pairing is wrong`      | The agent was set up again (`init --force`) after this till was paired.     | Printer → **Forget pairing**, then pair again (section 5).                                               |
-| `○ Printer not set up`            | The till has never been paired.                                             | Section 5.                                                                                               |
+| Chip                                                           | Meaning                                                                                                                                            | Fix                                                                                                      |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `● Printer ready` (· _n_ waiting)                              | The agent answers and the printer accepts connections; _n_ jobs are queued.                                                                        | —                                                                                                        |
+| `◆ Update the print agent to print the logo` (· _n_ waiting)   | The owner set a receipt logo, but this agent is version 1. Every receipt still prints in full, without the logo.                                   | Section 9 (update the agent).                                                                            |
+| `◆ Test-print the logo before receipts use it` (· _n_ waiting) | The agent is version 2, but this logo's test print is not confirmed on this till at present. Every receipt still prints in full, without the logo. | Section 10.                                                                                              |
+| `◆ Printer unreachable`                                        | The agent is stopped, or the printer is off or has a different IP.                                                                                 | Section 4 (`systemctl status …`), then check the printer's power, network cable and IP in `config.json`. |
+| `✕ Printing blocked by Chrome`                                 | Chrome denied local network access for the till's address.                                                                                         | Section 5, second paragraph.                                                                             |
+| `✕ Printer pairing is wrong`                                   | The agent was set up again (`init --force`) after this till was paired.                                                                            | Printer → **Forget pairing**, then pair again (section 5).                                               |
+| `○ Printer not set up`                                         | The till has never been paired.                                                                                                                    | Section 5.                                                                                               |
 
 ## 8. Paper out and outages
 
@@ -221,7 +226,56 @@ The till shows one chip for printing, always with a glyph so colour never carrie
 Replace `print-agent/src/` with the new version and restart the service (`sudo systemctl restart
 matcami-print-agent`, or end and re-run the scheduled task). `config.json` and `data/` are kept.
 
-## 10. Logs
+**Version 2 — the receipt logo.** Version 2 adds the receipt logo. The till asks the agent for its
+version and sends a logo only to version 2 or later; until then every receipt prints in full without
+the logo, and the printer chip reads `◆ Update the print agent to print the logo` (section 7).
+Update the agent on the till PC **before** uploading a logo on the dashboard. The update keeps
+`config.json` — and with it the pairing, so no new pairing is needed — and `data/`, and jobs waiting
+in `data/queue/` print normally after the restart. After the restart, reload the till: the update
+chip disappears. If a logo is already set, the chip then reads
+`◆ Test-print the logo before receipts use it` until the logo is checked (section 10).
+
+## 10. Checking the logo
+
+The agent prints the logo with the ESC/POS image command `GS v 0`, which Epson marks obsolete and
+not every printer understands. Only a test print on the restaurant's own printer shows whether this
+one does, so receipts carry the logo only after the owner has checked it:
+
+1. On the dashboard, the owner uploads the logo on **Settings → Receipt** (`/settings/receipt`). It
+   is converted to black and white, at most 384 dots wide and 160 dots tall (about 48 × 20 mm), so
+   it fits 58 mm and 80 mm paper; the agent centres it.
+2. On the till, while it is online, go back to the employee screen (employee menu →
+   **Switch employee**), or reload that screen if the till is already showing it. The employee
+   screen downloads the till's settings, and the logo with them.
+3. Sign in as the owner, open the employee menu → **Printer** and press **Test print**. The receipt
+   printer's test page should start with the logo, and the results under the button include
+   `● The logo was sent — it should print at the top of the receipt test page.` If they say
+   `◆ The logo was left off — update the print agent on this PC to version 2` instead, update the
+   agent first (section 9). If the screen says `● Test page sent to the receipt printer` and neither
+   of those lines, the till has no logo yet: repeat step 2.
+4. If the logo printed correctly, press **The logo printed correctly** under the result; the screen
+   reads `● Receipts will print the logo`. Receipts carry the logo only after that confirmation, and
+   a new or changed logo needs a new test print and a new confirmation; until then the printer chip
+   reads `◆ Test-print the logo before receipts use it`.
+5. If the paper shows garbage characters, random dots, or nothing where the logo should be, press
+   **It did not print correctly**: the printer does not support the `GS v 0` image command. Remove
+   the logo on **Settings → Receipt** at once, then bring the till back to the employee screen while
+   it is online (step 2) so it drops its copy. Receipts print exactly as before either way, because
+   an unconfirmed logo never reaches a receipt. Removing it matters all the same: a printer that
+   does not understand the logo command can read the picture's dots as text or as printer commands,
+   and every test page from this till still carries the logo.
+6. Repeat the check after replacing or re-configuring the printer. The till cannot tell one
+   printer from another, so it asks for the confirmation again by itself only when it is
+   re-registered or its pairing changes — **Forget pairing**, **Pair this till** or the agent's
+   link (section 5) — and its receipts print without the logo until a test print is confirmed
+   again (step 4). A printer replaced or re-configured behind the same pairing goes unnoticed:
+   this till's receipts keep carrying the logo until the check is repeated. If the logo does not
+   print correctly there, press **It did not print correctly**: this till's receipts print without
+   the logo from then on, until a test print is confirmed again. Removing the logo on
+   **Settings → Receipt** is still how to take it off every till, and off this till's test pages;
+   then bring each till back to the employee screen while it is online (step 2).
+
+## 11. Logs
 
 `print-agent/data/agent.log` holds one line per printed job and per drawer pulse, for example:
 

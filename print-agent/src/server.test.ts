@@ -10,7 +10,8 @@ import {
 	type AgentDeps,
 	type AgentStatus,
 	type DrawerRequest,
-	type Job
+	type Job,
+	type PrintLine
 } from './server.ts';
 
 const ORIGIN = 'https://pos.example.com';
@@ -28,7 +29,7 @@ const config: AgentConfig = {
 };
 
 const status: AgentStatus = {
-	agentVersion: 1,
+	agentVersion: 2,
 	printers: {
 		receipt: { width: 48, reachable: true, queued: 0 },
 		kitchen: { width: 32, reachable: false, queued: 2 }
@@ -387,6 +388,43 @@ describe('routes', () => {
 		});
 	});
 
+	it('POST /jobs: an image line beside text is 202, and a width that is not a multiple of 8 is 422', async () => {
+		const h = harness();
+		const { port, good } = await start(h.deps);
+		const json = good({ 'content-type': 'application/json' });
+		const lines: PrintLine[] = [
+			{ image: { widthDots: 8, heightDots: 2, bitmap: '/4E=' } },
+			{ text: 'Hello' }
+		];
+		const ok = await call(port, {
+			method: 'POST',
+			path: '/jobs',
+			headers: json,
+			body: jobBody({ lines })
+		});
+		expect(ok.status).toBe(202);
+		expect(ok.json).toEqual({ status: 'queued' });
+		expect(h.jobs.at(-1)).toEqual({
+			id: 'order-1:receipt:0',
+			printer: 'receipt',
+			lines,
+			cut: true
+		});
+
+		const bad = await call(port, {
+			method: 'POST',
+			path: '/jobs',
+			headers: json,
+			body: jobBody({ lines: [{ image: { widthDots: 12, heightDots: 2, bitmap: '/4E=' } }] })
+		});
+		expect(bad.status).toBe(422);
+		expect(bad.json).toMatchObject({
+			error: 'bad_job',
+			detail: expect.stringMatching(/widthDots/)
+		});
+		expect(h.jobs).toHaveLength(1);
+	});
+
 	it('POST /drawer maps opened/duplicate → 200, too_late → 409, printer_unreachable → 503, bad body → 422', async () => {
 		const h = harness();
 		const { port, good } = await start(h.deps);
@@ -463,5 +501,63 @@ describe('parseJob', () => {
 		expect(() =>
 			parseJob({ id: 'a', printer: 'fax', lines: [{ text: 'a' }], cut: true }, printers)
 		).toThrow(/printer/);
+	});
+
+	const bitmapOf = (bytes: number) => Buffer.alloc(bytes, 0x00).toString('base64');
+	const imageJob = (
+		printer: Job['printer'],
+		widthDots: number,
+		heightDots: number,
+		bitmap = bitmapOf((widthDots / 8) * heightDots)
+	) => ({ id: 'img', printer, lines: [{ image: { widthDots, heightDots, bitmap } }], cut: false });
+
+	it("accepts image lines up to the target printer's dots", () => {
+		const printers = config.printers;
+		// 48 columns on the receipt printer: 576 dots.
+		expect(() => parseJob(imageJob('receipt', 576, 1), printers)).not.toThrow();
+		// 32 columns on the kitchen printer: 384 dots, and not one byte more.
+		expect(() => parseJob(imageJob('kitchen', 384, 1), printers)).not.toThrow();
+		expect(() => parseJob(imageJob('kitchen', 392, 1), printers)).toThrow(/widthDots/);
+		// With no kitchen printer a kitchen job falls back to the receipt width.
+		const noKitchen = { receipt: printers.receipt, kitchen: null };
+		expect(() => parseJob(imageJob('kitchen', 576, 1), noKitchen)).not.toThrow();
+		expect(() => parseJob(imageJob('receipt', 384, 240), printers)).not.toThrow();
+		// The parsed line is a fresh object holding exactly the three fields.
+		const raw = imageJob('receipt', 8, 1, 'AA==');
+		const parsed = parseJob(raw, printers);
+		expect(parsed.lines).toEqual([{ image: { widthDots: 8, heightDots: 1, bitmap: 'AA==' } }]);
+		expect(parsed.lines[0]).not.toBe(raw.lines[0]);
+		// A job holding only an image line is valid; two image lines are allowed.
+		expect(() => parseJob({ ...raw, lines: [raw.lines[0], raw.lines[0]] }, printers)).not.toThrow();
+	});
+
+	it('refuses malformed image lines', () => {
+		const printers = config.printers;
+		const bad = (lines: unknown[]) => () =>
+			parseJob({ id: 'a', printer: 'receipt', lines, cut: true }, printers);
+		const img = (over: Record<string, unknown> = {}) => ({
+			image: { widthDots: 8, heightDots: 2, bitmap: '/4E=', ...over }
+		});
+		expect(bad([img({ widthDots: 12 })])).toThrow(/lines\[0\]\.image\.widthDots/);
+		expect(bad([img({ widthDots: 0 })])).toThrow(/widthDots/);
+		expect(bad([img({ widthDots: '8' })])).toThrow(/widthDots/);
+		expect(bad([img({ heightDots: 0 })])).toThrow(/heightDots/);
+		expect(bad([img({ heightDots: 241 })])).toThrow(/heightDots/);
+		expect(bad([img({ heightDots: 1.5 })])).toThrow(/heightDots/);
+		// Node decodes all three leniently to FF 81; the canonical round trip refuses them.
+		for (const bitmap of ['/4F=', '/4E', '_4E=']) {
+			expect(Buffer.from(bitmap, 'base64')).toEqual(Buffer.from([0xff, 0x81]));
+			expect(bad([img({ bitmap })]), bitmap).toThrow(/bitmap/);
+		}
+		// Three bytes for an 8 × 2 image (two bytes): same base64 length, wrong byte count.
+		expect(bad([img({ bitmap: 'AAAA' })])).toThrow(/bitmap/);
+		expect(bad([img({ bitmap: 42 })])).toThrow(/bitmap/);
+		// Nothing beside the image, and nothing inside it but the three fields.
+		expect(bad([{ ...img(), bold: true }])).toThrow(/lines\[0\] with an image/);
+		expect(bad([img({ dither: 1 })])).toThrow(/lines\[0\]\.image must have exactly/);
+		expect(bad([{ text: 'a', ...img() }])).toThrow(/lines\[0\] with an image/);
+		expect(bad([{ image: 'AA==' }])).toThrow(/lines\[0\]\.image must be an object/);
+		const one = { image: { widthDots: 8, heightDots: 1, bitmap: 'AA==' } };
+		expect(bad([one, one, one])).toThrow(/at most 2/);
 	});
 });

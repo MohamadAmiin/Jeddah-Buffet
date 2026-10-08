@@ -121,6 +121,19 @@ export type OpSummary = { lines: string[]; total: string | null; tender: string 
 
 const UNREADABLE: OpSummary = { lines: ['Payload could not be read'], total: null, tender: null };
 const DIGITS = /^-?\d+$/;
+/** The control characters a payment method's name may not hold (the validator's rule). */
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+
+/**
+ * The payment method's name, when the stored payload holds one fit to show: a
+ * string of 1–40 characters with no control character. The payload is untrusted —
+ * an unrecorded op may hold a name the validator refused — so anything else is
+ * null and the caller shows the kind instead (tasks/settings-tax-payments-receipt).
+ */
+function methodName(value: unknown): string | null {
+	if (typeof value !== 'string' || value.length < 1 || value.length > 40) return null;
+	return CONTROL.test(value) ? null : value;
+}
 
 function isRecord(v: unknown): v is Record<string, unknown> {
 	return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -161,7 +174,13 @@ export function summarizeOp(kind: OpKind, payload: unknown, format: MoneyFormat 
 					const p = payload.payments[0];
 					const amount = money(p.amountMinor, format);
 					if (typeof p.method === 'string' && p.method.length > 0 && amount !== null) {
-						tender = `${p.method[0].toUpperCase()}${p.method.slice(1)} ${amount}`;
+						// The named method ('EVC Plus 9.35 USD'); else the capitalised kind
+						// ('Mobile 9.35 USD'), as for a payload queued before named methods.
+						const name = methodName(p.paymentMethodName);
+						tender =
+							name !== null
+								? `${name} ${amount}`
+								: `${p.method[0].toUpperCase()}${p.method.slice(1)} ${amount}`;
 					}
 				}
 				return { lines, total, tender };

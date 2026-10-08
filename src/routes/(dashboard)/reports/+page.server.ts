@@ -13,6 +13,8 @@ import type { OrderType } from '$lib/sync-ops';
 // boolean from a comparison, so the page never inspects a number (invariants 1, 7).
 
 const TENDER_LABELS = { cash: 'Cash', card: 'Card', mobile: 'Mobile' } as const;
+// The Type column of "By payment method": the kind of each named method.
+const METHOD_KIND_LABELS = { cash: 'Cash', card: 'Card', mobile: 'Mobile money' } as const;
 // A Record over the wire contract's type: a fourth order type with no label here
 // fails to compile, instead of being mislabelled as the "other" one.
 const ORDER_TYPE_LABELS: Record<OrderType, string> = {
@@ -100,6 +102,15 @@ export const load: ServerLoad = async (event) => {
 		byTender: report.byTender.map((r) => ({
 			method: r.method,
 			label: TENDER_LABELS[r.method],
+			count: r.count,
+			amount: column(r.amount)
+		})),
+		// One row per method row; a payment with no method row (recorded before
+		// named methods) is keyed by its kind. "(archived)" is words, not colour.
+		byPaymentMethod: report.byPaymentMethod.map((r) => ({
+			key: r.paymentMethodId ?? `unrecorded-${r.kind}`,
+			label: r.archived ? `${r.name} (archived)` : r.name,
+			kind: METHOD_KIND_LABELS[r.kind],
 			count: r.count,
 			amount: column(r.amount)
 		})),

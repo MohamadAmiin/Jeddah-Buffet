@@ -13,7 +13,9 @@ import {
 	LINE_STATUSES,
 	SESSION_STATUSES,
 	type OpEnvelope,
-	type SaleCompletePayload
+	type SaleCompletePayload,
+	type SaleLine,
+	type SalePayment
 } from './index';
 import { TAX_MODES, type TaxMode } from '../money/tax';
 
@@ -177,6 +179,90 @@ describe('wire safety', () => {
 			}
 		};
 		expect(JSON.parse(JSON.stringify(envelope))).toEqual(envelope);
+	});
+
+	it('a payload carrying the four optional keys survives the round trip', () => {
+		// The test above is the PRE-PLAN payload: it carries none of the four keys
+		// settings-tax-payments-receipt T-14 added, and it must still type-check
+		// and round-trip. This is the same envelope from a till that knows the
+		// line's named rate and the payment's named method.
+		const envelope: OpEnvelope<'sale.complete', SaleCompletePayload> = {
+			kind: 'sale.complete',
+			clientOpId: '00000000-0000-4000-8000-000000000001',
+			deviceId: 'device-uuid',
+			employeeId: 'employee-uuid',
+			occurredAt: '2026-09-28T12:34:56.000Z',
+			seq: 1,
+			payload: {
+				orderId: 'order-uuid',
+				posSessionId: 'session-uuid',
+				orderType: 'takeaway',
+				tableLabel: null,
+				taxMode: 'exclusive',
+				currencyCode: 'USD',
+				menuVersion: 1,
+				invoiceSeq: 1,
+				invoiceNumber: 'POS1-000001',
+				openedAt: '2026-09-28T12:00:00.000Z',
+				lines: [
+					{
+						lineId: 'line-uuid',
+						lineNo: 1,
+						menuItemId: 'menu-item-uuid',
+						itemName: 'Test item',
+						quantity: 2,
+						unitPriceMinor: '850',
+						taxRateBp: 825,
+						taxRateId: '00000000-0000-4000-8000-0000000000a1',
+						taxRateName: 'VAT',
+						discountMinor: '0',
+						modifiers: [
+							{
+								modifierId: 'modifier-uuid',
+								modifierName: 'Extra',
+								priceDeltaMinor: '50'
+							}
+						]
+					}
+				],
+				totals: {
+					// 1800 × 8.25% = 148.5, half away from zero → 149
+					subtotalMinor: '1800',
+					discountMinor: '0',
+					taxMinor: '149',
+					totalMinor: '1949'
+				},
+				payments: [
+					{
+						paymentId: 'payment-uuid',
+						method: 'mobile',
+						paymentMethodId: '00000000-0000-4000-8000-0000000000a2',
+						paymentMethodName: 'EVC Plus',
+						amountMinor: '1949',
+						tenderedMinor: null,
+						changeMinor: null
+					}
+				]
+			}
+		};
+		expect(JSON.parse(JSON.stringify(envelope))).toEqual(envelope);
+	});
+
+	it('the four new keys are optional and nullable', () => {
+		// Compile-time pin: `none` compiles only while all four keys are optional,
+		// `nulls` only while each one accepts null. Making a key required would
+		// break every sale queued before settings-tax-payments-receipt — a cash
+		// sale the server must record (invariant 5).
+		const none: Pick<SaleLine, 'taxRateId' | 'taxRateName'> &
+			Pick<SalePayment, 'paymentMethodId' | 'paymentMethodName'> = {};
+		const nulls: typeof none = {
+			taxRateId: null,
+			taxRateName: null,
+			paymentMethodId: null,
+			paymentMethodName: null
+		};
+		expect(none).toEqual({});
+		expect(Object.values(nulls).every((v) => v === null)).toBe(true);
 	});
 
 	it('is why the wire type is string: JSON.stringify throws on a bigint', () => {
