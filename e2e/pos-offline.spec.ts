@@ -373,8 +373,8 @@ test('the till signs employees in offline from cached hashes, and a retry never 
 		.getByRole('navigation', { name: 'Dashboard sections' })
 		.getByRole('link', { name: 'POS device', exact: true })
 		.click();
-	await page.getByText('Revoke this device…').click();
-	await page.getByRole('button', { name: 'Revoke device' }).click();
+	// One revoke per live till, named by its code (many tills, 2026-10-08).
+	await page.getByRole('button', { name: 'Revoke POS1' }).click();
 	await expect(page.getByRole('alert')).toContainText('Device revoked');
 
 	await tillPage.goto(TILL_URL);
