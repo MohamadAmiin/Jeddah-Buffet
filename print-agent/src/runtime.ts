@@ -36,6 +36,8 @@ export type Runtime = {
 	deps: Omit<AgentDeps, 'claimPairing'>;
 	/** Answer another app origin from now on (the setup page; tills under the old one must pair again). */
 	setOrigin: (origin: string) => Promise<void>;
+	/** Replace the pairing token (the setup page's "Reset the pairing key"; every till pairs again). */
+	setToken: (token: string) => Promise<void>;
 	/** Stop the queue; an in-flight print finishes and queued files stay on disk. */
 	close: () => Promise<void>;
 };
@@ -154,6 +156,11 @@ export function createRuntime(args: {
 		setOrigin: (origin) =>
 			serial(async () => {
 				save({ ...config, origin: parseOrigin(origin) });
+			}),
+		setToken: (token) =>
+			serial(async () => {
+				// saveConfig's parse refuses anything but 64 lowercase hex.
+				save({ ...config, token });
 			}),
 		close: async () => {
 			await chain;

@@ -29,7 +29,7 @@
 // (settings-tax-payments-receipt T-25). The encoder (escpos.ts) is the second
 // wall for both.
 import { timingSafeEqual } from 'node:crypto';
-import { createServer, type IncomingMessage, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import {
 	DEFAULT_PRINTER_PORT,
 	parsePrinter,
@@ -92,6 +92,16 @@ export type AgentDeps = {
 	setPrinters: (printers: AgentConfig['printers']) => Promise<SetPrintersOutcome>;
 	/** Take open pairing's one claim (pairing.ts claimPairing). */
 	claimPairing: () => PairingClaim;
+	/**
+	 * The agent's own setup page and API (setup.ts createSetupHandler). It has
+	 * walls of its own and answers the agent's OWN loopback origin, so it runs
+	 * after the Host wall and before the Origin wall; true = it answered.
+	 */
+	setup?: (
+		req: IncomingMessage,
+		res: ServerResponse,
+		ctx: { boundPort: number; config: AgentConfig }
+	) => Promise<boolean>;
 };
 
 export const MAX_BODY_BYTES = 65_536;
@@ -258,7 +268,8 @@ export function parseDrawerRequest(raw: unknown): DrawerRequest {
 
 // ── The server ──────────────────────────────────────────────────────────────
 
-function readBody(
+/** A request body up to MAX_BODY_BYTES — shared with the setup API (setup.ts). */
+export function readBody(
 	req: IncomingMessage
 ): Promise<{ ok: true; text: string } | { ok: false; reason: 'too_large' }> {
 	return new Promise((resolve, reject) => {
@@ -373,13 +384,18 @@ export function createAgentServer(getConfig: () => AgentConfig, deps: AgentDeps)
 			});
 			res.end(status === 204 ? undefined : JSON.stringify(body));
 		};
-		void handle(req, config, send).catch(() => {
+		void handle(req, res, config, send).catch(() => {
 			if (!res.headersSent) send(500, { error: 'internal' });
 			else res.end();
 		});
 	});
 
-	async function handle(req: IncomingMessage, config: AgentConfig, send: Send): Promise<void> {
+	async function handle(
+		req: IncomingMessage,
+		res: ServerResponse,
+		config: AgentConfig,
+		send: Send
+	): Promise<void> {
 		const address = server.address();
 		const boundPort = typeof address === 'object' && address ? address.port : config.port;
 		const allowedHosts = new Set([`127.0.0.1:${boundPort}`, `localhost:${boundPort}`]);
@@ -389,6 +405,8 @@ export function createAgentServer(getConfig: () => AgentConfig, deps: AgentDeps)
 			send(403, { error: 'bad_host' });
 			return;
 		}
+		// 1b. The agent's own setup page (setup.ts): its own origin, its own walls.
+		if (deps.setup && (await deps.setup(req, res, { boundPort, config }))) return;
 		// 2. Origin — exactly the configured app, present and equal.
 		if (req.headers.origin !== config.origin) {
 			send(403, { error: 'bad_origin' });

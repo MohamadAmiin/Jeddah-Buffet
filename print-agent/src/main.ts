@@ -24,6 +24,7 @@
 // executable application; tasks/print-agent-installer): paths.ts decides where
 // config.json and data/ live in each mode, and the entry guard at the bottom runs
 // main() both when Node starts this file and when the installer starts.
+import { randomBytes } from 'node:crypto';
 import {
 	DEFAULT_AGENT_PORT,
 	initConfig,
@@ -32,10 +33,11 @@ import {
 	type AgentConfig,
 	type PrinterConfig
 } from './config.ts';
-import { claimPairing, openPairing } from './pairing.ts';
+import { claimPairing, openPairing, pairingState } from './pairing.ts';
 import { bakedBuild, defaultPaths, isPackaged } from './paths.ts';
 import { createRuntime } from './runtime.ts';
 import { createAgentServer, listen } from './server.ts';
+import { createSetupHandler } from './setup.ts';
 
 const USAGE = `matcami print agent
 
@@ -178,13 +180,33 @@ export function runInit(flags: Flags): { path: string; config: AgentConfig } {
 	return { path, config };
 }
 
+/** Until the setup page lands (T-06): a page that only names itself. */
+const SETUP_PAGE_PLACEHOLDER = {
+	html: '<!doctype html><title>matcami print agent</title>',
+	js: '',
+	css: ''
+};
+
 async function runServer(configPath: string, config: AgentConfig): Promise<void> {
 	// The runtime builds the queue and the drawer once a receipt printer is set,
 	// and rebuilds them when the printers change (runtime.ts).
 	const runtime = createRuntime({ configPath, config });
+	const dataDir = () => runtime.config().dataDir;
+	const setup = createSetupHandler({
+		runtime,
+		openPairing: () => openPairing(dataDir()),
+		pairingState: () => pairingState(dataDir()),
+		rekey: async () => {
+			await runtime.setToken(randomBytes(32).toString('hex'));
+			openPairing(dataDir());
+		},
+		quit: () => shutdown(),
+		page: SETUP_PAGE_PLACEHOLDER
+	});
 	const server = createAgentServer(runtime.config, {
 		...runtime.deps,
-		claimPairing: () => claimPairing(runtime.config().dataDir)
+		claimPairing: () => claimPairing(dataDir()),
+		setup
 	});
 	const port = await listen(server, config.port);
 	// The URL, never the token.
