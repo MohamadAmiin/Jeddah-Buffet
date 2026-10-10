@@ -99,6 +99,15 @@ const job = (id: string, text: string): Job => ({
 	lines: [{ text }],
 	cut: true
 });
+/** A receipt that carries the logo: one 8 × 1 image line, then text. */
+const logoJob = (id: string, text: string): Job => ({
+	id,
+	printer: 'receipt',
+	lines: [{ image: { widthDots: 8, heightDots: 1, bitmap: 'AA==' } }, { text }],
+	cut: true
+});
+/** The start of every GS v 0 band the encoder writes. */
+const RASTER = Buffer.from([0x1d, 0x76, 0x30, 0x00]);
 const textOf = (b: Buffer) => b.toString('latin1').replace(/[^\x20-\x7e]/g, '');
 const onDisk = (path: string) => JSON.parse(readFileSync(path, 'utf8')) as AgentConfig;
 
@@ -148,6 +157,42 @@ describe('setPrinters re-wires the queue and the drawer', () => {
 		expect(textOf(b.jobs[1]!)).toContain('Two');
 		// A job id printed before the rebuild is still a duplicate after it.
 		expect(await runtime.deps.submitJob(job('q1', 'One'))).toBe('duplicate');
+	});
+
+	// THE LOGO GATE ACROSS A PRINTER CHANGE. A receipt carries the logo only for
+	// the printer its confirmation was watched on; one queued for printer A and
+	// moved to B — which nobody test-printed, and which may read a raster as
+	// ordinary bytes, the drawer pulse included — prints in full WITHOUT it.
+	it('a queued receipt that carries the logo goes to a NEW printer without it', async () => {
+		const a = await downPrinter(48);
+		const { runtime, dataDir } = setUp({ receipt: a, kitchen: null });
+		expect(await runtime.deps.submitJob(logoJob('l1', 'Logo receipt'))).toBe('queued');
+		await settle();
+		const b = await startFake();
+		expect(await runtime.deps.setPrinters({ receipt: b.cfg, kitchen: null })).toEqual({ ok: true });
+		await until(() => b.jobs.length === 1, 5000, 'the queued receipt on B');
+		expect(textOf(b.jobs[0]!)).toContain('Logo receipt');
+		expect(b.jobs[0]!.includes(RASTER)).toBe(false);
+		expect(readFileSync(join(dataDir, 'agent.log'), 'utf8')).toContain(
+			'printed l1 without its logo: the receipt printer changed'
+		);
+	});
+
+	it('the same receipt back on the printer it was laid out for keeps its logo', async () => {
+		const a = await downPrinter(48);
+		const { runtime } = setUp({ receipt: a, kitchen: null });
+		expect(await runtime.deps.submitJob(logoJob('l2', 'Logo receipt'))).toBe('queued');
+		await settle();
+		// Away to another (also dead) printer, then back to A before anything printed.
+		expect(
+			await runtime.deps.setPrinters({ receipt: await downPrinter(48), kitchen: null })
+		).toEqual({ ok: true });
+		await settle();
+		expect(await runtime.deps.setPrinters({ receipt: a, kitchen: null })).toEqual({ ok: true });
+		const back = await startFake(a.port);
+		await until(() => back.jobs.length === 1, 5000, 'the receipt on A');
+		expect(back.jobs[0]!.includes(RASTER)).toBe(true);
+		expect(textOf(back.jobs[0]!)).toContain('Logo receipt');
 	});
 
 	it('a width change is REFUSED while that printer has a job waiting, and nothing is written', async () => {
