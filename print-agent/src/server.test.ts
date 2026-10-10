@@ -1,7 +1,11 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { request as httpRequest, type Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AgentConfig, ReadyPrinters } from './config.ts';
-import type { PairingClaim } from './pairing.ts';
+import { createConfig, saveConfig, type AgentConfig, type ReadyPrinters } from './config.ts';
+import { claimPairing, openPairing, pairingState, type PairingClaim } from './pairing.ts';
+import { createRuntime, type Runtime } from './runtime.ts';
 import {
 	createAgentServer,
 	listen,
@@ -9,9 +13,12 @@ import {
 	parseJob,
 	type AgentDeps,
 	type AgentStatus,
+	type DrawerOutcome,
 	type DrawerRequest,
 	type Job,
-	type PrintLine
+	type PrintLine,
+	type SetPrintersOutcome,
+	type SubmitOutcome
 } from './server.ts';
 
 const ORIGIN = 'https://pos.example.com';
@@ -80,8 +87,10 @@ function call(port: number, c: Call): Promise<Answer> {
 function harness() {
 	const jobs: Job[] = [];
 	const drawer: DrawerRequest[] = [];
-	let submitAnswer: 'queued' | 'duplicate' = 'queued';
-	let drawerAnswer: 'opened' | 'duplicate' | 'too_late' | 'printer_unreachable' = 'opened';
+	const printerCalls: AgentConfig['printers'][] = [];
+	let submitAnswer: SubmitOutcome = 'queued';
+	let drawerAnswer: DrawerOutcome = 'opened';
+	let printersAnswer: SetPrintersOutcome = { ok: true };
 	let pairingAnswer: PairingClaim = 'not_open';
 	let claims = 0;
 	const deps: AgentDeps = {
@@ -94,7 +103,10 @@ function harness() {
 			return drawerAnswer;
 		},
 		status: async () => status,
-		setPrinters: async () => ({ ok: true }),
+		setPrinters: async (printers) => {
+			printerCalls.push(printers);
+			return printersAnswer;
+		},
 		claimPairing: () => {
 			claims += 1;
 			return pairingAnswer;
@@ -104,10 +116,12 @@ function harness() {
 		deps,
 		jobs,
 		drawer,
+		printerCalls,
 		claims: () => claims,
 		setPairing: (a: PairingClaim) => (pairingAnswer = a),
 		setSubmit: (a: typeof submitAnswer) => (submitAnswer = a),
-		setDrawer: (a: typeof drawerAnswer) => (drawerAnswer = a)
+		setDrawer: (a: typeof drawerAnswer) => (drawerAnswer = a),
+		setPrintersAnswer: (a: SetPrintersOutcome) => (printersAnswer = a)
 	};
 }
 
@@ -117,8 +131,8 @@ afterEach(async () => {
 	servers = [];
 });
 
-async function start(deps: AgentDeps) {
-	const server = createAgentServer(config, deps);
+async function start(deps: AgentDeps, cfg: AgentConfig = config) {
+	const server = createAgentServer(() => cfg, deps);
 	servers.push(server);
 	const port = await listen(server, 0);
 	const good = (extra: Record<string, string> = {}) => ({
@@ -205,7 +219,7 @@ describe('binding and the three walls', () => {
 		});
 		expect(plain.status).toBe(204);
 		expect(plain.headers['access-control-allow-origin']).toBe(ORIGIN);
-		expect(plain.headers['access-control-allow-methods']).toBe('GET, POST');
+		expect(plain.headers['access-control-allow-methods']).toBe('GET, POST, PUT');
 		expect(plain.headers['access-control-allow-headers']).toBe('authorization, content-type');
 		expect(plain.headers['access-control-max-age']).toBe('600');
 		expect(plain.headers['vary']).toBe('Origin');
@@ -564,5 +578,220 @@ describe('parseJob', () => {
 		expect(bad([{ image: 'AA==' }])).toThrow(/lines\[0\]\.image must be an object/);
 		const one = { image: { widthDots: 8, heightDots: 1, bitmap: 'AA==' } };
 		expect(bad([one, one, one])).toThrow(/at most 2/);
+	});
+});
+
+// ── tasks/print-agent-installer T-04 ────────────────────────────────────────
+
+const tempDirs: string[] = [];
+const runtimes: Runtime[] = [];
+afterEach(async () => {
+	for (const r of runtimes.splice(0)) await r.close();
+	for (const d of tempDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
+function freshInstall(printers: AgentConfig['printers'] = { receipt: null, kitchen: null }) {
+	const dir = mkdtempSync(join(tmpdir(), 'matcami-agent-server-'));
+	tempDirs.push(dir);
+	const configPath = join(dir, 'config.json');
+	const fresh = createConfig({ origin: ORIGIN, dataDir: join(dir, 'data'), printers });
+	saveConfig(configPath, fresh);
+	return { configPath, fresh };
+}
+
+const putPrinters = (port: number, headers: Record<string, string>, body: unknown) =>
+	call(port, {
+		method: 'PUT',
+		path: '/printers',
+		headers: { 'content-type': 'application/json', ...headers },
+		body: JSON.stringify(body)
+	});
+
+describe('the origin is never adopted from a request (the installer plan’s BLOCKER)', () => {
+	it('MANDATORY: a fresh install with pairing OPEN refuses /pair from another origin and changes nothing', async () => {
+		const { configPath, fresh } = freshInstall();
+		openPairing(fresh.dataDir);
+		const before = readFileSync(configPath, 'utf8');
+		const deps = { ...harness().deps, claimPairing: () => claimPairing(fresh.dataDir) };
+		const { port } = await start(deps, fresh);
+		const hostile = await call(port, {
+			method: 'POST',
+			path: '/pair',
+			headers: { host: `127.0.0.1:${port}`, origin: 'https://evil.example' }
+		});
+		expect(hostile.status).toBe(403);
+		expect(hostile.json).toEqual({ error: 'bad_origin' });
+		// The CORS header names the configured app, so the hostile page cannot read even the refusal.
+		expect(hostile.headers['access-control-allow-origin']).toBe(ORIGIN);
+		expect(pairingState(fresh.dataDir)).toBe('open');
+		expect(readFileSync(configPath, 'utf8')).toBe(before);
+		// The app itself still pairs, once.
+		const own = await call(port, {
+			method: 'POST',
+			path: '/pair',
+			headers: { host: `127.0.0.1:${port}`, origin: ORIGIN }
+		});
+		expect(own.status).toBe(200);
+		expect(own.json).toEqual({ token: fresh.token });
+		expect(pairingState(fresh.dataDir)).toBe('claimed');
+	});
+});
+
+describe('PUT /printers', () => {
+	const valid = { receipt: { host: '192.168.1.50', width: 48 }, kitchen: null };
+
+	it('needs the token (401) and the app origin (403), and calls nothing otherwise', async () => {
+		const h = harness();
+		const { port, good } = await start(h.deps);
+		const noToken = await putPrinters(port, { host: `127.0.0.1:${port}`, origin: ORIGIN }, valid);
+		expect(noToken.status).toBe(401);
+		const wrongOrigin = await putPrinters(port, good({ origin: 'https://evil.example' }), valid);
+		expect(wrongOrigin.status).toBe(403);
+		expect(wrongOrigin.json).toEqual({ error: 'bad_origin' });
+		expect(h.printerCalls).toHaveLength(0);
+	});
+
+	it('saves the printers (port defaults to 9100, only the three fields travel) and answers the new status', async () => {
+		const h = harness();
+		const { port, good } = await start(h.deps);
+		const answer = await putPrinters(port, good(), {
+			receipt: { host: '192.168.1.50', width: 48, extra: 'dropped' },
+			kitchen: { host: '192.168.1.51', port: 9101, width: 32 }
+		});
+		expect(answer.status).toBe(200);
+		expect(answer.json).toEqual({ printers: status.printers });
+		expect(h.printerCalls).toEqual([
+			{
+				receipt: { host: '192.168.1.50', port: 9100, width: 48 },
+				kitchen: { host: '192.168.1.51', port: 9101, width: 32 }
+			}
+		]);
+	});
+
+	it('names the bad field with 422 bad_printers', async () => {
+		const h = harness();
+		const { port, good } = await start(h.deps);
+		const host = await putPrinters(port, good(), { receipt: { host: 'a b', width: 48 } });
+		expect(host.status).toBe(422);
+		expect(host.json).toEqual({ error: 'bad_printers', field: 'receipt.host' });
+		const width = await putPrinters(port, good(), { receipt: { host: '10.0.0.5', width: 40 } });
+		expect(width.json).toEqual({ error: 'bad_printers', field: 'receipt.width' });
+		const missing = await putPrinters(port, good(), { kitchen: null });
+		expect(missing.json).toEqual({ error: 'bad_printers', field: 'receipt' });
+		const kitchenPort = await putPrinters(port, good(), {
+			receipt: { host: '10.0.0.5', width: 48 },
+			kitchen: { host: '10.0.0.6', port: 0, width: 32 }
+		});
+		expect(kitchenPort.json).toEqual({ error: 'bad_printers', field: 'kitchen.port' });
+		expect(h.printerCalls).toHaveLength(0);
+	});
+
+	it('answers 409 jobs_waiting when the runtime refuses a width change', async () => {
+		const h = harness();
+		h.setPrintersAnswer({ ok: false, error: 'jobs_waiting', target: 'receipt', queued: 3 });
+		const { port, good } = await start(h.deps);
+		const answer = await putPrinters(port, good(), valid);
+		expect(answer.status).toBe(409);
+		expect(answer.json).toEqual({ error: 'jobs_waiting', target: 'receipt', queued: 3 });
+	});
+
+	it('keeps the shared body rules: 415 unless JSON, 400 on a body that is not JSON', async () => {
+		const { port, good } = await start(harness().deps);
+		const notJson = await call(port, {
+			method: 'PUT',
+			path: '/printers',
+			headers: good({ 'content-type': 'text/plain' }),
+			body: '{}'
+		});
+		expect(notJson.status).toBe(415);
+		const garbled = await call(port, {
+			method: 'PUT',
+			path: '/printers',
+			headers: good({ 'content-type': 'application/json' }),
+			body: '{'
+		});
+		expect(garbled.status).toBe(400);
+	});
+});
+
+describe('no printer yet', () => {
+	it('a no_printer outcome is 503 { error: no_printer } for jobs and for the drawer', async () => {
+		const h = harness();
+		h.setSubmit('no_printer');
+		h.setDrawer('no_printer');
+		const { port, good } = await start(h.deps);
+		const job = await call(port, {
+			method: 'POST',
+			path: '/jobs',
+			headers: good({ 'content-type': 'application/json' }),
+			body: jobBody()
+		});
+		expect(job.status).toBe(503);
+		expect(job.json).toEqual({ error: 'no_printer' });
+		const drawer = await call(port, {
+			method: 'POST',
+			path: '/drawer',
+			headers: good({ 'content-type': 'application/json' }),
+			body: JSON.stringify({ id: 'd-1', completedAt: new Date().toISOString() })
+		});
+		expect(drawer.status).toBe(503);
+		expect(drawer.json).toEqual({ error: 'no_printer' });
+	});
+
+	it('through a real runtime: status reports nulls, jobs and pulses are 503, and PUT /printers sets one', async () => {
+		const { configPath, fresh } = freshInstall();
+		const runtime = createRuntime({ configPath, config: fresh });
+		runtimes.push(runtime);
+		const server = createAgentServer(runtime.config, {
+			...runtime.deps,
+			claimPairing: () => claimPairing(fresh.dataDir)
+		});
+		servers.push(server);
+		const port = await listen(server, 0);
+		const headers = {
+			host: `127.0.0.1:${port}`,
+			origin: ORIGIN,
+			authorization: `Bearer ${fresh.token}`
+		};
+		const before = await call(port, { method: 'GET', path: '/status', headers });
+		expect(before.status).toBe(200);
+		expect(before.json).toEqual({
+			agentVersion: 2,
+			features: ['printers', 'setup'],
+			printers: { receipt: null, kitchen: null }
+		});
+		const job = await call(port, {
+			method: 'POST',
+			path: '/jobs',
+			headers: { ...headers, 'content-type': 'application/json' },
+			body: jobBody()
+		});
+		expect(job.status).toBe(503);
+		expect(job.json).toEqual({ error: 'no_printer' });
+		const drawer = await call(port, {
+			method: 'POST',
+			path: '/drawer',
+			headers: { ...headers, 'content-type': 'application/json' },
+			body: JSON.stringify({ id: 'd-2', completedAt: new Date().toISOString() })
+		});
+		expect(drawer.status).toBe(503);
+		expect(drawer.json).toEqual({ error: 'no_printer' });
+
+		const set = await putPrinters(port, headers, {
+			receipt: { host: '127.0.0.1', port: 9, width: 32 },
+			kitchen: null
+		});
+		expect(set.status).toBe(200);
+		expect(set.json).toMatchObject({
+			printers: { receipt: { host: '127.0.0.1', port: 9, width: 32 }, kitchen: null }
+		});
+		// The server reads the config per request, so the new printer is live at once.
+		expect(runtime.config().printers.receipt).toEqual({ host: '127.0.0.1', port: 9, width: 32 });
+		const queued = await call(port, {
+			method: 'POST',
+			path: '/jobs',
+			headers: { ...headers, 'content-type': 'application/json' },
+			body: jobBody({ lines: [{ text: 'x'.repeat(32) }] })
+		});
+		expect(queued.status).toBe(202);
 	});
 });

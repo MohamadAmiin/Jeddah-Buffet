@@ -182,7 +182,7 @@ async function runServer(configPath: string, config: AgentConfig): Promise<void>
 	// The runtime builds the queue and the drawer once a receipt printer is set,
 	// and rebuilds them when the printers change (runtime.ts).
 	const runtime = createRuntime({ configPath, config });
-	const server = createAgentServer(runtime.config(), {
+	const server = createAgentServer(runtime.config, {
 		...runtime.deps,
 		claimPairing: () => claimPairing(runtime.config().dataDir)
 	});
