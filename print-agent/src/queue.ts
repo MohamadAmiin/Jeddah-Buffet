@@ -486,7 +486,10 @@ export function createDrawer(options: DrawerOptions): Drawer {
 				// sendNow: a printer on this PC must PRINT the pulse within the timeout,
 				// else the print service's copy is cancelled — never a pulse that waits.
 				await sendNow(options.receipt, DRAWER_PULSE, options.sendTimeoutMs ?? 3000);
-			} catch {
+			} catch (error) {
+				// Always in the log: for a printer on this PC the message may name a
+				// pulse the print service still holds, which the owner must remove.
+				options.log(`drawer ${id} refused: ${(error as Error).message}`);
 				return 'printer_unreachable';
 			}
 			options.seen.record(id);

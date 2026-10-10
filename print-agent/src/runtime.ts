@@ -152,28 +152,30 @@ export function createRuntime(args: {
 				serial(async (): Promise<SetPrintersOutcome> => {
 					const before = widths(config.printers);
 					const after = widths(next);
-					if (queue && before) {
-						const waiting = queue.queuedByTarget();
-						for (const target of ['receipt', 'kitchen'] as const) {
-							const changed = after === null || after[target] !== before[target];
-							if (!changed) continue;
-							// A printer on this PC drains into the PC's print service at once, and
-							// receipts waiting THERE are laid out for the old width too (decision 2).
-							const held = await serviceHeld(printerFor(config.printers, target));
-							if (waiting[target] + held > 0) {
-								return {
-									ok: false,
-									error: 'jobs_waiting',
-									target,
-									queued: waiting[target] + held
-								};
-							}
-						}
-					}
-					// From here to the end, nothing may submit to the queue being replaced.
+					// The gate goes up BEFORE the first await below: a job arriving while the
+					// print service is asked would otherwise be encoded for the old width and
+					// slip past the check. Submits wait; a refusal lowers the gate again.
 					let done = () => {};
 					rebuilding = new Promise((resolve) => (done = resolve));
 					try {
+						if (queue && before) {
+							const waiting = queue.queuedByTarget();
+							for (const target of ['receipt', 'kitchen'] as const) {
+								const changed = after === null || after[target] !== before[target];
+								if (!changed) continue;
+								// A printer on this PC drains into the PC's print service at once, and
+								// receipts waiting THERE are laid out for the old width too (decision 2).
+								const held = await serviceHeld(printerFor(config.printers, target));
+								if (waiting[target] + held > 0) {
+									return {
+										ok: false,
+										error: 'jobs_waiting',
+										target,
+										queued: waiting[target] + held
+									};
+								}
+							}
+						}
 						save({ ...config, printers: next });
 						const old = queue;
 						await old?.close();

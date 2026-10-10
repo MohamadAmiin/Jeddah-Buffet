@@ -7,6 +7,7 @@ import { DRAWER_PULSE } from './escpos.ts';
 import {
 	forgetLocalPrinters,
 	helperEnv,
+	jobOf,
 	listLocalPrinters,
 	localIo,
 	localQueued,
@@ -196,6 +197,34 @@ describe('sending through the service (CUPS)', () => {
 		]);
 	});
 
+	it('matches the spooled job by NUMBER: CUPS names are case-insensitive and lpstat prints its own case', async () => {
+		const typed: LocalPrinter = { name: 'somstar-80mm-series', width: 48 };
+		answer = (c) => {
+			// lp echoes the name as typed; lpstat lists the canonical case.
+			if (c.cmd === 'lp') return ok('request id is somstar-80mm-series-55 (0 file(s))\n');
+			if (c.cmd === 'lpstat' && c.args[0] === '-o')
+				return ok('SomStar-80mm-Series-55  mohamed-amiin  5  Sat Oct 10 16:05:00 2026\n');
+			if (c.cmd === 'lpstat') return ok(LPSTAT_P);
+			if (c.cmd === 'cancel') return ok();
+			return undefined;
+		};
+		// Still listed under the other case: NOT printed — cancelled at the deadline.
+		await expect(sendLocalNow(typed, bytes, 400)).rejects.toThrow(/cancelled/);
+		expect(calls.find((c) => c.cmd === 'cancel')?.args).toEqual(['somstar-80mm-series-55']);
+		expect(await localQueued(typed)).toBe(1);
+		expect(await localReachable(typed)).toBe(true);
+		expect(jobOf('SomStar-80mm-Series-55  x  5  now', 'somstar-80mm-series')).toBe(55);
+		expect(jobOf('POS-80-12  x  5  now', 'POS-80')).toBe(12);
+		expect(jobOf('Other-55  x  5  now', 'SomStar-80mm-Series')).toBeNull();
+		expect(jobOf('', 'SomStar-80mm-Series')).toBeNull();
+	});
+
+	it('an lp killed at the deadline may already have spooled the pulse: reported STUCK, not refused', async () => {
+		answer = (c) =>
+			c.cmd === 'lp' ? { status: -1, stdout: '', stderr: 'lp timed out after 300 ms' } : undefined;
+		await expect(sendLocalNow(SOMSTAR, bytes, 300)).rejects.toThrow(/COULD NOT BE CANCELLED/);
+	});
+
 	it('THE DRAWER RULE: a job still waiting at the timeout is CANCELLED and the send fails', async () => {
 		answer = (c) => {
 			if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-52 (0 file(s))\n');
@@ -287,6 +316,14 @@ describe('the Windows spooler helpers', () => {
 			c.cmd === 'powershell' ? { status: 4, stdout: 'stuck 14\r\n', stderr: '' } : undefined;
 		await expect(sendLocalNow(printer, DRAWER_PULSE, 3000)).rejects.toThrow(
 			/DRAWER PULSE 14 COULD NOT BE CANCELLED/
+		);
+		// A helper killed at the deadline never ran its removal: stuck, not refused.
+		answer = (c) =>
+			c.cmd === 'powershell'
+				? { status: -1, stdout: '', stderr: 'powershell timed out after 63000 ms' }
+				: undefined;
+		await expect(sendLocalNow(printer, DRAWER_PULSE, 3000)).rejects.toThrow(
+			/COULD NOT BE CANCELLED/
 		);
 		expect(PS_SEND).toContain(
 			'Remove-PrintJob -PrinterName $env:MATCAMI_PRINTER -ID $job -ErrorAction Stop'
@@ -401,6 +438,26 @@ describe('a receipt printer on this PC, through the queue and the drawer', () =>
 		} finally {
 			await runtime.close();
 		}
+	});
+
+	it('a pulse the service would not give back is refused AND named in the log, and never recorded as seen', async () => {
+		answer = (c) => {
+			if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-71 (0 file(s))\n');
+			if (c.cmd === 'lpstat') return ok('SomStar-80mm-Series-71  x  5  now\n');
+			if (c.cmd === 'cancel') return { status: 1, stdout: '', stderr: 'cancel: Unable to cancel' };
+			return undefined;
+		};
+		const dir = tmp();
+		const q = createQueue({ dataDir: dir, printers: { receipt: SOMSTAR, kitchen: null } });
+		queues.push(q);
+		const drawer = createDrawer({ receipt: SOMSTAR, seen: q.seen, log: q.log, sendTimeoutMs: 300 });
+		expect(await drawer.pulse({ id: 'd3', completedAt: new Date().toISOString() })).toBe(
+			'printer_unreachable'
+		);
+		const log = readFileSync(join(dir, 'agent.log'), 'utf8');
+		expect(log).toContain('drawer d3 refused:');
+		expect(log).toContain('DRAWER PULSE SomStar-80mm-Series-71 COULD NOT BE CANCELLED');
+		expect(q.seen.has('d3')).toBe(false);
 	});
 
 	it('a job that carries the logo is bound to the named printer on disk, by its label', async () => {
