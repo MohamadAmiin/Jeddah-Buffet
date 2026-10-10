@@ -1,6 +1,83 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { firstRunSteps, osLabel, sizeLabel } from './print-agent-download';
+import {
+	firstRunSteps,
+	guessPlatform,
+	isDownloadFile,
+	osLabel,
+	recommend,
+	shortOsLabel,
+	sizeLabel,
+	type DownloadFile
+} from './print-agent-download';
+
+const FILE = (name: string, os: DownloadFile['os'], arch: DownloadFile['arch']): DownloadFile => ({
+	name,
+	os,
+	arch,
+	bytes: 1,
+	sha256: 'a'.repeat(64),
+	verified: os !== 'macos',
+	url: `/downloads/print-agent/${name}`
+});
+const FILES = [
+	FILE('matcami-print-agent-linux-x64.zip', 'linux', 'x64'),
+	FILE('matcami-print-agent-windows-x64.exe', 'windows', 'x64'),
+	FILE('matcami-print-agent-macos-x64.zip', 'macos', 'x64'),
+	FILE('matcami-print-agent-macos-arm64.zip', 'macos', 'arm64')
+];
+
+describe('which installer the till recommends (print-agent-installer T-15)', () => {
+	it('Windows Chrome → the .exe first', () => {
+		const platform = guessPlatform({
+			userAgent:
+				'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
+			userAgentData: { platform: 'Windows' }
+		});
+		expect(platform).toBe('windows');
+		expect(recommend(FILES, platform).primary.map((f) => f.name)).toEqual([
+			'matcami-print-agent-windows-x64.exe'
+		]);
+	});
+
+	it('a Mac → BOTH Mac zips, Apple silicon first; the rest under others', () => {
+		const platform = guessPlatform({
+			userAgent:
+				'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36'
+		});
+		expect(platform).toBe('macos');
+		const { primary, others } = recommend(FILES, platform);
+		expect(primary.map((f) => f.arch)).toEqual(['arm64', 'x64']);
+		expect(others.map((f) => f.os)).toEqual(['linux', 'windows']);
+	});
+
+	it('X11 Linux → the Linux zip', () => {
+		const platform = guessPlatform({
+			userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142'
+		});
+		expect(platform).toBe('linux');
+		expect(recommend(FILES, platform).primary.map((f) => f.os)).toEqual(['linux']);
+	});
+
+	it('an empty or phone user agent → unknown, every file under others', () => {
+		expect(guessPlatform({ userAgent: '' })).toBe('unknown');
+		expect(
+			guessPlatform({ userAgent: 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/142' })
+		).toBe('unknown');
+		expect(recommend(FILES, 'unknown')).toEqual({ primary: [], others: FILES });
+	});
+
+	it('labels the till keys and checks every manifest entry before it becomes a link', () => {
+		expect(shortOsLabel('macos', 'arm64')).toBe('Mac (Apple silicon)');
+		expect(shortOsLabel('macos', 'x64')).toBe('Mac (Intel)');
+		expect(shortOsLabel('windows', 'x64')).toBe('Windows');
+		for (const file of FILES) expect(isDownloadFile(file)).toBe(true);
+		expect(isDownloadFile({ ...FILES[0], url: 'https://evil.example/x.exe' })).toBe(false);
+		expect(isDownloadFile({ ...FILES[0], os: 'plan9' })).toBe(false);
+		expect(isDownloadFile({ ...FILES[0], sha256: 'x' })).toBe(false);
+		expect(isDownloadFile(null)).toBe(false);
+	});
+});
 
 describe('the words beside the print agent downloads (print-agent-installer T-13)', () => {
 	it('names each PC in the owner’s words', () => {

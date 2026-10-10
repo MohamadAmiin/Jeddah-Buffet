@@ -47,6 +47,15 @@
 	} from '$lib/pos/settings';
 	import { readCachedSetting } from '$lib/pos/store';
 	import { KEY } from '$lib/components/pos/keys';
+	import {
+		firstRunSteps,
+		guessPlatform,
+		isDownloadFile,
+		recommend,
+		shortOsLabel,
+		sizeLabel,
+		type DownloadFile
+	} from '$lib/print-agent-download';
 
 	const restored = getContext<Promise<void>>(RESTORED_CONTEXT) ?? Promise.resolve();
 
@@ -85,6 +94,64 @@
 		status === null ? null : printerChip(status, { logoCached, logoConfirmed })
 	);
 
+	// THE PRINT AGENT INSTALLER (print-agent-installer T-15): one download per OS,
+	// served by this app (GET /downloads/print-agent). Fetched on mount and never
+	// awaited before the page renders: offline, the page keeps working and says
+	// the download needs a connection. The service worker passes it through and
+	// caches nothing (CLAUDE.md, the service-worker decision part 6).
+	type Downloads =
+		| { status: 'loading' }
+		| { status: 'offline' }
+		| { status: 'not_built' }
+		| { status: 'ready'; files: DownloadFile[] };
+	let downloads = $state<Downloads>({ status: 'loading' });
+	const platform =
+		typeof navigator === 'undefined'
+			? 'unknown'
+			: guessPlatform(
+					navigator as unknown as {
+						userAgent: string;
+						platform?: string;
+						userAgentData?: { platform?: string };
+					}
+				);
+	const pick = $derived(
+		downloads.status === 'ready'
+			? recommend(downloads.files, platform)
+			: { primary: [] as DownloadFile[], others: [] as DownloadFile[] }
+	);
+	// Open while the till still needs the agent; folded away once it answers.
+	const installerOpen = $derived(
+		!paired ||
+			status === null ||
+			status.state === 'unreachable' ||
+			status.state === 'blocked' ||
+			status.state === 'not_set_up'
+	);
+
+	async function loadDownloads() {
+		try {
+			const response = await fetch('/downloads/print-agent', {
+				credentials: 'same-origin',
+				cache: 'no-store'
+			});
+			if (response.status === 404) {
+				downloads = { status: 'not_built' };
+				return;
+			}
+			if (!response.ok) {
+				downloads = { status: 'offline' };
+				return;
+			}
+			const body: unknown = await response.json();
+			const listed = (body as { files?: unknown } | null)?.files;
+			const files = Array.isArray(listed) ? listed.filter(isDownloadFile) : [];
+			downloads = files.length > 0 ? { status: 'ready', files } : { status: 'not_built' };
+		} catch {
+			downloads = { status: 'offline' };
+		}
+	}
+
 	onMount(() => {
 		// Read the link BEFORE anything can navigate away from it.
 		const fromLink = parsePairingFragment(location.hash);
@@ -99,6 +166,8 @@
 			if (fromLink) dropFragment();
 			isOwner = signedIn.current.isOwner;
 			if (isOwner) {
+				// Not awaited: the page never waits on the network to render.
+				void loadDownloads();
 				const [saved, name, code, zone] = await Promise.all([
 					readAgentSettings().catch(() => null),
 					readCachedSetting('restaurantName').catch(() => null),
@@ -169,11 +238,11 @@
 			case 'no_printer':
 				return '◆ The agent answered, but no printer address is set yet';
 			case 'unauthorized':
-				return '✕ Printer pairing is wrong — the agent was set up again after this till was paired, or for another address (init --origin). Forget the pairing, then pair again';
+				return '✕ Printer pairing is wrong — the print agent on this PC was set up again, or for another address. Forget the pairing, then pair again';
 			case 'blocked':
 				return "✕ Printing blocked by Chrome — open Chrome's site settings for this address and allow local network access, then try again";
 			case 'unreachable':
-				return `◆ Printer unreachable — nothing answered at ${url}. Is the agent running on this PC?`;
+				return `◆ Printer unreachable — nothing answered at ${url}. Is the matcami print agent installed on this PC? Download it below.`;
 			case 'not_set_up':
 				return '○ Printer not set up';
 		}
@@ -215,13 +284,13 @@
 	function explainRefusal(reason: PairingRefusal): string {
 		switch (reason) {
 			case 'closed':
-				return '○ Pairing is closed on the agent. On this PC run: node print-agent/src/main.ts pair — then press Pair this till again';
+				return '○ Pairing is closed on the print agent. On this PC, run the matcami print agent file again and press Open pairing for a till, then press Pair this till again';
 			case 'claimed':
-				return '✕ Pairing was already used. On this PC run: node print-agent/src/main.ts pair — then press Pair this till again. If you did not pair a till since the agent was set up, something else on this PC took the pairing: run init --force instead';
+				return '✕ Pairing was already used. On this PC, run the matcami print agent file again and press Open pairing for a till, then press Pair this till. If you did not pair a till since installing it, something else on this PC took the pairing: choose Advanced → Reset the pairing key there';
 			case 'blocked':
 				return "✕ Pairing blocked by Chrome — open Chrome's site settings for this address and allow local network access, then try again";
 			case 'unreachable':
-				return `◆ Nothing answered at ${url}. Is the agent running on this PC, and was it set up for this address (init --origin)?`;
+				return `◆ Nothing answered at ${url}. Is the matcami print agent installed on this PC? Download it below, run it, then press Pair this till.`;
 			case 'refused':
 				return '✕ The agent refused to pair this till';
 		}
@@ -403,6 +472,56 @@
 <svelte:head><title>Printer · matcami</title></svelte:head>
 <svelte:window onhashchange={onHashChange} />
 
+{#snippet installer()}
+	<section
+		class="flex flex-col gap-3"
+		aria-labelledby="agent-download-heading"
+		data-testid="agent-download"
+	>
+		<h3 id="agent-download-heading" class="text-ink font-semibold">
+			Install the print agent on this PC
+		</h3>
+		{#if downloads.status === 'loading'}
+			<p class="text-ink-2">Looking for the installer…</p>
+		{:else if downloads.status === 'offline'}
+			<p class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">
+				<span aria-hidden="true" class="font-mono">◆</span> The installer needs a connection — open this
+				page again when online
+			</p>
+		{:else if downloads.status === 'not_built'}
+			<p class="bg-raise-2 text-ink-2 rounded-control px-3 py-2">
+				<span aria-hidden="true" class="font-mono">○</span> The installer has not been built on the server
+				yet
+			</p>
+		{:else}
+			{#each [...pick.primary, ...pick.others] as file, i (file.name)}
+				{#if i === pick.primary.length && pick.primary.length > 0}
+					<p class="text-ink-2">For another computer:</p>
+				{/if}
+				<div class="flex flex-col gap-1">
+					<a
+						class="{secondary} inline-flex items-center justify-center"
+						href={resolve('/downloads/print-agent/[file]', { file: file.name })}
+						download={file.name}>Download for {shortOsLabel(file.os, file.arch)}</a
+					>
+					<p class="text-ink-2">
+						{sizeLabel(file.bytes)}{#if !file.verified}
+							· <span aria-hidden="true" class="font-mono">◆</span> Not yet checked on a Mac{/if}
+					</p>
+					<p class="text-ink-2 font-mono break-all">SHA-256 {file.sha256}</p>
+				</div>
+			{/each}
+			{#if pick.primary.length > 0}
+				<ul class="text-ink-2 flex flex-col gap-1" data-testid="first-run-steps">
+					{#each firstRunSteps(pick.primary[0]!.os) as step (step)}
+						<li>{step}</li>
+					{/each}
+				</ul>
+			{/if}
+		{/if}
+	</section>
+{/snippet}
+
 <main class="relative flex min-h-0 flex-1 overflow-y-auto p-3 md:p-4 lg:p-6">
 	<div class="m-auto flex w-full max-w-2xl flex-col gap-4">
 		{#if !ready}
@@ -451,11 +570,8 @@
 				</button>
 			{:else}
 				<p class="bg-raise-2 text-ink-2 rounded-control px-3 py-2" data-testid="pairing-help">
-					This till is not paired yet. <strong>Pair this till</strong> asks the agent at
-					<span class="font-mono">{url}</span>. Setting the agent up opens pairing for the first
-					till that asks; if it says pairing is closed, run
-					<code class="font-mono">node print-agent/src/main.ts pair</code> on this PC first. Nothing is
-					typed here.
+					This till is not paired yet. Install the matcami print agent on this PC — download it
+					below — then press <strong>Pair this till</strong>. Nothing is typed here.
 				</p>
 				<button
 					type="button"
@@ -516,6 +632,19 @@
 						It did not print correctly
 					</button>
 				</div>
+			{/if}
+
+			<!-- The print agent installer (print-agent-installer T-15): open while the till is
+			     not paired or the agent did not answer, folded away otherwise. -->
+			{#if installerOpen}
+				{@render installer()}
+			{:else}
+				<details class="border-line border-t pt-4" data-testid="agent-download-details">
+					<summary class="text-ink min-h-touch flex cursor-pointer items-center font-semibold">
+						Print agent installer
+					</summary>
+					{@render installer()}
+				</details>
 			{/if}
 
 			{#if paired}
