@@ -71,10 +71,11 @@ run    starts the agent on 127.0.0.1:<port> (default ${DEFAULT_AGENT_PORT}).
 --version  prints the agent's version and, for an installer, the app address it answers.
 
 --origin        the app's https address exactly as the till opens it, e.g. https://pos.example.com
---receipt       the receipt printer, host[:port]; the port defaults to 9100 (raw TCP).
-                Optional: it can be set later on the till's Printer page
+--receipt       the receipt printer, host[:port] (the port defaults to 9100, raw TCP), or
+                local:<name> for a printer this PC knows (USB). Optional: it can be set
+                later on the till's Printer page
 --width         the receipt printer's columns: 32 (58 mm) or 48 (80 mm); needs --receipt
---kitchen       the kitchen printer, host[:port]; without one, kitchen tickets print on the receipt printer
+--kitchen       the kitchen printer, host[:port] or local:<name>; without one, kitchen tickets print on the receipt printer
 --kitchen-width the kitchen printer's columns: 32 or 48 (defaults to --width)
 --port          the agent's loopback port, 1024-65535 (default ${DEFAULT_AGENT_PORT})
 --config        the config file to write or read (default: the agent's config.json)
@@ -211,6 +212,7 @@ async function runServer(configPath: string, config: AgentConfig): Promise<void>
 			if (!runtime) throw new Error('the agent is still starting');
 			return runtime.deps.setPrinters(printers);
 		},
+		listLocalPrinters: async () => (runtime ? runtime.deps.listLocalPrinters() : []),
 		claimPairing: () => claimPairing((runtime?.config() ?? config).dataDir),
 		setup: async (req, res, ctx) => (setup ? setup(req, res, ctx) : false)
 	});

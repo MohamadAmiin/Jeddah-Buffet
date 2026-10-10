@@ -187,6 +187,11 @@ export function createSetupHandler(deps: SetupDeps): NonNullable<AgentDeps['setu
 			});
 			return;
 		}
+		if (path === '/setup/local-printers') {
+			// The printers this PC's print service knows, to pick from (local-printer.ts).
+			json(200, { printers: await runtime.deps.listLocalPrinters() });
+			return;
+		}
 		if (path === '/setup/printers') {
 			let printers;
 			try {

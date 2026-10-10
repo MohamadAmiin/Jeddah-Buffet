@@ -32,7 +32,25 @@ import {
 } from 'node:fs';
 import { dirname } from 'node:path';
 
-export type PrinterConfig = { host: string; port: number; width: 32 | 48 };
+/** A network ESC/POS printer: raw bytes over TCP, port 9100 by convention. */
+export type NetworkPrinter = { host: string; port: number; width: 32 | 48 };
+/**
+ * A printer this PC already knows — plugged in by USB, or shared — reached by
+ * its name in the PC's own print service (CUPS on Linux and macOS, the print
+ * spooler on Windows; local-printer.ts). The shape is told apart from a network
+ * printer by `name` versus `host`, so every config written before this existed
+ * still reads as a network printer, unchanged.
+ */
+export type LocalPrinter = { name: string; width: 32 | 48 };
+export type PrinterConfig = NetworkPrinter | LocalPrinter;
+
+export const isLocalPrinter = (printer: PrinterConfig): printer is LocalPrinter =>
+	'name' in printer;
+
+/** A printer's identity in words, for logs and the queue's binding (never its width). */
+export function printerLabel(printer: PrinterConfig): string {
+	return isLocalPrinter(printer) ? `local:${printer.name}` : `${printer.host}:${printer.port}`;
+}
 
 /** Printers with the receipt printer set — what the queue, the drawer and the job parser need. */
 export type ReadyPrinters = { receipt: PrinterConfig; kitchen: PrinterConfig | null };
@@ -125,9 +143,35 @@ function parseWidth(value: unknown, field: string): 32 | 48 {
 	return value;
 }
 
-/** One printer — shared with the routes that set printers (server.ts, setup.ts), so every surface validates alike. */
+/** A print-service name: 1–120 characters, no control characters, trimmed. */
+export const LOCAL_PRINTER_NAME_MAX = 120;
+
+/**
+ * One printer — shared with the routes that set printers (server.ts, setup.ts),
+ * so every surface validates alike. `{ name, width }` is a printer on this PC;
+ * `{ host, port, width }` a network one. A body carrying both is refused.
+ */
 export function parsePrinter(value: unknown, field: string): PrinterConfig {
 	const printer = record(value, field);
+	const width = parseWidth(printer.width, `${field}.width`);
+	if (printer.name !== undefined && printer.name !== null) {
+		if (printer.host !== undefined || printer.port !== undefined) {
+			fail(`${field}.name`, 'is a printer on this PC: it has no host or port');
+		}
+		const name = printer.name;
+		if (
+			typeof name !== 'string' ||
+			name.trim().length === 0 ||
+			name.length > LOCAL_PRINTER_NAME_MAX ||
+			/[\x00-\x1f\x7f]/.test(name)
+		) {
+			fail(
+				`${field}.name`,
+				`must be the printer's name on this PC, 1–${LOCAL_PRINTER_NAME_MAX} characters`
+			);
+		}
+		return { name: name.trim(), width };
+	}
 	const host = printer.host;
 	if (typeof host !== 'string' || host.length === 0 || /[/\s]/.test(host)) {
 		fail(`${field}.host`, 'must be a hostname or IP address with no slash or whitespace');
@@ -135,7 +179,7 @@ export function parsePrinter(value: unknown, field: string): PrinterConfig {
 	return {
 		host,
 		port: parsePort(printer.port, `${field}.port`, 1),
-		width: parseWidth(printer.width, `${field}.width`)
+		width
 	};
 }
 
@@ -186,8 +230,11 @@ export function loadConfig(path: string): AgentConfig {
 	return parseConfig(raw);
 }
 
-/** `host[:port]` as typed on the command line. */
+/** `host[:port]` as typed on the command line, or `local:<name>` for a printer on this PC. */
 export function parsePrinterAddress(value: string, width: 32 | 48): PrinterConfig {
+	if (value.trim().startsWith('local:')) {
+		return parsePrinter({ name: value.trim().slice('local:'.length), width }, 'printer');
+	}
 	const match = /^(.+?)(?::(\d{1,5}))?$/.exec(value.trim());
 	if (!match || !match[1]) throw new Error(`printer address "${value}" is not host[:port]`);
 	const host = match[1];

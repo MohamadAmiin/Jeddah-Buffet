@@ -24,15 +24,17 @@ import {
 	writeFileSync
 } from 'node:fs';
 import { join } from 'node:path';
-import type { PrinterConfig, ReadyPrinters } from './config.ts';
+import { isLocalPrinter, printerLabel, type PrinterConfig, type ReadyPrinters } from './config.ts';
 import { DRAWER_PULSE, encodeJob } from './escpos.ts';
-import { paperStatus, reachable, send } from './printer.ts';
+import { localQueued } from './local-printer.ts';
+import { paperStatus, reachable, send, sendNow } from './printer.ts';
 import {
 	AGENT_FEATURES,
 	type AgentStatus,
 	type DrawerOutcome,
 	type DrawerRequest,
 	type Job,
+	type PrinterStatus,
 	type SubmitOutcome
 } from './server.ts';
 
@@ -55,7 +57,7 @@ export type QueuedJob = {
 	plainBase64?: string;
 };
 
-const printerId = (printer: PrinterConfig) => `${printer.host}:${printer.port}`;
+const printerId = (printer: PrinterConfig) => printerLabel(printer);
 
 /**
  * The bytes to send to `printer`: the job as queued, or — when it carries a
@@ -363,6 +365,37 @@ export function createQueue(options: QueueOptions): Queue {
 		return value;
 	}
 
+	/**
+	 * One printer as /status reports it. A printer on this PC is named, and its
+	 * waiting count includes what the print service still holds for it — a
+	 * receipt handed over while the printer was off waits THERE, not here.
+	 */
+	async function describe(target: Target, printer: PrinterConfig): Promise<PrinterStatus> {
+		const common = {
+			width: printer.width,
+			reachable: await isReachable(target),
+			queued: workers[target].jobs.length
+		};
+		if (isLocalPrinter(printer)) {
+			const held = await serviceQueued(target, printer);
+			return { name: printer.name, ...common, queued: common.queued + held };
+		}
+		return { host: printer.host, port: printer.port, ...common };
+	}
+
+	const serviceCache: Record<Target, { at: number; value: number } | null> = {
+		receipt: null,
+		kitchen: null
+	};
+	async function serviceQueued(target: Target, printer: PrinterConfig): Promise<number> {
+		if (!isLocalPrinter(printer)) return 0;
+		const cached = serviceCache[target];
+		if (cached && now() - cached.at < REACHABLE_CACHE_MS) return cached.value;
+		const value = await localQueued(printer).catch(() => 0);
+		serviceCache[target] = { at: now(), value };
+		return value;
+	}
+
 	return {
 		seen,
 		log,
@@ -401,21 +434,9 @@ export function createQueue(options: QueueOptions): Queue {
 			return 'queued';
 		},
 		status: async () => {
-			const receipt = {
-				host: options.printers.receipt.host,
-				port: options.printers.receipt.port,
-				width: options.printers.receipt.width,
-				reachable: await isReachable('receipt'),
-				queued: workers.receipt.jobs.length
-			};
+			const receipt = await describe('receipt', options.printers.receipt);
 			const kitchen = options.printers.kitchen
-				? {
-						host: options.printers.kitchen.host,
-						port: options.printers.kitchen.port,
-						width: options.printers.kitchen.width,
-						reachable: await isReachable('kitchen'),
-						queued: workers.kitchen.jobs.length
-					}
+				? await describe('kitchen', options.printers.kitchen)
 				: null;
 			// With no kitchen printer, kitchen jobs ride the receipt worker — count them there.
 			if (!options.printers.kitchen) receipt.queued += workers.kitchen.jobs.length;
@@ -462,7 +483,9 @@ export function createDrawer(options: DrawerOptions): Drawer {
 				return 'too_late';
 			}
 			try {
-				await send(options.receipt, DRAWER_PULSE, options.sendTimeoutMs ?? 3000);
+				// sendNow: a printer on this PC must PRINT the pulse within the timeout,
+				// else the print service's copy is cancelled — never a pulse that waits.
+				await sendNow(options.receipt, DRAWER_PULSE, options.sendTimeoutMs ?? 3000);
 			} catch {
 				return 'printer_unreachable';
 			}

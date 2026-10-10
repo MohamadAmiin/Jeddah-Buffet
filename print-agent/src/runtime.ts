@@ -22,6 +22,7 @@
 // data/seen.json by the new queue, so a job printed before the rebuild is still
 // a duplicate after it.
 import { parseConfig, parseOrigin, saveConfig, type AgentConfig } from './config.ts';
+import { listLocalPrinters } from './local-printer.ts';
 import { createDrawer, createQueue, type Drawer, type Queue, type QueueOptions } from './queue.ts';
 import {
 	AGENT_FEATURES,
@@ -125,6 +126,7 @@ export function createRuntime(args: {
 				await settled();
 				return queue ? queue.status() : noPrinterStatus();
 			},
+			listLocalPrinters: () => listLocalPrinters(),
 			setPrinters: (next) =>
 				serial(async (): Promise<SetPrintersOutcome> => {
 					const before = widths(config.printers);

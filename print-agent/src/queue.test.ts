@@ -4,7 +4,7 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { PrinterConfig } from './config.ts';
+import type { NetworkPrinter, PrinterConfig } from './config.ts';
 import { DRAWER_PULSE, PAPER_STATUS_QUERY } from './escpos.ts';
 import {
 	bytesFor,
@@ -20,7 +20,7 @@ import type { Job } from './server.ts';
 // ── Fakes ───────────────────────────────────────────────────────────────────
 
 type Fake = {
-	cfg: PrinterConfig;
+	cfg: NetworkPrinter;
 	/** One entry per connection that carried something other than a status query. */
 	jobs: Buffer[];
 	queries: number;
@@ -162,7 +162,7 @@ describe('createQueue', () => {
 	it('keeps a job on disk while the printer is down, prints it once when it returns, then in order', async () => {
 		const port = await freePort();
 		const dir = tmp();
-		const cfg: PrinterConfig = { host: '127.0.0.1', port, width: 48 };
+		const cfg: NetworkPrinter = { host: '127.0.0.1', port, width: 48 };
 		const q = makeQueue(dir, cfg);
 		expect(q.submit(job('o2:receipt:0', 'First'))).toBe('queued');
 		await settle(250);
@@ -190,7 +190,7 @@ describe('createQueue', () => {
 	it('resumes queued files from a previous run in file order', async () => {
 		const port = await freePort();
 		const dir = tmp();
-		const cfg: PrinterConfig = { host: '127.0.0.1', port, width: 48 };
+		const cfg: NetworkPrinter = { host: '127.0.0.1', port, width: 48 };
 		const first = makeQueue(dir, cfg);
 		first.submit(job('r1', 'One'));
 		first.submit(job('r2', 'Two'));
@@ -393,7 +393,7 @@ describe('createQueue', () => {
 });
 
 describe('bytesFor — a logo goes only to the printer it was laid out for', () => {
-	const A: PrinterConfig = { host: '192.168.1.50', port: 9100, width: 48 };
+	const A: NetworkPrinter = { host: '192.168.1.50', port: 9100, width: 48 };
 	const queued: QueuedJob = {
 		id: 'r1',
 		target: 'receipt',
@@ -478,7 +478,7 @@ describe('createDrawer', () => {
 	it('answers printer_unreachable when the receipt printer is down, and NEVER pulses later', async () => {
 		const port = await freePort();
 		const dir = tmp();
-		const cfg: PrinterConfig = { host: '127.0.0.1', port, width: 48 };
+		const cfg: NetworkPrinter = { host: '127.0.0.1', port, width: 48 };
 		const t0 = Date.now();
 		const q = makeQueue(dir, cfg, null, () => t0);
 		const drawer = createDrawer({

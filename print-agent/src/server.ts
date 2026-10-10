@@ -37,6 +37,7 @@ import {
 	type ReadyPrinters
 } from './config.ts';
 import { DOTS, MAX_IMAGE_HEIGHT_DOTS } from './escpos.ts';
+import type { LocalPrinterInfo } from './local-printer.ts';
 import type { PairingClaim } from './pairing.ts';
 
 export type TextLine = {
@@ -61,11 +62,13 @@ export type DrawerRequest = { id: string; completedAt: string };
  * printers (PUT /printers) and serves a setup page from an older one before it
  * sends anything (tasks/print-agent-installer). Additive: old tills ignore it.
  */
-export const AGENT_FEATURES = ['printers', 'setup'] as const;
-/** `host`/`port` let the till bind a logo confirmation to ONE printer (T-14). */
-export type PrinterStatus = {
-	host: string;
-	port: number;
+export const AGENT_FEATURES = ['printers', 'setup', 'local-printers'] as const;
+/**
+ * `host`/`port`, or `name` for a printer on this PC, let the till bind a logo
+ * confirmation to ONE printer (T-14). `queued` counts what the agent holds —
+ * and, for a printer on this PC, what the print service still holds for it.
+ */
+export type PrinterStatus = ({ host: string; port: number } | { name: string }) & {
 	width: 32 | 48;
 	reachable: boolean;
 	queued: number;
@@ -90,6 +93,8 @@ export type AgentDeps = {
 	status: () => Promise<AgentStatus>;
 	/** Re-point the queue and the drawer at new printers (runtime.ts). */
 	setPrinters: (printers: AgentConfig['printers']) => Promise<SetPrintersOutcome>;
+	/** The printers this PC's print service knows (local-printer.ts) — what the Printer page offers to pick. */
+	listLocalPrinters: () => Promise<LocalPrinterInfo[]>;
 	/** Take open pairing's one claim (pairing.ts claimPairing). */
 	claimPairing: () => PairingClaim;
 	/**
@@ -331,11 +336,14 @@ export function parsePrintersBody(raw: unknown): ReadyPrinters {
 			throw new BadPrinters(field);
 		}
 		const printer = value as Record<string, unknown>;
+		// Only the known fields travel. A named printer (on this PC) carries no
+		// host or port; a network one gets the ESC/POS default port.
+		const shaped =
+			printer.name !== undefined && printer.name !== null
+				? { name: printer.name, host: printer.host, port: printer.port, width: printer.width }
+				: { host: printer.host, port: printer.port ?? DEFAULT_PRINTER_PORT, width: printer.width };
 		try {
-			return parsePrinter(
-				{ host: printer.host, port: printer.port ?? DEFAULT_PRINTER_PORT, width: printer.width },
-				field
-			);
+			return parsePrinter(shaped, field);
 		} catch (error) {
 			// parsePrinter names the field: "config: receipt.host must be …".
 			const named = /^config: (\S+) /.exec(error instanceof Error ? error.message : '');
@@ -441,6 +449,11 @@ export function createAgentServer(getConfig: () => AgentConfig, deps: AgentDeps)
 
 		if (req.method === 'GET' && path === '/status') {
 			send(200, await deps.status());
+			return;
+		}
+		// The printers plugged into this PC, for the till's Printer page to pick from.
+		if (req.method === 'GET' && path === '/local-printers') {
+			send(200, { printers: await deps.listLocalPrinters() });
 			return;
 		}
 		// The till's Printer page sets the printers (tasks/print-agent-installer T-04).
