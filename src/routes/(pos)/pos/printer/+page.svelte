@@ -26,6 +26,7 @@
 		DEFAULT_AGENT_URL,
 		parsePairingFragment,
 		printerChip,
+		printerKeyOf,
 		readAgentSettings,
 		requestPairing,
 		saveAgentSettings,
@@ -37,11 +38,10 @@
 		type PairingRefusal,
 		type SubmitResult
 	} from '$lib/pos/print-client';
-	import { logoForAgent } from '$lib/pos/printing';
+	import { logoForAgent, logoGate } from '$lib/pos/printing';
 	import { renderTestPage } from '$lib/pos/receipt';
 	import {
 		confirmReceiptLogo,
-		readConfirmedLogoSha,
 		readReceiptLogo,
 		withdrawReceiptLogoConfirmation
 	} from '$lib/pos/settings';
@@ -76,6 +76,10 @@
 	let logoConfirmed = $state(false);
 	let logoSha = $state<string | null>(null);
 	let logoSent = $state(false);
+	// The receipt printer that test page printed on (print-client.ts printerKeyOf):
+	// "The logo printed correctly" records it, so the confirmation counts only
+	// while the agent still reports that printer (print-agent-installer T-14).
+	let testedPrinterKey = $state<string | null>(null);
 
 	const chip = $derived(
 		status === null ? null : printerChip(status, { logoCached, logoConfirmed })
@@ -95,13 +99,11 @@
 			if (fromLink) dropFragment();
 			isOwner = signedIn.current.isOwner;
 			if (isOwner) {
-				const [saved, name, code, zone, logo, confirmedSha] = await Promise.all([
+				const [saved, name, code, zone] = await Promise.all([
 					readAgentSettings().catch(() => null),
 					readCachedSetting('restaurantName').catch(() => null),
 					readCachedSetting('deviceCode').catch(() => null),
-					readCachedSetting('timeZone').catch(() => null),
-					readReceiptLogo().catch(() => null),
-					readConfirmedLogoSha().catch(() => null)
+					readCachedSetting('timeZone').catch(() => null)
 				]);
 				if (saved) {
 					url = saved.url;
@@ -110,12 +112,12 @@
 				if (typeof name === 'string') restaurantName = name;
 				if (typeof code === 'string') deviceCode = code;
 				if (typeof zone === 'string') timeZone = zone;
-				logoCached = logo !== null;
-				logoConfirmed = logo !== null && confirmedSha === logo.sha256;
 				// A cashier's screen leaves the link waiting; only the owner's takes it.
 				const pending = takePairing();
 				if (pending) await pair(pending);
 				else status = await agentStatus();
+				// The rule receipts use: a confirmation counts for the printer it was watched on.
+				({ cached: logoCached, confirmed: logoConfirmed } = await logoGate(status));
 			}
 			ready = true;
 			// A link pasted while the lines above were still loading.
@@ -164,6 +166,8 @@
 		switch (state.state) {
 			case 'ready':
 				return '● The agent answered';
+			case 'no_printer':
+				return '◆ The agent answered, but no printer address is set yet';
 			case 'unauthorized':
 				return '✕ Printer pairing is wrong — the agent was set up again after this till was paired, or for another address (init --origin). Forget the pairing, then pair again';
 			case 'blocked':
@@ -253,6 +257,7 @@
 				return;
 			}
 			const printers = status.status.printers;
+			testedPrinterKey = printerKeyOf(status.status);
 			// The cached logo, whenever the agent can print it — confirmed or not:
 			// this is the one page that may carry an unconfirmed logo, and only the
 			// RECEIPT printer's page gets it. The fingerprint is read beside it and
@@ -316,10 +321,15 @@
 	/** "The logo printed correctly": record the sent logo's fingerprint; receipts carry it from now on. */
 	async function logoPrinted() {
 		if (busy || logoSha === null) return;
+		if (testedPrinterKey === null) {
+			// The agent reported no printer address for the test page: nothing to vouch for.
+			failure = '✕ Press Test print again before confirming the logo';
+			return;
+		}
 		busy = true;
 		failure = '';
 		try {
-			await confirmReceiptLogo(logoSha);
+			await confirmReceiptLogo(logoSha, testedPrinterKey);
 			logoConfirmed = true;
 			logoSent = false;
 			results = [...results, '● Receipts will print the logo'];
@@ -346,12 +356,7 @@
 		try {
 			await withdrawReceiptLogoConfirmation();
 			// Read back exactly as onMount and the layout derive it, so this chip is right at once.
-			const [logo, confirmedSha] = await Promise.all([
-				readReceiptLogo().catch(() => null),
-				readConfirmedLogoSha().catch(() => null)
-			]);
-			logoCached = logo !== null;
-			logoConfirmed = logo !== null && confirmedSha === logo.sha256;
+			({ cached: logoCached, confirmed: logoConfirmed } = await logoGate(status));
 			logoSent = false;
 			results = [
 				...results,

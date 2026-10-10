@@ -51,9 +51,8 @@
 	} from '$lib/pos/employee.svelte';
 	import { flush, lastSkewMs, onFlushResult, onSkew, parkedCount } from '$lib/pos/queue';
 	import { agentStatus, printerChip, type AgentState } from '$lib/pos/print-client';
-	import { startAutoPrint } from '$lib/pos/printing';
+	import { logoGate, startAutoPrint } from '$lib/pos/printing';
 	import { readLocalSession } from '$lib/pos/session';
-	import { readConfirmedLogoSha, readReceiptLogo } from '$lib/pos/settings';
 	import { captureInstallPrompt } from '$lib/pos/install.svelte';
 
 	let { children } = $props();
@@ -256,15 +255,14 @@
 	async function refreshPrinter() {
 		const mine = ++latestPrinterRead;
 		try {
-			const [state, logo, confirmedSha] = await Promise.all([
-				agentStatus(),
-				readReceiptLogo().catch(() => null),
-				readConfirmedLogoSha().catch(() => null)
-			]);
+			const state = await agentStatus();
+			// The rule receipts use (printing.ts logoGate): a confirmation counts only
+			// while the agent reports the printer it was watched on (print-agent-installer).
+			const logo = await logoGate(state);
 			if (mine !== latestPrinterRead) return;
 			printer = state;
-			logoCached = logo !== null;
-			logoConfirmed = logo !== null && confirmedSha === logo.sha256;
+			logoCached = logo.cached;
+			logoConfirmed = logo.confirmed;
 		} catch {
 			if (mine === latestPrinterRead) printer = { state: 'unreachable' };
 		}

@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	agentPrintsImages,
 	agentStatus,
+	agentSupports,
 	clearAgentSettings,
 	DEFAULT_AGENT_URL,
 	hasPendingPairing,
@@ -13,14 +14,17 @@ import {
 	localNetworkPermission,
 	parsePairingFragment,
 	printerChip,
+	printerKeyOf,
 	pulseDrawer,
 	readAgentSettings,
 	requestPairing,
 	saveAgentSettings,
+	savePrinters,
 	stashPairing,
 	submitJob,
 	takePairing,
-	type AgentStatus
+	type AgentStatus,
+	type ReadyStatus
 } from './print-client';
 import { confirmReceiptLogo, readConfirmedLogoSha } from './settings';
 import { readCachedSetting } from './store';
@@ -41,7 +45,7 @@ beforeEach(async () => {
 const TOKEN = 'ab'.repeat(32);
 const URL = 'http://127.0.0.1:9471';
 
-const READY: AgentStatus = {
+const READY: ReadyStatus = {
 	agentVersion: 1,
 	printers: {
 		receipt: { width: 48, reachable: true, queued: 0 },
@@ -115,7 +119,7 @@ describe('the pairing and the receipt-logo confirmation (Risk 6)', () => {
 
 	it('saving a pairing withdraws it — a first pairing, a new one, and the same one again', async () => {
 		for (const settings of [{ url: URL, token: TOKEN }, OTHER, OTHER]) {
-			await confirmReceiptLogo(SHA);
+			await confirmReceiptLogo(SHA, 'legacy');
 			expect(await readConfirmedLogoSha()).toBe(SHA);
 
 			await saveAgentSettings(settings);
@@ -127,7 +131,7 @@ describe('the pairing and the receipt-logo confirmation (Risk 6)', () => {
 
 	it('Forget pairing withdraws it', async () => {
 		await saveAgentSettings({ url: URL, token: TOKEN });
-		await confirmReceiptLogo(SHA);
+		await confirmReceiptLogo(SHA, 'legacy');
 
 		await clearAgentSettings();
 
@@ -137,7 +141,7 @@ describe('the pairing and the receipt-logo confirmation (Risk 6)', () => {
 
 	it('a refused pairing stores nothing and withdraws nothing', async () => {
 		await saveAgentSettings({ url: URL, token: TOKEN });
-		await confirmReceiptLogo(SHA);
+		await confirmReceiptLogo(SHA, 'legacy');
 
 		await expect(
 			saveAgentSettings({ url: 'https://evil.example', token: TOKEN })
@@ -277,7 +281,7 @@ describe('agentStatus', () => {
 
 	it('returns a version-2 body as ready, exactly as it arrived (print-agent T-25)', async () => {
 		await saveAgentSettings({ url: URL, token: TOKEN });
-		const v2: AgentStatus = { ...READY, agentVersion: 2 };
+		const v2: ReadyStatus = { ...READY, agentVersion: 2 };
 		const { fetchFn } = stubFetch([{ status: 200, body: v2 }]);
 		expect(await agentStatus(fetchFn, unknown)).toEqual({ state: 'ready', status: v2 });
 	});
@@ -461,11 +465,11 @@ describe('agentPrintsImages (T-24)', () => {
 
 describe('printerChip', () => {
 	it('says when a ready agent is too old to print the cached logo, or the logo still needs its test print (T-24)', () => {
-		const v1: AgentStatus = {
+		const v1: ReadyStatus = {
 			agentVersion: 1,
 			printers: { receipt: { width: 48, reachable: true, queued: 0 }, kitchen: null }
 		};
-		const v2: AgentStatus = { ...v1, agentVersion: 2 };
+		const v2: ReadyStatus = { ...v1, agentVersion: 2 };
 		const tooOld = {
 			glyph: '◆',
 			text: 'Update the print agent to print the logo',
@@ -521,7 +525,7 @@ describe('printerChip', () => {
 			text: 'Printer ready · 2 waiting',
 			tone: 'ok'
 		});
-		const idle: AgentStatus = {
+		const idle: ReadyStatus = {
 			agentVersion: 1,
 			printers: { receipt: { width: 48, reachable: true, queued: 0 }, kitchen: null }
 		};
@@ -550,5 +554,127 @@ describe('printerChip', () => {
 			text: 'Printer not set up',
 			tone: 'neutral'
 		});
+	});
+});
+
+// ── tasks/print-agent-installer T-14 ────────────────────────────────────────
+
+const NEW_AGENT: ReadyStatus = {
+	agentVersion: 2,
+	features: ['printers', 'setup'],
+	printers: {
+		receipt: { host: '192.168.1.50', port: 9100, width: 48, reachable: true, queued: 0 },
+		kitchen: null
+	}
+};
+
+describe('agentStatus validates the body (print-agent-installer T-14)', () => {
+	it('an agent with no printer yet is no_printer, and its chip says what to do', async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		const body = {
+			agentVersion: 2,
+			features: ['printers', 'setup'],
+			printers: { receipt: null, kitchen: null }
+		};
+		const state = await agentStatus(stubFetch([{ status: 200, body }]).fetchFn, unknown);
+		expect(state).toEqual({ state: 'no_printer', status: body });
+		expect(printerChip(state)).toEqual({
+			glyph: '◆',
+			text: 'Printer address not set — open Printer',
+			tone: 'offline'
+		});
+	});
+
+	it('a garbled body is unreachable — it never reaches the chip', async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		for (const body of [
+			{ printers: 'x' },
+			{ agentVersion: 2 },
+			{
+				agentVersion: 2,
+				printers: { receipt: { width: 40, reachable: true, queued: 0 }, kitchen: null }
+			},
+			{ agentVersion: 2, printers: { receipt: { width: 48 }, kitchen: null } },
+			{ agentVersion: 2, printers: { receipt: READY.printers.receipt, kitchen: { width: 48 } } }
+		]) {
+			expect(await agentStatus(stubFetch([{ status: 200, body }]).fetchFn, unknown)).toEqual({
+				state: 'unreachable'
+			});
+		}
+	});
+
+	it('an older agent (no features, no host) is still ready', async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		const state = await agentStatus(stubFetch([{ status: 200, body: READY }]).fetchFn, unknown);
+		expect(state).toEqual({ state: 'ready', status: READY });
+	});
+});
+
+describe('agentSupports and printerKeyOf', () => {
+	it('features are read only from an array', () => {
+		expect(agentSupports(NEW_AGENT, 'printers')).toBe(true);
+		expect(agentSupports(NEW_AGENT, 'setup')).toBe(true);
+		expect(agentSupports(READY, 'printers')).toBe(false);
+	});
+
+	it('names the receipt printer: host:port:width, legacy for an older agent, null with no printer', () => {
+		expect(printerKeyOf(NEW_AGENT)).toBe('192.168.1.50:9100:48');
+		expect(printerKeyOf(READY)).toBe('legacy');
+		expect(printerKeyOf({ ...NEW_AGENT, printers: { receipt: null, kitchen: null } })).toBeNull();
+		// Claims the feature but reports no address: a key that matches nothing.
+		expect(
+			printerKeyOf({
+				...NEW_AGENT,
+				printers: { receipt: { width: 48, reachable: true, queued: 0 }, kitchen: null }
+			})
+		).toBeNull();
+	});
+});
+
+describe('savePrinters', () => {
+	const printers = {
+		receipt: { host: '192.168.1.60', port: 9100, width: 32 as const },
+		kitchen: null
+	};
+
+	it('sends PUT /printers with the token, no cookie, and the printers as JSON', async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		const { fetchFn, calls } = stubFetch([{ status: 200, body: { printers: {} } }]);
+		expect(await savePrinters(NEW_AGENT, printers, fetchFn, unknown)).toBe('saved');
+		expect(calls[0]!.url).toBe(`${URL}/printers`);
+		expect(calls[0]!.init.method).toBe('PUT');
+		expect(calls[0]!.init.credentials).toBe('omit');
+		expect((calls[0]!.init.headers as Record<string, string>).Authorization).toBe(
+			`Bearer ${TOKEN}`
+		);
+		expect(JSON.parse(String(calls[0]!.init.body))).toEqual(printers);
+	});
+
+	it('maps 409 jobs_waiting, 422 bad_printers and 401 to their errors', async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		const { fetchFn } = stubFetch([
+			{ status: 409, body: { error: 'jobs_waiting', target: 'kitchen', queued: 3 } },
+			{ status: 422, body: { error: 'bad_printers', field: 'receipt.host' } },
+			{ status: 401, body: { error: 'unauthorized' } }
+		]);
+		expect(await savePrinters(NEW_AGENT, printers, fetchFn, unknown)).toEqual({
+			error: 'jobs_waiting',
+			target: 'kitchen',
+			queued: 3
+		});
+		expect(await savePrinters(NEW_AGENT, printers, fetchFn, unknown)).toEqual({
+			error: 'bad_printers',
+			field: 'receipt.host'
+		});
+		expect(await savePrinters(NEW_AGENT, printers, fetchFn, unknown)).toEqual({
+			error: 'unauthorized'
+		});
+	});
+
+	it('never sends to an older agent: unsupported, with no request at all', async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		const { fetchFn, calls } = stubFetch([]);
+		expect(await savePrinters(READY, printers, fetchFn, unknown)).toEqual({ error: 'unsupported' });
+		expect(calls).toHaveLength(0);
 	});
 });

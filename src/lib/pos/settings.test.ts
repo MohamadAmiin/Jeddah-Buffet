@@ -11,6 +11,7 @@ import {
 	RECEIPT_LAYOUT_SETTING,
 	RECEIPT_LOGO_SETTING,
 	confirmReceiptLogo,
+	readConfirmedLogoPrinter,
 	readConfirmedLogoSha,
 	readPaymentMethods,
 	readReceiptLayout,
@@ -390,25 +391,25 @@ describe('the logo confirmation key (T-24)', () => {
 	});
 
 	it('confirmReceiptLogo refuses anything but a 64-hex string with a TypeError, before any write', async () => {
-		expect(() => confirmReceiptLogo('x')).toThrow(TypeError);
-		expect(() => confirmReceiptLogo('A'.repeat(64))).toThrow(TypeError);
-		expect(() => confirmReceiptLogo('a'.repeat(63))).toThrow(TypeError);
-		expect(() => confirmReceiptLogo(42 as unknown as string)).toThrow(TypeError);
+		expect(() => confirmReceiptLogo('x', 'legacy')).toThrow(TypeError);
+		expect(() => confirmReceiptLogo('A'.repeat(64), 'legacy')).toThrow(TypeError);
+		expect(() => confirmReceiptLogo('a'.repeat(63), 'legacy')).toThrow(TypeError);
+		expect(() => confirmReceiptLogo(42 as unknown as string, 'legacy')).toThrow(TypeError);
 
 		expect(await readConfirmedLogoSha()).toBeNull();
 	});
 
 	it('a 64-hex value round-trips, and a later confirmation replaces it', async () => {
-		await confirmReceiptLogo(LOGO.sha256);
+		await confirmReceiptLogo(LOGO.sha256, 'legacy');
 		expect(await readConfirmedLogoSha()).toBe(LOGO.sha256);
 
-		await confirmReceiptLogo('b'.repeat(64));
+		await confirmReceiptLogo('b'.repeat(64), 'legacy');
 		expect(await readConfirmedLogoSha()).toBe('b'.repeat(64));
 	});
 
 	it('withdrawReceiptLogoConfirmation with the confirmed fingerprint deletes the key, and the cached logo stays', async () => {
 		await cacheSettings([{ key: RECEIPT_LOGO_SETTING, value: LOGO }]);
-		await confirmReceiptLogo(LOGO.sha256);
+		await confirmReceiptLogo(LOGO.sha256, 'legacy');
 
 		await withdrawReceiptLogoConfirmation(LOGO.sha256);
 
@@ -420,7 +421,7 @@ describe('the logo confirmation key (T-24)', () => {
 	});
 
 	it('withdrawReceiptLogoConfirmation with a DIFFERENT fingerprint leaves the confirmation as it is', async () => {
-		await confirmReceiptLogo(LOGO.sha256);
+		await confirmReceiptLogo(LOGO.sha256, 'legacy');
 
 		await withdrawReceiptLogoConfirmation('b'.repeat(64));
 
@@ -432,11 +433,38 @@ describe('the logo confirmation key (T-24)', () => {
 		await withdrawReceiptLogoConfirmation(LOGO.sha256);
 		expect(await readConfirmedLogoSha()).toBeNull();
 
-		await confirmReceiptLogo('b'.repeat(64));
+		await confirmReceiptLogo('b'.repeat(64), 'legacy');
 		await withdrawReceiptLogoConfirmation();
 
 		expect(await readConfirmedLogoSha()).toBeNull();
 		expect(await readCachedSetting(KEY)).toBeUndefined();
+	});
+
+	// print-agent-installer T-14: a confirmation vouches for ONE printer.
+	it('records the printer it was watched on; an empty or overlong printer key is refused before any write', async () => {
+		expect(() => confirmReceiptLogo(LOGO.sha256, '')).toThrow(TypeError);
+		expect(() => confirmReceiptLogo(LOGO.sha256, 'x'.repeat(301))).toThrow(TypeError);
+		expect(() => confirmReceiptLogo(LOGO.sha256, 7 as unknown as string)).toThrow(TypeError);
+		expect(await readConfirmedLogoSha()).toBeNull();
+		expect(await readConfirmedLogoPrinter()).toBeNull();
+
+		await confirmReceiptLogo(LOGO.sha256, '192.168.1.50:9100:48');
+		expect(await readConfirmedLogoSha()).toBe(LOGO.sha256);
+		expect(await readConfirmedLogoPrinter()).toBe('192.168.1.50:9100:48');
+	});
+
+	it('withdrawing takes the printer key with the fingerprint — both modes', async () => {
+		await confirmReceiptLogo(LOGO.sha256, '192.168.1.50:9100:48');
+		await withdrawReceiptLogoConfirmation();
+		expect(await readConfirmedLogoSha()).toBeNull();
+		expect(await readConfirmedLogoPrinter()).toBeNull();
+
+		await confirmReceiptLogo(LOGO.sha256, '192.168.1.50:9100:48');
+		await withdrawReceiptLogoConfirmation('b'.repeat(64));
+		expect(await readConfirmedLogoPrinter()).toBe('192.168.1.50:9100:48');
+		await withdrawReceiptLogoConfirmation(LOGO.sha256);
+		expect(await readConfirmedLogoSha()).toBeNull();
+		expect(await readConfirmedLogoPrinter()).toBeNull();
 	});
 });
 
@@ -451,7 +479,7 @@ describe('a device change', () => {
 			},
 			{ key: RECEIPT_LOGO_SETTING, value: LOGO }
 		]);
-		await confirmReceiptLogo(LOGO.sha256);
+		await confirmReceiptLogo(LOGO.sha256, 'legacy');
 		expect(await readPaymentMethods()).toEqual([CASH, EVC]);
 		expect(await readReceiptLogo()).toEqual(LOGO);
 		expect(await readConfirmedLogoSha()).toBe(LOGO.sha256);
@@ -463,5 +491,6 @@ describe('a device change', () => {
 		expect(await readReceiptLayout()).toEqual(DEFAULT_RECEIPT_LAYOUT);
 		// A re-registered till asks for the test print again (the gate's key is per device).
 		expect(await readConfirmedLogoSha()).toBeNull();
+		expect(await readConfirmedLogoPrinter()).toBeNull();
 	});
 });
