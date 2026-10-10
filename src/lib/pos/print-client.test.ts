@@ -677,4 +677,20 @@ describe('savePrinters', () => {
 		expect(await savePrinters(READY, printers, fetchFn, unknown)).toEqual({ error: 'unsupported' });
 		expect(calls).toHaveLength(0);
 	});
+
+	it('a 403 (an agent built for another address) is unauthorized; a failed fetch is unreachable or blocked', async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		const { fetchFn } = stubFetch([
+			{ status: 403, body: { error: 'bad_origin' } },
+			{ throws: new TypeError('Failed to fetch') },
+			{ throws: new TypeError('Failed to fetch') }
+		]);
+		expect(await savePrinters(NEW_AGENT, printers, fetchFn, unknown)).toEqual({
+			error: 'unauthorized'
+		});
+		expect(await savePrinters(NEW_AGENT, printers, fetchFn, unknown)).toEqual({
+			error: 'unreachable'
+		});
+		expect(await savePrinters(NEW_AGENT, printers, fetchFn, denied)).toEqual({ error: 'blocked' });
+	});
 });

@@ -43,9 +43,9 @@
 	import {
 		addressText,
 		agentSentence,
+		applyPrinters,
 		messageFor,
 		parseAddress,
-		receiptChanged,
 		type PrinterFields,
 		type PrinterWidth
 	} from '$lib/pos/printer-form';
@@ -324,7 +324,8 @@
 	 * a confirmation vouches for the printer it was watched on, so whenever the
 	 * receipt printer's host, port or width changes it is withdrawn BEFORE the
 	 * agent is asked — the same order as saveAgentSettings — and a save that then
-	 * fails still leaves the gate closed. It is withdrawn whether or not a logo is
+	 * fails still leaves the gate closed (applyPrinters in printer-form.ts, where
+	 * that order is tested). It is withdrawn whether or not a logo is
 	 * cached now (a confirmation outlives a removed logo that comes back with the
 	 * same fingerprint). The printer key binding (printing.ts logoForAgent) closes
 	 * the gate too, for a change made on the agent's own setup page, which cannot
@@ -349,21 +350,20 @@
 		failure = '';
 		results = [];
 		try {
-			let withdrawn = false;
-			if (receiptChanged(before, next)) {
-				try {
-					await withdrawReceiptLogoConfirmation();
-				} catch {
-					// Not withdrawn: the agent is not asked, so no printer changes under a confirmation.
-					failure = '✕ The printers could not be saved — try again';
-					return;
-				}
-				withdrawn = true;
+			const { result, withdrawn } = await applyPrinters(before, next, {
+				withdraw: () => withdrawReceiptLogoConfirmation(),
+				save: (current, body) => savePrinters(current, body)
+			});
+			if (result === null) {
+				// Not withdrawn: the agent was not asked, so no printer changed under a confirmation.
+				failure = '✕ The printers could not be saved — try again';
+				return;
+			}
+			if (withdrawn) {
 				// A test page printed on the old printer is no longer answered here.
 				logoSent = false;
 				testedPrinterKey = null;
 			}
-			const result = await savePrinters(before, next);
 			const lines = [messageFor(result, url)];
 			status = await agentStatus();
 			({ cached: logoCached, confirmed: logoConfirmed } = await logoGate(status));
@@ -881,11 +881,17 @@
 			{#if installerOpen}
 				{@render installer()}
 			{:else}
-				<details class="border-line border-t pt-4" data-testid="agent-download-details">
-					<summary class="text-ink min-h-touch flex cursor-pointer items-center font-semibold">
+				<details class="group border-line border-t pt-4" data-testid="agent-download-details">
+					<!-- A key, so it reads as something to press; the glyph says open or closed
+					     (base.css hides every summary's own marker). -->
+					<summary
+						class="min-h-touch text-ink flex cursor-pointer items-center justify-between gap-3 px-4 {KEY}"
+					>
 						Print agent installer
+						<span aria-hidden="true" class="font-mono group-open:hidden">▸</span>
+						<span aria-hidden="true" class="hidden font-mono group-open:inline">▾</span>
 					</summary>
-					{@render installer()}
+					<div class="mt-3">{@render installer()}</div>
 				</details>
 			{/if}
 

@@ -1,8 +1,9 @@
 // THE PRINTER FIELDS ON THE TILL'S PRINTER PAGE (print-agent-installer T-16).
 // The owner types the receipt printer's address once, on the till, and the agent
-// on this PC keeps it (PUT /printers). Everything here is pure: what the page
-// reads from the fields, whether the receipt printer changed (which is what
-// withdraws the logo confirmation), and the sentence each answer gets.
+// on this PC keeps it (PUT /printers). Everything here is pure or takes its I/O
+// as arguments: what the page reads from the fields, whether the receipt printer
+// changed (which is what withdraws the logo confirmation), the order a save
+// runs in, and the sentence each answer gets.
 //
 // The agent checks the address again (print-agent/src/config.ts parsePrinter):
 // this is the owner's early answer, not the control.
@@ -53,6 +54,32 @@ export function addressText(printer: PrinterStatus | null): string {
  */
 export function receiptChanged(status: AgentStatus, next: PrintersBody): boolean {
 	return printerKeyOf(status) !== `${next.receipt.host}:${next.receipt.port}:${next.receipt.width}`;
+}
+
+/**
+ * Save printers, THE LOGO GATE FIRST: when the receipt printer changes, the
+ * confirmation is withdrawn BEFORE the agent is asked, so a save that fails
+ * still leaves the gate closed — and when the withdrawal itself fails, the agent
+ * is not asked at all (`result: null`). `withdrawn` says the gate was closed.
+ */
+export async function applyPrinters(
+	before: AgentStatus,
+	next: PrintersBody,
+	io: {
+		withdraw: () => Promise<void>;
+		save: (before: AgentStatus, next: PrintersBody) => Promise<SavePrintersResult>;
+	}
+): Promise<{ result: SavePrintersResult | null; withdrawn: boolean }> {
+	let withdrawn = false;
+	if (receiptChanged(before, next)) {
+		try {
+			await io.withdraw();
+		} catch {
+			return { result: null, withdrawn: false };
+		}
+		withdrawn = true;
+	}
+	return { result: await io.save(before, next), withdrawn };
 }
 
 /**

@@ -699,6 +699,12 @@ describe('the logo (T-24)', () => {
 		await printOriginals(orderId, { drawer: false, fetchFn: agent.fetchFn });
 		for (const job of agent.jobs()) expect(hasImage(job)).toBe(false);
 		expect((await logoForAgent(statusAt(2), 'receipt')).confirmed).toBe(false);
+		// The other null key: an agent that names the 'printers' feature but reports
+		// no address. A key-less confirmation must not match that null either.
+		const unnamed: AgentStatus = { ...statusAt(2), features: ['printers'] };
+		const gate = await logoForAgent(unnamed, 'receipt');
+		expect(gate.confirmed).toBe(false);
+		expect(gate.logo).toBeNull();
 	});
 });
 

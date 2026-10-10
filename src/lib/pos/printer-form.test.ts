@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentStatus } from './print-client';
+import type { AgentStatus, SavePrintersResult } from './print-client';
 import {
 	addressText,
 	agentSentence,
+	applyPrinters,
 	DEFAULT_PRINTER_PORT,
 	messageFor,
 	parseAddress,
@@ -87,6 +88,64 @@ describe('whether Save printers changes the receipt printer — the logo gate (T
 			printers: { receipt: { width: 32, reachable: true, queued: 0 }, kitchen: null }
 		};
 		expect(receiptChanged(legacy, body('192.168.1.50', 9100, 32))).toBe(true);
+	});
+});
+
+describe('Save printers runs the logo gate FIRST (T-16, invariant 9)', () => {
+	const now = status({ host: '192.168.1.50', port: 9100, width: 32 });
+
+	/** Records the order of the two calls; `failWithdraw` makes the withdrawal throw. */
+	function io(result: SavePrintersResult, failWithdraw = false) {
+		const calls: string[] = [];
+		return {
+			calls,
+			withdraw: async () => {
+				calls.push('withdraw');
+				if (failWithdraw) throw new Error('IndexedDB refused');
+			},
+			save: async () => {
+				calls.push('save');
+				return result;
+			}
+		};
+	}
+
+	it('a new receipt printer: the confirmation is withdrawn BEFORE the agent is asked', async () => {
+		const run = io('saved');
+		expect(await applyPrinters(now, body('192.168.1.60', 9100, 32), run)).toEqual({
+			result: 'saved',
+			withdrawn: true
+		});
+		expect(run.calls).toEqual(['withdraw', 'save']);
+	});
+
+	it('a refused save still leaves the gate closed — the withdrawal already happened', async () => {
+		const refused = { error: 'jobs_waiting', target: 'receipt', queued: 1 } as const;
+		const run = io(refused);
+		expect(await applyPrinters(now, body('192.168.1.50', 9100, 48), run)).toEqual({
+			result: refused,
+			withdrawn: true
+		});
+		expect(run.calls).toEqual(['withdraw', 'save']);
+	});
+
+	it('a withdrawal that fails asks the agent NOTHING', async () => {
+		const run = io('saved', true);
+		expect(await applyPrinters(now, body('192.168.1.60', 9100, 32), run)).toEqual({
+			result: null,
+			withdrawn: false
+		});
+		expect(run.calls).toEqual(['withdraw']);
+	});
+
+	it('the same receipt printer (a kitchen change only) keeps the confirmation', async () => {
+		const run = io('saved');
+		const next: PrintersBody = {
+			receipt: { host: '192.168.1.50', port: 9100, width: 32 },
+			kitchen: { host: '192.168.1.51', port: 9100, width: 48 }
+		};
+		expect(await applyPrinters(now, next, run)).toEqual({ result: 'saved', withdrawn: false });
+		expect(run.calls).toEqual(['save']);
 	});
 });
 
