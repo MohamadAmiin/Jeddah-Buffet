@@ -164,19 +164,31 @@ everything the application cannot. Treat it as a production database console.
 
 ## 7. The print agent on the till PC
 
+The installers are built by `scripts/deploy.sh` (`pnpm build:print-agent`) from
+`.env`'s `ORIGIN`, into `dist/print-agent/current/`, and served at
+`/downloads/print-agent/<file>` — public, allow-listed by the build manifest. Each
+installer answers ONLY the origin it was built for. When `ORIGIN` changes, deploy,
+then download and run the new installer on every till PC, and pair each till again.
+The download routes read `dist/print-agent/current/` under the app's working
+directory — the checkout, as PM2 runs it — unless `PRINT_AGENT_DIST` says otherwise.
+A failed installer build never stops the deploy: the previous set keeps being served.
+The build downloads the official Node 24.21.0 binaries from nodejs.org once (cached in
+`.cache/print-agent`) and keeps the current and previous sets, about 0.5 GB together.
+
 Receipts, kitchen tickets and the cash drawer are handled by the **print agent**
 (`print-agent/`, spec 11). It is **not** part of the server deployment: it is not in
 the Docker image and Nginx never proxies to it. It runs on **each till PC**, beside
-the Chrome that shows the till, and listens on `127.0.0.1` only. Install, auto-start
-(systemd or Task Scheduler), pairing and troubleshooting are in
-[`print-agent/README.md`](../print-agent/README.md).
+the Chrome that shows the till, and listens on `127.0.0.1` only. The owner downloads
+it from **POS device → Print agent** on the dashboard (or the till's Printer page)
+and runs it — no Node, no terminal, no administrator rights. Install, auto-start,
+pairing and troubleshooting are in [`print-agent/README.md`](../print-agent/README.md).
 
 Three things on the server side decide whether printing works:
 
 - **The app's `ORIGIN` must equal the agent's configured origin exactly.** The agent
-  answers only requests whose `Origin` header is the address given to `init --origin`
-  — scheme, host and port. If the app moves to another address, run `init --force` on
-  every till PC with the new one and pair each till again.
+  answers only requests whose `Origin` header is the address the installer was built
+  for — scheme, host and port. If the app moves to another address, deploy, then
+  download and run the new installer on every till PC, and pair each till again.
 - **HTTPS is required** (section 1). Chrome lets an `https:` page call
   `http://127.0.0.1` — loopback is a trustworthy origin — and, from Chrome 142, asks
   the owner once for "local network access" on the first call. That prompt appears
@@ -218,6 +230,7 @@ The printing rules the code enforces, for whoever operates the till:
 | `SIGNUP` | optional | `open` (the default when unset) or `closed`. Anything else stops the app at boot. |
 | `BODY_SIZE_LIMIT` | optional | adapter-node's request body cap, default `512K`. Menu photos are capped at 400 KB (`src/lib/menu-images.ts`); do not set it lower. |
 | `LOGIN_THROTTLE_CAPACITY` | e2e only | Leave unset. Raises the per-address login throttle for the local Playwright journey; the app refuses to start with it on a non-localhost `ORIGIN`. |
+| `PRINT_AGENT_DIST` | optional | Where the download routes read the installers; default dist/print-agent/current under the app's working directory. |
 
 **One open question, recorded rather than decided.** `env.ts` currently *requires*
 `MIGRATE_DATABASE_URL` at application startup, which puts the **owner** credential
