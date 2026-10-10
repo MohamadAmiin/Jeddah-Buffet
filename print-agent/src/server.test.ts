@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createConfig, saveConfig, type AgentConfig, type ReadyPrinters } from './config.ts';
+import type { LocalPrinterInfo } from './local-printer.ts';
 import { claimPairing, openPairing, pairingState, type PairingClaim } from './pairing.ts';
 import { createRuntime, type Runtime } from './runtime.ts';
 import {
@@ -40,7 +41,7 @@ const config: AgentConfig = {
 
 const status: AgentStatus = {
 	agentVersion: 2,
-	features: ['printers', 'setup'],
+	features: ['printers', 'setup', 'local-printers'],
 	printers: {
 		receipt: { host: '127.0.0.1', port: 9100, width: 48, reachable: true, queued: 0 },
 		kitchen: { host: '127.0.0.1', port: 9101, width: 32, reachable: false, queued: 2 }
@@ -93,7 +94,9 @@ function harness() {
 	let printersAnswer: SetPrintersOutcome = { ok: true };
 	let pairingAnswer: PairingClaim = 'not_open';
 	let claims = 0;
+	let localPrinters: LocalPrinterInfo[] = [];
 	const deps: AgentDeps = {
+		listLocalPrinters: async () => localPrinters,
 		submitJob: (job) => {
 			jobs.push(job);
 			return submitAnswer;
@@ -121,7 +124,8 @@ function harness() {
 		setPairing: (a: PairingClaim) => (pairingAnswer = a),
 		setSubmit: (a: typeof submitAnswer) => (submitAnswer = a),
 		setDrawer: (a: typeof drawerAnswer) => (drawerAnswer = a),
-		setPrintersAnswer: (a: SetPrintersOutcome) => (printersAnswer = a)
+		setPrintersAnswer: (a: SetPrintersOutcome) => (printersAnswer = a),
+		setLocalPrinters: (list: LocalPrinterInfo[]) => (localPrinters = list)
 	};
 }
 
@@ -756,7 +760,7 @@ describe('no printer yet', () => {
 		expect(before.status).toBe(200);
 		expect(before.json).toEqual({
 			agentVersion: 2,
-			features: ['printers', 'setup'],
+			features: ['printers', 'setup', 'local-printers'],
 			printers: { receipt: null, kitchen: null }
 		});
 		const job = await call(port, {
@@ -793,5 +797,52 @@ describe('no printer yet', () => {
 			body: jobBody({ lines: [{ text: 'x'.repeat(32) }] })
 		});
 		expect(queued.status).toBe(202);
+	});
+});
+
+describe('GET /local-printers (the printers this PC knows)', () => {
+	it('needs the token, then lists what the runtime reports — never more than name and state', async () => {
+		const h = harness();
+		h.setLocalPrinters([
+			{ name: 'SomStar-80mm-Series', state: 'idle' },
+			{ name: 'Old-Epson', state: 'stopped' }
+		]);
+		const { port, good } = await start(h.deps);
+		const noToken = await call(port, {
+			method: 'GET',
+			path: '/local-printers',
+			headers: { host: `127.0.0.1:${port}`, origin: ORIGIN }
+		});
+		expect(noToken.status).toBe(401);
+		const listed = await call(port, { method: 'GET', path: '/local-printers', headers: good() });
+		expect(listed.status).toBe(200);
+		expect(listed.json).toEqual({
+			printers: [
+				{ name: 'SomStar-80mm-Series', state: 'idle' },
+				{ name: 'Old-Epson', state: 'stopped' }
+			]
+		});
+	});
+
+	it('PUT /printers takes a printer on this PC by name, with no host or port', async () => {
+		const h = harness();
+		const { port, good } = await start(h.deps);
+		const answer = await putPrinters(port, good(), {
+			receipt: { name: 'SomStar-80mm-Series', width: 48 },
+			kitchen: { host: '192.168.1.51', width: 32 }
+		});
+		expect(answer.status).toBe(200);
+		expect(h.printerCalls).toEqual([
+			{
+				receipt: { name: 'SomStar-80mm-Series', width: 48 },
+				kitchen: { host: '192.168.1.51', port: 9100, width: 32 }
+			}
+		]);
+		const both = await putPrinters(port, good(), {
+			receipt: { name: 'SomStar-80mm-Series', host: '10.0.0.1', width: 48 }
+		});
+		expect(both.json).toEqual({ error: 'bad_printers', field: 'receipt.name' });
+		const empty = await putPrinters(port, good(), { receipt: { name: '   ', width: 48 } });
+		expect(empty.json).toEqual({ error: 'bad_printers', field: 'receipt.name' });
 	});
 });

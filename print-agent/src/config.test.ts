@@ -17,7 +17,10 @@ import {
 	loadConfig,
 	parseConfig,
 	parseOrigin,
+	isLocalPrinter,
+	parsePrinter,
 	parsePrinterAddress,
+	printerLabel,
 	saveConfig,
 	writeFileAtomic,
 	writeSeam
@@ -198,6 +201,67 @@ describe('parsePrinterAddress', () => {
 			width: 32
 		});
 		expect(() => parsePrinterAddress('', 32)).toThrow();
+	});
+
+	it('local:<name> is a printer this PC knows (feat/local-printers)', () => {
+		expect(parsePrinterAddress('local:SomStar-80mm-Series', 48)).toEqual({
+			name: 'SomStar-80mm-Series',
+			width: 48
+		});
+		expect(parsePrinterAddress(' local:Front Desk ', 32)).toEqual({
+			name: 'Front Desk',
+			width: 32
+		});
+		expect(() => parsePrinterAddress('local:', 32)).toThrow(/printer\.name/);
+	});
+});
+
+describe('a printer on this PC in the config (feat/local-printers)', () => {
+	it('is { name, width }, refuses a name that is empty, too long, not a string or has control characters, and never both kinds', () => {
+		expect(parsePrinter({ name: ' SomStar-80mm-Series ', width: 48 }, 'printers.receipt')).toEqual({
+			name: 'SomStar-80mm-Series',
+			width: 48
+		});
+		for (const name of [
+			'',
+			'   ',
+			'-Till',
+			' -Till',
+			'SomStar/draft',
+			'x'.repeat(121),
+			'a\nb',
+			'a\x7fb',
+			42,
+			true
+		]) {
+			expect(() => parsePrinter({ name, width: 48 }, 'printers.receipt')).toThrow(
+				/printers\.receipt\.name/
+			);
+		}
+		expect(() =>
+			parsePrinter({ name: 'SomStar', host: '10.0.0.1', width: 48 }, 'printers.receipt')
+		).toThrow(/printers\.receipt\.name/);
+		expect(() =>
+			parsePrinter({ name: 'SomStar', port: 9100, width: 48 }, 'printers.receipt')
+		).toThrow(/printers\.receipt\.name/);
+		expect(isLocalPrinter({ name: 'SomStar', width: 48 })).toBe(true);
+		expect(isLocalPrinter({ host: '10.0.0.1', port: 9100, width: 48 })).toBe(false);
+		expect(printerLabel({ name: 'SomStar', width: 48 })).toBe('local:SomStar');
+		expect(printerLabel({ host: '10.0.0.1', port: 9100, width: 48 })).toBe('10.0.0.1:9100');
+	});
+
+	it('round-trips through the file, and an older file with host/port still reads as a network printer', () => {
+		const path = join(tmp(), 'config.json');
+		const config = parseConfig({
+			...complete,
+			printers: { receipt: { name: 'SomStar-80mm-Series', width: 48 }, kitchen: null }
+		});
+		saveConfig(path, config);
+		expect(loadConfig(path).printers).toEqual({
+			receipt: { name: 'SomStar-80mm-Series', width: 48 },
+			kitchen: null
+		});
+		expect(parseConfig(complete).printers.receipt).toEqual(complete.printers.receipt);
 	});
 });
 

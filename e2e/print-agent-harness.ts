@@ -6,7 +6,7 @@
 // `agent` variable and its own beforeAll/afterAll. Not a spec — Playwright
 // collects only files named *.spec.ts.
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 
@@ -59,15 +59,45 @@ export function writeAgentConfig(
 	return configPath;
 }
 
-/** Spawn the real agent and resolve once it says it is listening. */
-export function startAgent(configPath: string): Promise<ChildProcess> {
+/**
+ * A fake print service on PATH for the spawned agent (feat/local-printers):
+ * `lpstat -p` lists one idle printer, `lp` appends its stdin to a tape file and
+ * answers a request id, `cancel` succeeds. The agent runs them in a C locale,
+ * exactly as it would run CUPS. Linux and macOS only — the e2e host is Linux.
+ */
+export function fakeCups(
+	dir: string,
+	printerName = 'Fake-Thermal'
+): { env: Record<string, string>; tape: string } {
+	const bin = join(dir, 'fake-cups');
+	mkdirSync(bin, { recursive: true });
+	const tape = join(dir, 'cups-tape.bin');
+	const script = (name: string, body: string) =>
+		writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+	// Two printers, the one under test SECOND: a page must select the configured
+	// printer, never whichever is first on the list.
+	script(
+		'lpstat',
+		`case "$1" in -p) echo "printer Office-Laser is idle.  enabled since Sat Oct 10 15:00:00 2026"; echo "printer ${printerName} is idle.  enabled since Sat Oct 10 15:54:12 2026";; esac\nexit 0`
+	);
+	script('lp', `cat >> "$FAKE_CUPS_TAPE"\necho "request id is ${printerName}-$$ (0 file(s))"`);
+	script('cancel', 'exit 0');
+	return { env: { PATH: `${bin}:${process.env.PATH ?? ''}`, FAKE_CUPS_TAPE: tape }, tape };
+}
+
+/** Spawn the real agent and resolve once it says it is listening. `env` is added to the process's. */
+export function startAgent(
+	configPath: string,
+	env: Record<string, string> = {}
+): Promise<ChildProcess> {
 	return new Promise((resolve, reject) => {
 		const child = spawn(
 			process.execPath,
 			['print-agent/src/main.ts', 'run', '--config', configPath],
 			{
 				cwd: process.cwd(),
-				stdio: ['ignore', 'pipe', 'pipe']
+				stdio: ['ignore', 'pipe', 'pipe'],
+				env: { ...process.env, ...env }
 			}
 		);
 		const timer = setTimeout(

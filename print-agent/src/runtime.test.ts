@@ -3,14 +3,14 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createConfig, saveConfig, type AgentConfig, type PrinterConfig } from './config.ts';
+import { createConfig, saveConfig, type AgentConfig, type NetworkPrinter } from './config.ts';
 import { DRAWER_PULSE, PAPER_STATUS_QUERY } from './escpos.ts';
 import { createRuntime, type Runtime } from './runtime.ts';
 import type { Job } from './server.ts';
 
 // ── Fakes (the queue.test.ts pattern) ───────────────────────────────────────
 
-type Fake = { cfg: PrinterConfig; jobs: Buffer[]; stop: () => Promise<void> };
+type Fake = { cfg: NetworkPrinter; jobs: Buffer[]; stop: () => Promise<void> };
 
 const fakes: Fake[] = [];
 const runtimes: Runtime[] = [];
@@ -59,7 +59,7 @@ function startFake(port = 0): Promise<Fake> {
 }
 
 /** A port nothing listens on: a printer that is down. */
-async function downPrinter(width: 32 | 48 = 48): Promise<PrinterConfig> {
+async function downPrinter(width: 32 | 48 = 48): Promise<NetworkPrinter> {
 	const fake = await startFake(0);
 	fakes.splice(fakes.indexOf(fake), 1);
 	await fake.stop();
@@ -118,7 +118,7 @@ describe('a runtime with no receipt printer', () => {
 		const { runtime, dataDir } = setUp({ receipt: null, kitchen: null });
 		expect(await runtime.deps.status()).toEqual({
 			agentVersion: 2,
-			features: ['printers', 'setup'],
+			features: ['printers', 'setup', 'local-printers'],
 			printers: { receipt: null, kitchen: null }
 		});
 		expect(await runtime.deps.submitJob(job('a', 'Tea'))).toBe('no_printer');
@@ -173,8 +173,14 @@ describe('setPrinters re-wires the queue and the drawer', () => {
 		await until(() => b.jobs.length === 1, 5000, 'the queued receipt on B');
 		expect(textOf(b.jobs[0]!)).toContain('Logo receipt');
 		expect(b.jobs[0]!.includes(RASTER)).toBe(false);
-		expect(readFileSync(join(dataDir, 'agent.log'), 'utf8')).toContain(
-			'printed l1 without its logo: the receipt printer changed'
+		// The log line lands after the agent's own socket closes, which can be a
+		// moment after the fake printer saw the bytes: wait for it.
+		const logged = () =>
+			existsSync(join(dataDir, 'agent.log')) && readFileSync(join(dataDir, 'agent.log'), 'utf8');
+		await until(
+			() => (logged() || '').includes('printed l1 without its logo: the receipt printer changed'),
+			4000,
+			'the log line'
 		);
 	});
 

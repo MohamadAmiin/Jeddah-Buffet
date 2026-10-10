@@ -5,8 +5,9 @@ import { createServer as createTcpServer, type Server as TcpServer, type Socket 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createConfig, saveConfig, type AgentConfig, type PrinterConfig } from './config.ts';
+import { createConfig, saveConfig, type AgentConfig, type NetworkPrinter } from './config.ts';
 import { DRAWER_PULSE, PAPER_STATUS_QUERY } from './escpos.ts';
+import { forgetLocalPrinters, localIo } from './local-printer.ts';
 import { claimPairing, openPairing, pairingState } from './pairing.ts';
 import { createRuntime, type Runtime } from './runtime.ts';
 import { createAgentServer, listen } from './server.ts';
@@ -57,7 +58,7 @@ function call(
 }
 
 /** A raw printer that records every job; it never answers a status query. */
-function fakePrinter(): Promise<{ cfg: PrinterConfig; jobs: Buffer[] }> {
+function fakePrinter(): Promise<{ cfg: NetworkPrinter; jobs: Buffer[] }> {
 	return new Promise((resolve) => {
 		const jobs: Buffer[] = [];
 		const sockets = new Set<Socket>();
@@ -342,5 +343,30 @@ describe('the setup API routes', () => {
 		expect((await api('/setup/quit')).json).toEqual({ quitting: true, pid: process.pid });
 		await new Promise((r) => setTimeout(r, 20));
 		expect(quits()).toBe(1);
+	});
+});
+
+describe('/setup/local-printers', () => {
+	it("lists the printers the PC's print service knows, through the real runtime", async () => {
+		const realExec = localIo.exec;
+		localIo.exec = async (cmd, args) =>
+			cmd === 'lpstat' && args[0] === '-p'
+				? {
+						status: 0,
+						stdout:
+							'printer SomStar-80mm-Series is idle.  enabled since Sat Oct 10 15:54:12 2026\n',
+						stderr: ''
+					}
+				: { status: 127, stdout: '', stderr: 'not faked' };
+		forgetLocalPrinters();
+		try {
+			const { api } = await agent();
+			const listed = await api('/setup/local-printers');
+			expect(listed.status).toBe(200);
+			expect(listed.json).toEqual({ printers: [{ name: 'SomStar-80mm-Series', state: 'idle' }] });
+		} finally {
+			localIo.exec = realExec;
+			forgetLocalPrinters();
+		}
 	});
 });

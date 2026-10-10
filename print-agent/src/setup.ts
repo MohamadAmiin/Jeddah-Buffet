@@ -187,6 +187,11 @@ export function createSetupHandler(deps: SetupDeps): NonNullable<AgentDeps['setu
 			});
 			return;
 		}
+		if (path === '/setup/local-printers') {
+			// The printers this PC's print service knows, to pick from (local-printer.ts).
+			json(200, { printers: await runtime.deps.listLocalPrinters() });
+			return;
+		}
 		if (path === '/setup/printers') {
 			let printers;
 			try {
@@ -200,7 +205,12 @@ export function createSetupHandler(deps: SetupDeps): NonNullable<AgentDeps['setu
 			}
 			const outcome = await runtime.deps.setPrinters(printers);
 			if (!outcome.ok) {
-				json(409, { error: 'jobs_waiting', target: outcome.target, queued: outcome.queued });
+				json(
+					409,
+					outcome.error === 'jobs_waiting'
+						? { error: 'jobs_waiting', target: outcome.target, queued: outcome.queued }
+						: { error: outcome.error, target: outcome.target }
+				);
 				return;
 			}
 			json(200, { printers: (await runtime.deps.status()).printers });

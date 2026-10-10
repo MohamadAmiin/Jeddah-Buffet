@@ -44,8 +44,10 @@ export type AgentSettings = { url: string; token: string };
 
 /**
  * The agent's `GET /status` body (print-agent/src/server.ts AgentStatus).
- * `host`/`port` come from an agent that can set printers (print-agent-installer
- * T-04) and let a logo confirmation be bound to ONE printer (printerKeyOf).
+ * `host`/`port` — or `name`, for a printer plugged into the till PC and reached
+ * through its print service — come from an agent that can set printers
+ * (print-agent-installer T-04) and let a logo confirmation be bound to ONE
+ * printer (printerKeyOf).
  */
 export type PrinterStatus = {
 	width: 32 | 48;
@@ -53,6 +55,7 @@ export type PrinterStatus = {
 	queued: number;
 	host?: string;
 	port?: number;
+	name?: string;
 };
 export type AgentStatus = {
 	/**
@@ -79,25 +82,42 @@ export function agentPrintsImages(status: AgentStatus): boolean {
 	return typeof status.agentVersion === 'number' && status.agentVersion >= IMAGE_AGENT_VERSION;
 }
 
-/** The agent offers this (`features` in its status) — e.g. 'printers' = PUT /printers. */
-export function agentSupports(status: AgentStatus, feature: 'printers' | 'setup'): boolean {
+/** The agent offers this (`features` in its status) — e.g. 'printers' = PUT /printers, 'local-printers' = GET /local-printers. */
+export function agentSupports(
+	status: AgentStatus,
+	feature: 'printers' | 'setup' | 'local-printers'
+): boolean {
 	return Array.isArray(status.features) && status.features.includes(feature);
 }
 
 /**
  * Which receipt printer a status describes, as the key a logo confirmation is
- * bound to: `host:port:width` from an agent that reports them; 'legacy' from an
- * older agent, whose printer can only change through a re-key — and a new
- * pairing withdraws the confirmation anyway (saveAgentSettings); null when
- * there is no receipt printer, or the agent claims the feature but reports no
- * address — a key that matches nothing, so the gate stays closed.
+ * bound to: `host:port:width` from an agent that reports them, or
+ * `local:<name>:width` for a printer on the till PC; 'legacy' from an older
+ * agent, whose printer can only change through a re-key — and a new pairing
+ * withdraws the confirmation anyway (saveAgentSettings); null when there is no
+ * receipt printer, or the agent claims the feature but reports no address — a
+ * key that matches nothing, so the gate stays closed.
  */
 export function printerKeyOf(status: AgentStatus): string | null {
 	const receipt = status.printers.receipt;
 	if (!receipt) return null;
 	if (!agentSupports(status, 'printers')) return 'legacy';
-	if (typeof receipt.host !== 'string' || typeof receipt.port !== 'number') return null;
-	return `${receipt.host}:${receipt.port}:${receipt.width}`;
+	return printerKeyFor(receipt);
+}
+
+/** The key of one printer as a status or a save body names it (printerKeyOf's rule). */
+export function printerKeyFor(printer: {
+	width: 32 | 48;
+	host?: string;
+	port?: number;
+	name?: string;
+}): string | null {
+	if (typeof printer.name === 'string' && printer.name.length > 0) {
+		return `local:${printer.name}:${printer.width}`;
+	}
+	if (typeof printer.host !== 'string' || typeof printer.port !== 'number') return null;
+	return `${printer.host}:${printer.port}:${printer.width}`;
 }
 
 export type AgentState =
@@ -123,6 +143,13 @@ export type LocalNetworkPermission = 'granted' | 'denied' | 'prompt' | 'unknown'
 
 const STATUS_TIMEOUT_MS = 3000;
 const JOB_TIMEOUT_MS = 5000;
+/**
+ * The drawer answer can take longer than a job: for a printer on the till PC
+ * the agent waits up to 15 s (print-agent SPOOL_WINDOW_MS) for the pulse to
+ * print behind the receipt and ticket just spooled, then answers. Waiting less
+ * would read a drawer that is about to open as one that did not.
+ */
+const DRAWER_TIMEOUT_MS = 20_000;
 const TOKEN_RE = /^[0-9a-f]{64}$/;
 const URL_RE = /^http:\/\/(?:127\.0\.0\.1|localhost):(\d{4,5})$/;
 
@@ -362,6 +389,7 @@ function printerStatusOf(value: unknown): PrinterStatus | null {
 	const status: PrinterStatus = { width: p.width, reachable: p.reachable, queued: p.queued };
 	if (typeof p.host === 'string') status.host = p.host;
 	if (typeof p.port === 'number') status.port = p.port;
+	if (typeof p.name === 'string' && p.name.length > 0) status.name = p.name;
 	return status;
 }
 
@@ -398,11 +426,72 @@ function stateOf(body: Record<string, unknown>): AgentState {
 export type SavePrintersResult =
 	| 'saved'
 	| { error: 'jobs_waiting'; target: 'receipt' | 'kitchen'; queued: number }
+	| { error: 'print_service_unavailable'; target: 'receipt' | 'kitchen' }
 	| { error: 'bad_printers'; field: string }
 	| { error: 'unsupported' | 'unauthorized' | 'blocked' | 'unreachable' | 'not_set_up' }
 	| { error: string };
 
-type PrinterAddress = { host: string; port: number; width: 32 | 48 };
+/** One printer as PUT /printers takes it: a network address, or a printer on the till PC by name. */
+export type PrinterSpec =
+	{ host: string; port: number; width: 32 | 48 } | { name: string; width: 32 | 48 };
+
+/** A printer the till PC's print service knows (GET /local-printers). */
+export type LocalPrinterInfo = {
+	name: string;
+	state: 'idle' | 'printing' | 'stopped' | 'unknown';
+};
+export type LocalPrintersResult =
+	| { ok: true; printers: LocalPrinterInfo[] }
+	| { error: 'unsupported' | 'unauthorized' | 'blocked' | 'unreachable' | 'not_set_up' }
+	| { error: string };
+
+const LOCAL_STATES = new Set(['idle', 'printing', 'stopped', 'unknown']);
+
+/**
+ * The printers plugged into (or installed on) the till PC, from an agent that
+ * lists them ('local-printers' in its features). Each entry is checked before
+ * the Printer page offers it: the page is client-side and the body came off
+ * the loopback, not from this app.
+ */
+export async function listLocalPrinters(
+	status: AgentStatus,
+	fetchFn: typeof fetch = fetch,
+	probe: () => Promise<LocalNetworkPermission> = localNetworkPermission
+): Promise<LocalPrintersResult> {
+	if (!agentSupports(status, 'local-printers')) return { error: 'unsupported' };
+	const settings = await readAgentSettings();
+	if (!settings) return { error: 'not_set_up' };
+	let response: Response;
+	try {
+		response = await agentFetch(
+			settings,
+			'/local-printers',
+			{ method: 'GET' },
+			STATUS_TIMEOUT_MS * 5,
+			fetchFn
+		);
+	} catch {
+		return { error: await failureState(probe) };
+	}
+	const body = await bodyOf(response);
+	if (response.status === 401 || response.status === 403) return { error: 'unauthorized' };
+	if (response.status !== 200) return { error: errorCode(body, response.status) };
+	const listed = Array.isArray(body.printers) ? body.printers : [];
+	const printers: LocalPrinterInfo[] = [];
+	for (const entry of listed) {
+		if (typeof entry !== 'object' || entry === null) continue;
+		const { name, state } = entry as Record<string, unknown>;
+		if (typeof name !== 'string' || name.length === 0 || name.length > 120) continue;
+		printers.push({
+			name,
+			state:
+				typeof state === 'string' && LOCAL_STATES.has(state)
+					? (state as LocalPrinterInfo['state'])
+					: 'unknown'
+		});
+	}
+	return { ok: true, printers };
+}
 
 /**
  * Set the printers on the agent (PUT /printers). Sent only to an agent whose
@@ -411,7 +500,7 @@ type PrinterAddress = { host: string; port: number; width: 32 | 48 };
  */
 export async function savePrinters(
 	status: AgentStatus,
-	printers: { receipt: PrinterAddress; kitchen: PrinterAddress | null },
+	printers: { receipt: PrinterSpec; kitchen: PrinterSpec | null },
 	fetchFn: typeof fetch = fetch,
 	probe: () => Promise<LocalNetworkPermission> = localNetworkPermission
 ): Promise<SavePrintersResult> {
@@ -432,6 +521,12 @@ export async function savePrinters(
 	}
 	const body = await bodyOf(response);
 	if (response.status === 200) return 'saved';
+	if (response.status === 409 && body.error === 'print_service_unavailable') {
+		return {
+			error: 'print_service_unavailable',
+			target: body.target === 'kitchen' ? 'kitchen' : 'receipt'
+		};
+	}
 	if (response.status === 409 && body.error === 'jobs_waiting') {
 		return {
 			error: 'jobs_waiting',
@@ -486,7 +581,7 @@ export async function pulseDrawer(
 			settings,
 			'/drawer',
 			{ method: 'POST', body: args },
-			JOB_TIMEOUT_MS,
+			DRAWER_TIMEOUT_MS,
 			fetchFn
 		);
 	} catch {

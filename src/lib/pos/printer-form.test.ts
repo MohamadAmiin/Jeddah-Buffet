@@ -5,8 +5,10 @@ import {
 	agentSentence,
 	applyPrinters,
 	DEFAULT_PRINTER_PORT,
+	localNameOf,
 	messageFor,
 	parseAddress,
+	placeOf,
 	receiptChanged,
 	type PrintersBody
 } from './printer-form';
@@ -198,6 +200,55 @@ describe('the sentence after Save printers (T-16)', () => {
 		);
 		expect(agentSentence('unreachable', URL)).toBe(
 			'◆ Printer unreachable — nothing answered at http://127.0.0.1:9471. Is the matcami print agent installed on this PC? Download it below.'
+		);
+	});
+});
+
+describe('a printer plugged into the till PC (feat/local-printers)', () => {
+	const named = (name: string, width: 32 | 48): AgentStatus => ({
+		agentVersion: 2,
+		features: ['printers', 'setup', 'local-printers'],
+		printers: { receipt: { name, width, reachable: true, queued: 0 }, kitchen: null }
+	});
+	const local = (name: string, width: 32 | 48): PrintersBody => ({
+		receipt: { name, width },
+		kitchen: null
+	});
+
+	it('the same name and width is no change; another name, width or a move to the network is', () => {
+		const now = named('SomStar-80mm-Series', 48);
+		expect(receiptChanged(now, local('SomStar-80mm-Series', 48))).toBe(false);
+		expect(receiptChanged(now, local('SomStar-80mm-Series', 32))).toBe(true);
+		expect(receiptChanged(now, local('Other', 48))).toBe(true);
+		expect(receiptChanged(now, body('192.168.1.50', 9100, 48))).toBe(true);
+		expect(
+			receiptChanged(status({ host: '192.168.1.50', port: 9100, width: 48 }), local('SomStar', 48))
+		).toBe(true);
+	});
+
+	it('reads where a reported printer is, and its name on this PC', () => {
+		const printer = named('SomStar-80mm-Series', 48).printers.receipt;
+		expect(placeOf(printer, 'network')).toBe('local');
+		expect(localNameOf(printer)).toBe('SomStar-80mm-Series');
+		const network = status({ host: '192.168.1.50', port: 9100, width: 48 }).printers.receipt;
+		expect(placeOf(network, 'local')).toBe('network');
+		expect(localNameOf(network)).toBe('');
+		expect(placeOf(null, 'local')).toBe('local');
+		expect(localNameOf(null)).toBe('');
+	});
+
+	it('a print service that did not answer says to try again', () => {
+		expect(messageFor({ error: 'print_service_unavailable', target: 'receipt' }, URL)).toBe(
+			'◆ The PC’s print service did not answer — try again in a moment'
+		);
+	});
+
+	it('a refused name says to pick from the list; a refused address says to check it', () => {
+		expect(messageFor({ error: 'bad_printers', field: 'receipt.name' }, URL)).toBe(
+			'✕ Pick the printer from the list'
+		);
+		expect(messageFor({ error: 'bad_printers', field: 'kitchen.host' }, URL)).toBe(
+			'✕ Check the printer address'
 		);
 	});
 });

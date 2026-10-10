@@ -1,0 +1,668 @@
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { LocalPrinter } from './config.ts';
+import { DRAWER_PULSE } from './escpos.ts';
+import {
+	forgetLocalPrinters,
+	helperEnv,
+	jobOf,
+	listLocalPrinters,
+	localIo,
+	localHeld,
+	localQueued,
+	localReachable,
+	parseGetPrinter,
+	parseLpstat,
+	parseRequestId,
+	powershellArgs,
+	PS_LIST,
+	PS_SEND,
+	PS_STATUS,
+	sendLocalNow,
+	spoolLocal,
+	type ExecOpts,
+	type ExecOutcome
+} from './local-printer.ts';
+import { createConfig, saveConfig } from './config.ts';
+import { createDrawer, createQueue, type Queue } from './queue.ts';
+import { createRuntime } from './runtime.ts';
+
+type Call = { cmd: string; args: string[]; opts: ExecOpts };
+
+const SOMSTAR: LocalPrinter = { name: 'SomStar-80mm-Series', width: 48 };
+const ok = (stdout = ''): ExecOutcome => ({ status: 0, stdout, stderr: '' });
+
+/** `lpstat -p`, C locale, as a Linux Mint 22.3 PC printed it on 2026-10-10. */
+const LPSTAT_P = `printer SomStar-80mm-Series is idle.  enabled since Sat Oct 10 15:54:12 2026
+printer Office-Laser now printing Office-Laser-12.  enabled since Sat Oct 10 15:00:00 2026
+printer Old-Epson disabled since Sat Oct 10 16:00:51 2026 -
+	Unplugged or turned off
+printer Flaky is idle.  enabled since Sat Oct 10 16:02:38 2026
+	Waiting for printer to become available.
+`;
+
+const realExec = localIo.exec;
+const realPlatform = localIo.platform;
+let calls: Call[] = [];
+/** Answers by command; a command with no answer is a failure, never a real spawn. */
+let answer: (call: Call) => ExecOutcome | undefined = () => undefined;
+
+beforeEach(() => {
+	calls = [];
+	answer = () => undefined;
+	forgetLocalPrinters();
+	localIo.platform = () => 'linux';
+	localIo.exec = async (cmd, args, opts) => {
+		const call = { cmd, args, opts };
+		calls.push(call);
+		return answer(call) ?? { status: 127, stdout: '', stderr: `${cmd}: not faked` };
+	};
+});
+afterEach(() => {
+	localIo.exec = realExec;
+	localIo.platform = realPlatform;
+	forgetLocalPrinters();
+});
+
+describe('reading the print service (CUPS)', () => {
+	it('parses lpstat -p: idle, printing, disabled, and an enabled printer the backend is waiting for', () => {
+		expect(parseLpstat(LPSTAT_P)).toEqual([
+			{ name: 'SomStar-80mm-Series', state: 'idle' },
+			{ name: 'Office-Laser', state: 'printing' },
+			{ name: 'Old-Epson', state: 'stopped' },
+			{ name: 'Flaky', state: 'stopped' }
+		]);
+		expect(parseLpstat('')).toEqual([]);
+	});
+
+	it('parses the lp request id', () => {
+		expect(parseRequestId('request id is SomStar-80mm-Series-47 (0 file(s))\n')).toBe(
+			'SomStar-80mm-Series-47'
+		);
+		expect(parseRequestId('lp: The printer or class does not exist.')).toBeNull();
+	});
+
+	it('lists printers with lpstat -p in a C locale, caches the list, and lists nothing on a PC with no printer', async () => {
+		answer = (c) => (c.cmd === 'lpstat' && c.args[0] === '-p' ? ok(LPSTAT_P) : undefined);
+		const first = await listLocalPrinters();
+		expect(first.map((p) => p.name)).toEqual([
+			'SomStar-80mm-Series',
+			'Office-Laser',
+			'Old-Epson',
+			'Flaky'
+		]);
+		await listLocalPrinters();
+		expect(calls).toHaveLength(1);
+		forgetLocalPrinters();
+		answer = () => ({ status: 1, stdout: '', stderr: 'lpstat: No destinations added.' });
+		expect(await listLocalPrinters()).toEqual([]);
+	});
+
+	it('a printer is reachable while the service calls it idle or printing — not stopped, not missing', async () => {
+		answer = (c) => (c.cmd === 'lpstat' ? ok(LPSTAT_P) : undefined);
+		expect(await localReachable(SOMSTAR)).toBe(true);
+		expect(await localReachable({ name: 'Office-Laser', width: 32 })).toBe(true);
+		expect(await localReachable({ name: 'Old-Epson', width: 32 })).toBe(false);
+		expect(await localReachable({ name: 'Flaky', width: 32 })).toBe(false);
+		expect(await localReachable({ name: 'Nope', width: 32 })).toBe(false);
+	});
+
+	it('counts the jobs the service still holds for one printer', async () => {
+		answer = (c) =>
+			c.cmd === 'lpstat' && c.args[0] === '-o'
+				? ok(
+						'SomStar-80mm-Series-47  mohamed-amiin     1024   Sat Oct 10 16:01:05 2026\nSomStar-80mm-Series-48  mohamed-amiin     1024   Sat Oct 10 16:01:09 2026\n'
+					)
+				: undefined;
+		expect(await localQueued(SOMSTAR)).toBe(2);
+		expect(calls[0]).toMatchObject({ cmd: 'lpstat', args: ['-o', 'SomStar-80mm-Series'] });
+		answer = () => ({ status: 1, stdout: '', stderr: '' });
+		expect(await localQueued(SOMSTAR)).toBe(0);
+	});
+});
+
+describe('sending through the service (CUPS)', () => {
+	const bytes = Uint8Array.from([0x1b, 0x40, 0x41, 0x0a]);
+
+	it('spoolLocal hands the raw bytes to lp -d <name> -o raw on stdin and returns the job id', async () => {
+		answer = (c) =>
+			c.cmd === 'lp' ? ok('request id is SomStar-80mm-Series-50 (0 file(s))\n') : undefined;
+		expect(await spoolLocal(SOMSTAR, bytes, 5000)).toBe('SomStar-80mm-Series-50');
+		expect(calls[0]!.cmd).toBe('lp');
+		expect(calls[0]!.args).toEqual(['-d', 'SomStar-80mm-Series', '-o', 'raw']);
+		expect(Buffer.from(calls[0]!.opts.stdin!)).toEqual(Buffer.from(bytes));
+	});
+
+	it('spoolLocal rejects when lp refuses (no such printer, the service down)', async () => {
+		answer = () => ({ status: 1, stdout: '', stderr: 'lp: The printer or class does not exist.' });
+		await expect(spoolLocal(SOMSTAR, bytes, 5000)).rejects.toThrow(/does not exist/);
+	});
+
+	it('sendLocalNow resolves once the job has left the service queue', async () => {
+		let polls = 0;
+		answer = (c) => {
+			if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-51 (0 file(s))\n');
+			if (c.cmd === 'lpstat') {
+				polls += 1;
+				return ok(
+					polls < 3 ? 'SomStar-80mm-Series-51  mohamed-amiin  5  Sat Oct 10 16:05:00 2026\n' : ''
+				);
+			}
+			return undefined;
+		};
+		await sendLocalNow(SOMSTAR, bytes, 3000);
+		expect(polls).toBe(3);
+		expect(calls.some((c) => c.cmd === 'cancel')).toBe(false);
+	});
+
+	it('THE DRAWER RULE: a failed or hung lpstat never counts as "printed" — the job is cancelled at the deadline', async () => {
+		for (const broken of [
+			{ status: 1, stdout: '', stderr: 'lpstat: Bad file descriptor' },
+			{ status: -1, stdout: '', stderr: 'lpstat timed out after 5000 ms' }
+		]) {
+			calls = [];
+			answer = (c) => {
+				if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-53 (0 file(s))\n');
+				if (c.cmd === 'lpstat') return broken;
+				if (c.cmd === 'cancel') return ok();
+				return undefined;
+			};
+			await expect(sendLocalNow(SOMSTAR, bytes, 400)).rejects.toThrow(/cancelled/);
+			expect(calls.find((c) => c.cmd === 'cancel')?.args).toEqual(['SomStar-80mm-Series-53']);
+		}
+	});
+
+	it('THE DRAWER RULE: a cancel that fails is retried, then reported as a STUCK pulse — never a quiet refusal', async () => {
+		answer = (c) => {
+			if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-54 (0 file(s))\n');
+			if (c.cmd === 'lpstat') return ok('SomStar-80mm-Series-54  x  5  now\n');
+			if (c.cmd === 'cancel') return { status: 1, stdout: '', stderr: 'cancel: Unable to cancel' };
+			return undefined;
+		};
+		await expect(sendLocalNow(SOMSTAR, bytes, 300)).rejects.toThrow(
+			/DRAWER PULSE SomStar-80mm-Series-54 COULD NOT BE CANCELLED/
+		);
+		expect(calls.filter((c) => c.cmd === 'cancel')).toHaveLength(3);
+	});
+
+	it('a printer named with a leading dash never enters a list — it would be read as an option', () => {
+		expect(
+			parseLpstat(
+				'printer -Till is idle.  enabled since now\nprinter Ok is idle.  enabled since now\n'
+			)
+		).toEqual([{ name: 'Ok', state: 'idle' }]);
+		expect(parseGetPrinter('-Front\tNormal\r\nBack\tNormal\r\n')).toEqual([
+			{ name: 'Back', state: 'idle' }
+		]);
+	});
+
+	it('matches the spooled job by NUMBER: CUPS names are case-insensitive and lpstat prints its own case', async () => {
+		const typed: LocalPrinter = { name: 'somstar-80mm-series', width: 48 };
+		answer = (c) => {
+			// lp echoes the name as typed; lpstat lists the canonical case.
+			if (c.cmd === 'lp') return ok('request id is somstar-80mm-series-55 (0 file(s))\n');
+			if (c.cmd === 'lpstat' && c.args[0] === '-o')
+				return ok('SomStar-80mm-Series-55  mohamed-amiin  5  Sat Oct 10 16:05:00 2026\n');
+			if (c.cmd === 'lpstat') return ok(LPSTAT_P);
+			if (c.cmd === 'cancel') return ok();
+			return undefined;
+		};
+		// Still listed under the other case: NOT printed — cancelled at the deadline.
+		await expect(sendLocalNow(typed, bytes, 400)).rejects.toThrow(/cancelled/);
+		expect(calls.find((c) => c.cmd === 'cancel')?.args).toEqual(['somstar-80mm-series-55']);
+		expect(await localQueued(typed)).toBe(1);
+		expect(await localReachable(typed)).toBe(true);
+		// The number alone: lpstat -o <dest> is scoped already, and a name ending
+		// in -<digits> still yields the job number after its last dash.
+		expect(jobOf('SomStar-80mm-Series-55  x  5  now')).toBe(55);
+		expect(jobOf('POS-80-12  x  5  now')).toBe(12);
+		expect(jobOf('SomStar-80mm-Series-55')).toBe(55);
+		expect(jobOf('')).toBeNull();
+		expect(jobOf('no job here')).toBeNull();
+	});
+
+	it('an id lp gives without a job number cannot be watched: it is cancelled at once, never read as printed', async () => {
+		answer = (c) => {
+			if (c.cmd === 'lp') return ok('request id is SomStar (0 file(s))\n');
+			if (c.cmd === 'lpstat') return ok('SomStar-80mm-Series-56  x  5  now\n');
+			if (c.cmd === 'cancel') return ok();
+			return undefined;
+		};
+		await expect(sendLocalNow(SOMSTAR, bytes, 3000)).rejects.toThrow(/cancelled/);
+		expect(calls.some((c) => c.cmd === 'lpstat')).toBe(false);
+	});
+
+	it("a cancel refused because the pulse printed at the deadline's edge is PRINTED, not stuck", async () => {
+		let cancels = 0;
+		answer = (c) => {
+			if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-57 (0 file(s))\n');
+			if (c.cmd === 'lpstat') return ok(cancels > 0 ? '' : 'SomStar-80mm-Series-57  x  5  now\n');
+			if (c.cmd === 'cancel') {
+				cancels += 1;
+				return { status: 1, stdout: '', stderr: 'cancel-job failed: Job #57 is already completed' };
+			}
+			return undefined;
+		};
+		await expect(sendLocalNow(SOMSTAR, bytes, 300)).resolves.toBeUndefined();
+	});
+
+	it('lp that could not start (status -2) is a plain refusal: nothing was spooled', async () => {
+		answer = (c) =>
+			c.cmd === 'lp' ? { status: -2, stdout: '', stderr: 'spawn lp ENOENT' } : undefined;
+		await expect(sendLocalNow(SOMSTAR, bytes, 300)).rejects.toThrow(/lp refused the job/);
+	});
+
+	it('a failed count is UNKNOWN for a decision, zero only for the chip', async () => {
+		answer = () => ({ status: 1, stdout: '', stderr: 'lpstat: Bad file descriptor' });
+		expect(await localHeld(SOMSTAR)).toBeNull();
+		expect(await localQueued(SOMSTAR)).toBe(0);
+	});
+
+	it('an lp killed at the deadline may already have spooled the pulse: reported STUCK, not refused', async () => {
+		answer = (c) =>
+			c.cmd === 'lp' ? { status: -1, stdout: '', stderr: 'lp timed out after 300 ms' } : undefined;
+		await expect(sendLocalNow(SOMSTAR, bytes, 300)).rejects.toThrow(/COULD NOT BE CANCELLED/);
+	});
+
+	it('THE DRAWER RULE: a job still waiting at the timeout is CANCELLED and the send fails', async () => {
+		answer = (c) => {
+			if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-52 (0 file(s))\n');
+			if (c.cmd === 'lpstat')
+				return ok('SomStar-80mm-Series-52  mohamed-amiin  5  Sat Oct 10 16:05:00 2026\n');
+			if (c.cmd === 'cancel') return ok();
+			return undefined;
+		};
+		await expect(sendLocalNow(SOMSTAR, bytes, 400)).rejects.toThrow(/cancelled/);
+		const cancel = calls.find((c) => c.cmd === 'cancel');
+		expect(cancel?.args).toEqual(['SomStar-80mm-Series-52']);
+	});
+});
+
+describe('the Windows spooler helpers', () => {
+	beforeEach(() => {
+		localIo.platform = () => 'win32';
+	});
+
+	it('run PowerShell with the script base64-encoded and the printer name in the environment, never in the script', () => {
+		const args = powershellArgs(PS_SEND);
+		expect(args.slice(0, 5)).toEqual([
+			'-NoProfile',
+			'-NonInteractive',
+			'-ExecutionPolicy',
+			'Bypass',
+			'-EncodedCommand'
+		]);
+		expect(Buffer.from(args[5]!, 'base64').toString('utf16le')).toBe(PS_SEND);
+		for (const script of [PS_LIST, PS_STATUS, PS_SEND]) {
+			expect(script).not.toMatch(/\$\{/);
+		}
+		expect(PS_SEND).toContain('winspool.drv');
+		expect(PS_SEND).toContain('"RAW"');
+		expect(PS_SEND).toContain('Remove-PrintJob');
+		expect(PS_SEND).toContain('$env:MATCAMI_PRINTER');
+		expect(helperEnv({ name: 'POS58 "Front"', width: 32 }, 3000)).toEqual({
+			MATCAMI_PRINTER: 'POS58 "Front"',
+			MATCAMI_WAIT_MS: '3000'
+		});
+	});
+
+	it('lists printers from Get-Printer lines: Normal and Printing can print, the rest cannot', async () => {
+		answer = (c) =>
+			c.cmd === 'powershell'
+				? ok('POS-80\tNormal\r\nKitchen\tPrinting\r\nOffice\tOffline\r\n')
+				: undefined;
+		expect(await listLocalPrinters()).toEqual([
+			{ name: 'POS-80', state: 'idle' },
+			{ name: 'Kitchen', state: 'printing' },
+			{ name: 'Office', state: 'stopped' }
+		]);
+		expect(parseGetPrinter('Microsoft Print to PDF\tNormal')).toEqual([
+			{ name: 'Microsoft Print to PDF', state: 'idle' }
+		]);
+	});
+
+	it('the drawer opens on "printed <job>" with exit 0, and the spooler job count is read from the status helper', async () => {
+		answer = (c) =>
+			c.cmd === 'powershell'
+				? c.opts.env?.MATCAMI_WAIT_MS === '3000'
+					? ok('printed 13\r\n')
+					: ok('Normal\t2\r\n')
+				: undefined;
+		const printer: LocalPrinter = { name: 'POS-80', width: 48 };
+		await expect(sendLocalNow(printer, DRAWER_PULSE, 3000)).resolves.toBeUndefined();
+		expect(await localQueued(printer)).toBe(2);
+		answer = (c) => (c.cmd === 'powershell' ? ok('') : undefined);
+		expect(await localQueued(printer)).toBe(0);
+		// A job the spooler no longer lists is printed; a failed query is not.
+		expect(PS_SEND).toContain("Category -eq 'ObjectNotFound'");
+		expect(PS_SEND).toContain('-ErrorAction Stop');
+	});
+
+	it('spools and reads the job id; a helper that cancelled the job (exit 3) fails the drawer send', async () => {
+		answer = (c) =>
+			c.cmd === 'powershell'
+				? c.opts.env?.MATCAMI_WAIT_MS === '0'
+					? ok('spooled 12\r\n')
+					: { status: 3, stdout: 'cancelled 13\r\n', stderr: '' }
+				: undefined;
+		const printer: LocalPrinter = { name: 'POS-80', width: 48 };
+		expect(await spoolLocal(printer, Uint8Array.of(1), 5000)).toBe('12');
+		expect(calls[0]!.opts.env).toEqual({ MATCAMI_PRINTER: 'POS-80', MATCAMI_WAIT_MS: '0' });
+		await expect(sendLocalNow(printer, DRAWER_PULSE, 3000)).rejects.toThrow(/cancelled/);
+		expect(calls[1]!.opts.env).toEqual({ MATCAMI_PRINTER: 'POS-80', MATCAMI_WAIT_MS: '3000' });
+		// A removal the spooler refused (exit 4) is the stuck pulse, said loudly.
+		answer = (c) =>
+			c.cmd === 'powershell' ? { status: 4, stdout: 'stuck 14\r\n', stderr: '' } : undefined;
+		await expect(sendLocalNow(printer, DRAWER_PULSE, 3000)).rejects.toThrow(
+			/DRAWER PULSE 14 COULD NOT BE CANCELLED/
+		);
+		// A helper killed at the deadline never ran its removal: stuck, not refused.
+		answer = (c) =>
+			c.cmd === 'powershell'
+				? { status: -1, stdout: '', stderr: 'powershell timed out after 63000 ms' }
+				: undefined;
+		await expect(sendLocalNow(printer, DRAWER_PULSE, 3000)).rejects.toThrow(
+			/COULD NOT BE CANCELLED/
+		);
+		expect(PS_SEND).toContain(
+			'Remove-PrintJob -PrinterName $env:MATCAMI_PRINTER -ID $job -ErrorAction Stop'
+		);
+	});
+});
+
+// ── The queue and the drawer, on a printer this PC knows ────────────────────
+
+describe('a receipt printer on this PC, through the queue and the drawer', () => {
+	const queues: Queue[] = [];
+	const dirs: string[] = [];
+	afterEach(async () => {
+		for (const q of queues.splice(0)) await q.close();
+		for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+	});
+	const tmp = () => {
+		const dir = mkdtempSync(join(tmpdir(), 'matcami-local-queue-'));
+		dirs.push(dir);
+		return dir;
+	};
+	const until = async (cond: () => boolean, what: string) => {
+		const start = Date.now();
+		while (!cond()) {
+			if (Date.now() - start > 4000) throw new Error(`timed out waiting for ${what}`);
+			await new Promise((r) => setTimeout(r, 15));
+		}
+	};
+
+	it('a receipt goes to lp as raw ESC/POS; /status names the printer and counts what the service holds', async () => {
+		answer = (c) => {
+			if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-60 (0 file(s))\n');
+			if (c.cmd === 'lpstat' && c.args[0] === '-p') return ok(LPSTAT_P);
+			if (c.cmd === 'lpstat' && c.args[0] === '-o')
+				return ok('SomStar-80mm-Series-60  x  5  now\n');
+			return undefined;
+		};
+		const q = createQueue({
+			dataDir: tmp(),
+			printers: { receipt: SOMSTAR, kitchen: null },
+			retry: { baseMs: 40, maxMs: 160 },
+			paperStatusTimeoutMs: 40,
+			sendTimeoutMs: 1000
+		});
+		queues.push(q);
+		expect(q.submit({ id: 'r1', printer: 'receipt', lines: [{ text: 'Tea' }], cut: true })).toBe(
+			'queued'
+		);
+		await until(() => calls.some((c) => c.cmd === 'lp'), 'the lp call');
+		const lp = calls.find((c) => c.cmd === 'lp')!;
+		expect(lp.args).toEqual(['-d', 'SomStar-80mm-Series', '-o', 'raw']);
+		expect(Buffer.from(lp.opts.stdin!).toString('latin1')).toContain('Tea');
+		await until(() => q.queuedByTarget().receipt === 0, 'the queue to drain');
+		const status = await q.status();
+		expect(status.printers.receipt).toEqual({
+			name: 'SomStar-80mm-Series',
+			width: 48,
+			reachable: true,
+			queued: 1
+		});
+		expect(status.printers.receipt).not.toHaveProperty('host');
+	});
+
+	it("a width change is REFUSED while the PC's print service still holds receipts for the old width (decision 2)", async () => {
+		answer = (c) => {
+			if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-80 (0 file(s))\n');
+			if (c.cmd === 'lpstat' && c.args[0] === '-p') return ok(LPSTAT_P);
+			if (c.cmd === 'lpstat' && c.args[0] === '-o')
+				return ok('SomStar-80mm-Series-80  x  5  now\n');
+			return undefined;
+		};
+		const dir = tmp();
+		const configPath = join(dir, 'config.json');
+		const config = createConfig({
+			origin: 'https://pos.example.com',
+			dataDir: join(dir, 'data'),
+			printers: { receipt: SOMSTAR, kitchen: null }
+		});
+		saveConfig(configPath, config);
+		const runtime = createRuntime({
+			configPath,
+			config,
+			queue: { retry: { baseMs: 40, maxMs: 160 } }
+		});
+		try {
+			// The agent's own queue is empty (lp took the page at once); the service holds one.
+			expect(
+				await runtime.deps.submitJob({
+					id: 'w1',
+					printer: 'receipt',
+					lines: [{ text: 'x' }],
+					cut: true
+				})
+			).toBe('queued');
+			await until(() => calls.some((c) => c.cmd === 'lp'), 'the lp call');
+			// Only the SERVICE holds it now: the agent's own queue folder is empty.
+			await until(
+				() =>
+					readdirSync(join(dir, 'data', 'queue')).filter((n) => n.endsWith('.json')).length === 0,
+				"the agent's own queue to drain"
+			);
+			expect(
+				await runtime.deps.setPrinters({ receipt: { ...SOMSTAR, width: 32 }, kitchen: null })
+			).toEqual({
+				ok: false,
+				error: 'jobs_waiting',
+				target: 'receipt',
+				queued: 1
+			});
+			// Another printer at the SAME width is fine: nothing is laid out wrong.
+			expect(
+				await runtime.deps.setPrinters({
+					receipt: { name: 'Office-Laser', width: 48 },
+					kitchen: null
+				})
+			).toEqual({ ok: true });
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it('a pulse the service would not give back is refused AND named in the log, and never recorded as seen', async () => {
+		answer = (c) => {
+			if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-71 (0 file(s))\n');
+			if (c.cmd === 'lpstat') return ok('SomStar-80mm-Series-71  x  5  now\n');
+			if (c.cmd === 'cancel') return { status: 1, stdout: '', stderr: 'cancel: Unable to cancel' };
+			return undefined;
+		};
+		const dir = tmp();
+		const q = createQueue({ dataDir: dir, printers: { receipt: SOMSTAR, kitchen: null } });
+		queues.push(q);
+		const drawer = createDrawer({ receipt: SOMSTAR, seen: q.seen, log: q.log, spoolWindowMs: 300 });
+		expect(await drawer.pulse({ id: 'd3', completedAt: new Date().toISOString() })).toBe(
+			'printer_unreachable'
+		);
+		const log = readFileSync(join(dir, 'agent.log'), 'utf8');
+		expect(log).toContain('drawer d3 refused:');
+		expect(log).toContain('DRAWER PULSE SomStar-80mm-Series-71 COULD NOT BE CANCELLED');
+		expect(q.seen.has('d3')).toBe(false);
+	});
+
+	it("a spooled pulse gets the sale's own window: at most 15 s, never past the 30 s the sale allows", async () => {
+		const seenWindows: number[] = [];
+		answer = (c) => {
+			if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-90 (0 file(s))\n');
+			if (c.cmd === 'lpstat') return ok('');
+			return undefined;
+		};
+		const realNow = Date.now();
+		const q = createQueue({ dataDir: tmp(), printers: { receipt: SOMSTAR, kitchen: null } });
+		queues.push(q);
+		const drawer = createDrawer({ receipt: SOMSTAR, seen: q.seen, log: q.log, now: () => realNow });
+		const wrapped = localIo.exec;
+		localIo.exec = async (cmd, args, opts) => {
+			if (cmd === 'lp') seenWindows.push(opts.timeoutMs);
+			return wrapped(cmd, args, opts);
+		};
+		expect(await drawer.pulse({ id: 'w1', completedAt: new Date(realNow).toISOString() })).toBe(
+			'opened'
+		);
+		expect(
+			await drawer.pulse({ id: 'w2', completedAt: new Date(realNow - 25_000).toISOString() })
+		).toBe('opened');
+		// lp is given the window: 15 s for a fresh sale, the 5 s left for a 25 s old one.
+		expect(seenWindows).toEqual([15_000, 5_000]);
+	});
+
+	it('a submit while the print service is being counted waits for the rebuild — never encoded for the old width', async () => {
+		// Every count waits until released (the kitchen rides the receipt printer,
+		// so the service is asked once per target); after that, they answer at once.
+		const pending: Array<(out: ExecOutcome) => void> = [];
+		let released = false;
+		const release = () => {
+			released = true;
+			for (const r of pending.splice(0)) r(ok(''));
+		};
+		answer = (c) => {
+			if (c.cmd === 'lpstat' && c.args[0] === '-p') return ok(LPSTAT_P);
+			return undefined;
+		};
+		const wrapped = localIo.exec;
+		localIo.exec = (cmd, args, opts) =>
+			cmd === 'lpstat' && args[0] === '-o'
+				? released
+					? Promise.resolve(ok(''))
+					: new Promise<ExecOutcome>((r) => pending.push(r))
+				: wrapped(cmd, args, opts);
+		const dir = tmp();
+		const configPath = join(dir, 'config.json');
+		const config = createConfig({
+			origin: 'https://pos.example.com',
+			dataDir: join(dir, 'data'),
+			printers: { receipt: SOMSTAR, kitchen: null }
+		});
+		saveConfig(configPath, config);
+		const runtime = createRuntime({
+			configPath,
+			config,
+			queue: { retry: { baseMs: 5000, maxMs: 5000 } }
+		});
+		try {
+			const change = runtime.deps.setPrinters({
+				receipt: { ...SOMSTAR, width: 32 },
+				kitchen: null
+			});
+			await new Promise((r) => setImmediate(r));
+			let settled = false;
+			const submit = Promise.resolve(
+				runtime.deps.submitJob({ id: 's1', printer: 'receipt', lines: [{ text: 'x' }], cut: true })
+			).then((outcome) => ((settled = true), outcome));
+			await new Promise((r) => setTimeout(r, 50));
+			expect(settled).toBe(false);
+			release();
+			expect(await change).toEqual({ ok: true });
+			expect(await submit).toBe('queued');
+			// It went to the REBUILT queue: the printer is now 32 columns.
+			expect(runtime.config().printers.receipt).toEqual({ ...SOMSTAR, width: 32 });
+		} finally {
+			localIo.exec = wrapped;
+			await runtime.close();
+		}
+	});
+
+	it('a width change is REFUSED when the print service cannot say what it holds', async () => {
+		answer = (c) => {
+			if (c.cmd === 'lpstat' && c.args[0] === '-o')
+				return { status: 1, stdout: '', stderr: 'down' };
+			if (c.cmd === 'lpstat') return ok(LPSTAT_P);
+			return undefined;
+		};
+		const dir = tmp();
+		const configPath = join(dir, 'config.json');
+		const config = createConfig({
+			origin: 'https://pos.example.com',
+			dataDir: join(dir, 'data'),
+			printers: { receipt: SOMSTAR, kitchen: null }
+		});
+		saveConfig(configPath, config);
+		const runtime = createRuntime({ configPath, config });
+		try {
+			expect(
+				await runtime.deps.setPrinters({ receipt: { ...SOMSTAR, width: 32 }, kitchen: null })
+			).toEqual({
+				ok: false,
+				error: 'print_service_unavailable',
+				target: 'receipt'
+			});
+		} finally {
+			await runtime.close();
+		}
+	});
+
+	it('a job that carries the logo is bound to the named printer on disk, by its label', async () => {
+		answer = () => ({ status: 1, stdout: '', stderr: 'lp: The printer or class does not exist.' });
+		const dir = tmp();
+		const q = createQueue({
+			dataDir: dir,
+			printers: { receipt: SOMSTAR, kitchen: null },
+			retry: { baseMs: 40, maxMs: 160 },
+			paperStatusTimeoutMs: 40,
+			sendTimeoutMs: 1000
+		});
+		queues.push(q);
+		expect(
+			q.submit({
+				id: 'img1',
+				printer: 'receipt',
+				lines: [{ image: { widthDots: 8, heightDots: 1, bitmap: 'AA==' } }],
+				cut: true
+			})
+		).toBe('queued');
+		const [file] = readdirSync(join(dir, 'queue')).filter((n) => n.endsWith('.json'));
+		const queued = JSON.parse(readFileSync(join(dir, 'queue', file!), 'utf8')) as {
+			imagePrinter?: string;
+		};
+		expect(queued.imagePrinter).toBe('local:SomStar-80mm-Series');
+	});
+
+	it('the drawer opens only when the pulse PRINTED within the window; a waiting pulse is cancelled, never left behind', async () => {
+		let stuck = false;
+		answer = (c) => {
+			if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-70 (0 file(s))\n');
+			if (c.cmd === 'lpstat') return ok(stuck ? 'SomStar-80mm-Series-70  x  5  now\n' : '');
+			if (c.cmd === 'cancel') return ok();
+			return undefined;
+		};
+		const q = createQueue({ dataDir: tmp(), printers: { receipt: SOMSTAR, kitchen: null } });
+		queues.push(q);
+		const drawer = createDrawer({ receipt: SOMSTAR, seen: q.seen, log: q.log, spoolWindowMs: 300 });
+		const now = () => new Date().toISOString();
+		expect(await drawer.pulse({ id: 'd1', completedAt: now() })).toBe('opened');
+		expect(Buffer.from(calls.find((c) => c.cmd === 'lp')!.opts.stdin!)).toEqual(
+			Buffer.from(DRAWER_PULSE)
+		);
+		stuck = true;
+		expect(await drawer.pulse({ id: 'd2', completedAt: now() })).toBe('printer_unreachable');
+		expect(calls.find((c) => c.cmd === 'cancel')?.args).toEqual(['SomStar-80mm-Series-70']);
+		// Refused, so not recorded: the same pulse may be tried again within the window.
+		expect(q.seen.has('d2')).toBe(false);
+	});
+});

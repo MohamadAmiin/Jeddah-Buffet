@@ -18,9 +18,10 @@ opens late: a pulse the agent could not send is refused, not retried.
 
 ## 2. What you need
 
-- **A Windows 10/11, Linux or Mac PC that runs the till in Chrome, and network receipt printers
-  with fixed IP addresses (TCP 9100).** Nothing to install beforehand — the download carries
-  everything it needs.
+- **A Windows 10/11, Linux or Mac PC that runs the till in Chrome, and a receipt printer** — either
+  plugged into that PC by USB and set up in the PC's own printer settings, or a network printer with
+  a fixed IP address (TCP 9100). Nothing to install beforehand — the download carries everything it
+  needs.
 - Paper width decides the column count: 58 mm paper is `32` columns, 80 mm paper is `48`. Port 9100
   is the raw printing port every Epson-compatible network printer offers.
 - **Chrome** version 142 or later shows a one-time local-network permission prompt (section 5).
@@ -58,10 +59,19 @@ opens late: a pulse the agent could not send is refused, not retried.
    - opens pairing for one till;
    - opens its setup page in the browser.
 
-4. On the setup page, or later on the till's Printer page, enter the receipt printer's IP address
-   and paper width and press **Save printers**. Add `:port` to the address if the printer does not
-   use 9100. A separate kitchen printer is optional: without one, kitchen tickets print on the
-   receipt printer.
+4. On the setup page, or later on the till's Printer page, say where the receipt printer is —
+   **plugged into this PC** (pick it from the list) or **on the network** (enter its IP address;
+   add `:port` if it does not use 9100) — choose the paper width, and press **Save printers**. A
+   separate kitchen printer is optional: without one, kitchen tickets print on the receipt printer.
+
+   A USB printer must appear in the PC's own printer list first; the agent prints through the PC's
+   print service, so it needs no rights of its own:
+   - **Linux:** usually added by itself when plugged in (Printers in the system settings).
+   - **Mac:** System Settings → Printers & Scanners → Add Printer.
+   - **Windows:** install the maker's driver, or add it in Printers & scanners with the
+     "Generic / Text Only" driver. Not yet tried on Windows: tell whoever runs your server how it
+     went.
+
 5. On the till, as the owner: **Printer** → **Pair this till** → allow local network access when
    Chrome asks → **Test print**.
 
@@ -77,15 +87,15 @@ server built it. Download it from the address the till opens in Chrome.
 `config.json` is written by the installer and changed by the setup page and the till's Printer page;
 there is no need to open it. Its fields:
 
-| Field              | Meaning                                                                                                                                          |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `origin`           | The till's address exactly as Chrome shows it, scheme and host only. Must be `https:`; `http:` is accepted for `localhost` and `127.0.0.1` only. |
-| `token`            | The pairing secret: 64 lowercase hex characters, minted on this PC at install.                                                                   |
-| `setupSecret`      | The setup page's key: 64 lowercase hex characters, minted on this PC at install.                                                                 |
-| `port`             | The loopback port the agent listens on (default 9471).                                                                                           |
-| `printers.receipt` | `host`, `port` (9100) and `width` (32 or 48) of the receipt printer, or `null` until one is entered.                                             |
-| `printers.kitchen` | The same for the kitchen printer, or `null` for none.                                                                                            |
-| `dataDir`          | Where the job queue, the seen-id store and `agent.log` live.                                                                                     |
+| Field              | Meaning                                                                                                                                                           |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `origin`           | The till's address exactly as Chrome shows it, scheme and host only. Must be `https:`; `http:` is accepted for `localhost` and `127.0.0.1` only.                  |
+| `token`            | The pairing secret: 64 lowercase hex characters, minted on this PC at install.                                                                                    |
+| `setupSecret`      | The setup page's key: 64 lowercase hex characters, minted on this PC at install.                                                                                  |
+| `port`             | The loopback port the agent listens on (default 9471).                                                                                                            |
+| `printers.receipt` | The receipt printer, or `null` until one is entered: `name` and `width` (32 or 48) for a printer on this PC; `host`, `port` (9100) and `width` for a network one. |
+| `printers.kitchen` | The same for the kitchen printer, or `null` for none.                                                                                                             |
+| `dataDir`          | Where the job queue, the seen-id store and `agent.log` live.                                                                                                      |
 
 On Linux and Mac the file is mode `0600` — readable by your user only. Windows has no such mode; the
 folder sits inside your own user profile, where other accounts cannot read it. The secrets are
@@ -159,16 +169,16 @@ rule is needed for it.
 
 The till shows one chip for printing, always with a glyph so colour never carries the meaning alone:
 
-| Chip                                                           | Meaning                                                                                                                                            | Fix                                                                                                        |
-| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `● Printer ready` (· _n_ waiting)                              | The agent answers and the printer accepts connections; _n_ jobs are queued.                                                                        | —                                                                                                          |
-| `◆ Update the print agent to print the logo` (· _n_ waiting)   | The owner set a receipt logo, but this agent is version 1. Every receipt still prints in full, without the logo.                                   | Section 9 (update the agent).                                                                              |
-| `◆ Test-print the logo before receipts use it` (· _n_ waiting) | The agent is version 2, but this logo's test print is not confirmed on this till at present. Every receipt still prints in full, without the logo. | Section 10.                                                                                                |
-| `◆ Printer address not set — open Printer`                     | The agent answers, but no receipt printer has been entered yet.                                                                                    | Printer → enter the address and paper width → **Save printers** (section 3, step 4).                       |
-| `◆ Printer unreachable`                                        | The agent is not running, or the printer is off or has a different IP.                                                                             | Run the downloaded file again (it starts the agent), then check the printer's power, network cable and IP. |
-| `✕ Printing blocked by Chrome`                                 | Chrome denied local network access for the till's address.                                                                                         | Section 5, Chrome paragraph.                                                                               |
-| `✕ Printer pairing is wrong`                                   | The pairing key was reset on the agent (setup page → Advanced), or the agent was set up again, after this till was paired.                         | Printer → **Forget pairing**, then pair again (section 5).                                                 |
-| `○ Printer not set up`                                         | The till has never been paired.                                                                                                                    | Section 5.                                                                                                 |
+| Chip                                                           | Meaning                                                                                                                                            | Fix                                                                                                                                                                             |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `● Printer ready` (· _n_ waiting)                              | The agent answers and the printer accepts connections; _n_ jobs are queued.                                                                        | —                                                                                                                                                                               |
+| `◆ Update the print agent to print the logo` (· _n_ waiting)   | The owner set a receipt logo, but this agent is version 1. Every receipt still prints in full, without the logo.                                   | Section 9 (update the agent).                                                                                                                                                   |
+| `◆ Test-print the logo before receipts use it` (· _n_ waiting) | The agent is version 2, but this logo's test print is not confirmed on this till at present. Every receipt still prints in full, without the logo. | Section 10.                                                                                                                                                                     |
+| `◆ Printer address not set — open Printer`                     | The agent answers, but no receipt printer has been entered yet.                                                                                    | Printer → enter the address and paper width → **Save printers** (section 3, step 4).                                                                                            |
+| `◆ Printer unreachable`                                        | The agent is not running, or the printer is off, unplugged, has a different IP, or (USB) the PC's print service has stopped it.                    | Run the downloaded file again (it starts the agent), then check the printer's power and cable; for a USB printer, open the PC's printer settings and resume it if it is paused. |
+| `✕ Printing blocked by Chrome`                                 | Chrome denied local network access for the till's address.                                                                                         | Section 5, Chrome paragraph.                                                                                                                                                    |
+| `✕ Printer pairing is wrong`                                   | The pairing key was reset on the agent (setup page → Advanced), or the agent was set up again, after this till was paired.                         | Printer → **Forget pairing**, then pair again (section 5).                                                                                                                      |
+| `○ Printer not set up`                                         | The till has never been paired.                                                                                                                    | Section 5.                                                                                                                                                                      |
 
 ## 8. Paper out and outages
 
@@ -183,6 +193,11 @@ The till shows one chip for printing, always with a glyph so colour never carrie
   ignored rather than duplicated.
 - The paper width cannot be changed while that printer has jobs waiting: they are already laid out
   for the old width. Let them print, or reconnect the printer, then change it.
+- A USB printer's waiting receipts sit in the PC's own print queue (the agent counts them in
+  `waiting`), and print when the printer is back. The drawer is different: a pulse the PC's print
+  service has not printed within 15 seconds of the sale (behind that sale's receipt and ticket) is
+  taken back, so the drawer never opens late. If it cannot be taken back, `agent.log` says
+  `DRAWER PULSE … COULD NOT BE CANCELLED`: remove that job from the PC's print queue.
 - A receipt that was waiting when the receipt printer's address changed prints on the new printer
   in full, but without the logo: the logo is checked on one printer (section 10), and the new one
   has not been checked yet.
@@ -284,7 +299,7 @@ node print-agent/src/main.ts --version         # "matcami print agent 2 (source)
 ```
 
 `--receipt` and `--width` are optional: without them the agent starts with no printer, and the till's
-Printer page sets one. `init` refuses to overwrite an existing `config.json` without `--force`, which
+Printer page sets one. A printer on this PC is `--receipt local:<its name in lpstat -p>`. `init` refuses to overwrite an existing `config.json` without `--force`, which
 mints a new secret (every till pairs again). `config.example.json` shows a finished file; from
 source, `dataDir` defaults to `print-agent/data`. On Linux and Mac `init` writes the file with mode
 `0600`; on Windows keep the checkout inside the user's own profile.

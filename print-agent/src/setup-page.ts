@@ -42,8 +42,20 @@ export const SETUP_HTML = `<!doctype html>
 <section aria-labelledby="printers-h">
 <h2 id="printers-h">Printers</h2>
 <form id="printers" novalidate>
+<fieldset>
+<legend>Where is the receipt printer?</legend>
+<label><input type="radio" name="receiptKind" value="local" checked> Plugged into this PC (USB), or installed on it</label>
+<label><input type="radio" name="receiptKind" value="network"> On the network (IP address)</label>
+</fieldset>
+<div id="receiptLocal">
+<label for="receiptName">Printer on this PC</label>
+<select id="receiptName"></select>
+<p id="receiptNone" hidden>○ This PC lists no printer. Plug it in and add it in the PC's own printer settings, then press Refresh the list.</p>
+</div>
+<div id="receiptNetwork" hidden>
 <label for="receipt">Receipt printer address (IP)</label>
 <input id="receipt" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="192.168.1.50">
+</div>
 <fieldset>
 <legend>Receipt paper width</legend>
 <label><input type="radio" name="receiptWidth" value="32"> 58 mm paper (32 columns)</label>
@@ -51,8 +63,20 @@ export const SETUP_HTML = `<!doctype html>
 </fieldset>
 <label class="check"><input type="checkbox" id="hasKitchen"> Separate kitchen printer</label>
 <div id="kitchenFields" hidden>
+<fieldset>
+<legend>Where is the kitchen printer?</legend>
+<label><input type="radio" name="kitchenKind" value="local" checked> Plugged into this PC (USB), or installed on it</label>
+<label><input type="radio" name="kitchenKind" value="network"> On the network (IP address)</label>
+</fieldset>
+<div id="kitchenLocal">
+<label for="kitchenName">Printer on this PC</label>
+<select id="kitchenName"></select>
+<p id="kitchenNone" hidden>○ This PC lists no printer.</p>
+</div>
+<div id="kitchenNetwork" hidden>
 <label for="kitchen">Kitchen printer address (IP)</label>
 <input id="kitchen" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="192.168.1.51">
+</div>
 <fieldset>
 <legend>Kitchen paper width</legend>
 <label><input type="radio" name="kitchenWidth" value="32" checked> 58 mm paper (32 columns)</label>
@@ -60,6 +84,7 @@ export const SETUP_HTML = `<!doctype html>
 </fieldset>
 </div>
 <button type="submit">Save printers</button>
+<button type="button" id="refreshLocal">Refresh the list</button>
 </form>
 <p id="printersResult" aria-live="polite"></p>
 </section>
@@ -252,7 +277,7 @@ export const SETUP_JS = String.raw`(function () {
 	}
 	function printerLine(label, p) {
 		if (!p) return label + ': ○ Not set';
-		var where = p.host + ':' + p.port + ' · ' + paper(p.width);
+		var where = (p.name ? p.name + ' (this PC)' : p.host + ':' + p.port) + ' · ' + paper(p.width);
 		var waiting = p.queued ? ' · ' + p.queued + ' waiting' : '';
 		return p.reachable
 			? label + ': ● ' + where + ' · ready' + waiting
@@ -274,6 +299,71 @@ export const SETUP_JS = String.raw`(function () {
 		var picked = document.querySelector('input[name="' + name + '"]:checked');
 		return picked ? Number(picked.value) : 48;
 	}
+	function kindOf(name) {
+		var picked = document.querySelector('input[name="' + name + '"]:checked');
+		return picked ? picked.value : 'local';
+	}
+	function checkKind(name, kind) {
+		var radios = document.querySelectorAll('input[name="' + name + '"]');
+		for (var i = 0; i < radios.length; i++) radios[i].checked = radios[i].value === kind;
+		showKind(name === 'receiptKind' ? 'receipt' : 'kitchen');
+	}
+	function showKind(printer) {
+		var local = kindOf(printer + 'Kind') === 'local';
+		$(printer + 'Local').hidden = !local;
+		$(printer + 'Network').hidden = local;
+	}
+
+	// The printers this PC's print service knows — a USB printer is one of them.
+	var localPrinters = [];
+	function configuredName(id) {
+		var p = current && current.printers[id === 'receiptName' ? 'receipt' : 'kitchen'];
+		return p && p.name ? p.name : '';
+	}
+	function fillSelect(id) {
+		var select = $(id);
+		// What the owner picked, else the printer the agent has NOW: the list
+		// arrives after the one-time prefill, and a save must never switch the
+		// printer to whichever is first on the list.
+		var want = select.value || configuredName(id);
+		select.textContent = '';
+		var listed = false;
+		localPrinters.forEach(function (p) {
+			var option = document.createElement('option');
+			option.value = p.name;
+			option.textContent =
+				p.name +
+				(p.state === 'stopped' ? ' — not reachable now' : p.state === 'unknown' ? '' : ' — ready');
+			select.appendChild(option);
+			if (p.name === want) listed = true;
+		});
+		if (want && !listed) {
+			var missing = document.createElement('option');
+			missing.value = want;
+			missing.textContent = want + ' — not listed on this PC now';
+			select.appendChild(missing);
+		}
+		if (want) select.value = want;
+		var none = id === 'receiptName' ? 'receiptNone' : 'kitchenNone';
+		$(none).hidden = localPrinters.length > 0;
+	}
+	async function loadLocal() {
+		var answer;
+		try {
+			answer = await api('/setup/local-printers');
+		} catch (e) {
+			return;
+		}
+		if (answer.status !== 200 || !answer.data || !Array.isArray(answer.data.printers)) return;
+		localPrinters = answer.data.printers;
+		fillSelect('receiptName');
+		fillSelect('kitchenName');
+		// Nothing set yet: start on what this PC has, else on the network.
+		if (current && !current.printers.receipt && !kindTouched) {
+			checkKind('receiptKind', localPrinters.length > 0 ? 'local' : 'network');
+		}
+	}
+	var kindTouched = false;
 
 	async function refresh() {
 		var answer;
@@ -310,15 +400,21 @@ export const SETUP_JS = String.raw`(function () {
 			var r = current.printers.receipt;
 			var k = current.printers.kitchen;
 			if (r) {
-				$('receipt').value = addressOf(r);
+				kindTouched = true;
+				checkKind('receiptKind', r.name ? 'local' : 'network');
+				if (r.name) $('receiptName').value = r.name;
+				else $('receipt').value = addressOf(r);
 				checkWidth('receiptWidth', r.width);
 			}
 			$('hasKitchen').checked = !!k;
 			$('kitchenFields').hidden = !k;
 			if (k) {
-				$('kitchen').value = addressOf(k);
+				checkKind('kitchenKind', k.name ? 'local' : 'network');
+				if (k.name) $('kitchenName').value = k.name;
+				else $('kitchen').value = addressOf(k);
 				checkWidth('kitchenWidth', k.width);
 			}
+			loadLocal();
 		}
 	}
 
@@ -332,6 +428,7 @@ export const SETUP_JS = String.raw`(function () {
 	function fieldWords(field) {
 		var printer = field.indexOf('kitchen') === 0 ? 'kitchen' : 'receipt';
 		if (/width$/.test(field)) return printer + ' paper width';
+		if (/name$/.test(field)) return printer + ' printer on this PC';
 		if (/port$/.test(field)) return printer + ' printer port';
 		return printer + ' printer address';
 	}
@@ -339,32 +436,61 @@ export const SETUP_JS = String.raw`(function () {
 	$('hasKitchen').addEventListener('change', function () {
 		$('kitchenFields').hidden = !$('hasKitchen').checked;
 	});
+	['receiptKind', 'kitchenKind'].forEach(function (name) {
+		var radios = document.querySelectorAll('input[name="' + name + '"]');
+		for (var i = 0; i < radios.length; i++) {
+			radios[i].addEventListener('change', function () {
+				kindTouched = true;
+				showKind(name === 'receiptKind' ? 'receipt' : 'kitchen');
+			});
+		}
+	});
+	$('refreshLocal').addEventListener('click', function () {
+		loadLocal();
+	});
+
+	/** The chosen printer as the API takes it, or null with the sentence to show. */
+	function readPrinter(printer) {
+		if (kindOf(printer + 'Kind') === 'local') {
+			var name = $(printer + 'Name').value;
+			if (!name) return { error: '✕ Pick the ' + printer + ' printer from the list — or plug it in and press Refresh the list' };
+			return { value: { name: name, width: widthOf(printer + 'Width') } };
+		}
+		var address = parseAddress($(printer).value);
+		if (!address)
+			return {
+				error:
+					'✕ Enter the ' + printer + ' printer’s IP address, e.g. ' + (printer === 'kitchen' ? '192.168.1.51' : '192.168.1.50')
+			};
+		address.width = widthOf(printer + 'Width');
+		return { value: address };
+	}
 
 	$('printers').addEventListener('submit', async function (event) {
 		event.preventDefault();
-		var receipt = parseAddress($('receipt').value);
-		if (!receipt) {
-			say('printersResult', '✕ Enter the receipt printer’s IP address, e.g. 192.168.1.50');
+		var receipt = readPrinter('receipt');
+		if (receipt.error) {
+			say('printersResult', receipt.error);
 			return;
 		}
-		var kitchen = null;
+		var kitchen = { value: null };
 		if ($('hasKitchen').checked) {
-			kitchen = parseAddress($('kitchen').value);
-			if (!kitchen) {
-				say('printersResult', '✕ Enter the kitchen printer’s IP address, e.g. 192.168.1.51');
+			kitchen = readPrinter('kitchen');
+			if (kitchen.error) {
+				say('printersResult', kitchen.error);
 				return;
 			}
-			kitchen.width = widthOf('kitchenWidth');
 		}
-		receipt.width = widthOf('receiptWidth');
 		var answer;
 		try {
-			answer = await api('/setup/printers', { receipt: receipt, kitchen: kitchen });
+			answer = await api('/setup/printers', { receipt: receipt.value, kitchen: kitchen.value });
 		} catch (e) {
 			alertBox(STOPPED);
 			return;
 		}
 		if (answer.status === 200) say('printersResult', '● Saved. Press Test print.');
+		else if (answer.status === 409 && answer.data && answer.data.error === 'print_service_unavailable')
+			say('printersResult', '◆ The PC’s print service did not answer — try again in a moment');
 		else if (answer.status === 409 && answer.data)
 			say(
 				'printersResult',
