@@ -146,8 +146,12 @@ describe('the setup page itself', () => {
 		const page = await call(port, 'GET', '/setup', { host: `127.0.0.1:${port}` });
 		expect(page.status).toBe(200);
 		expect(page.headers['content-type']).toBe('text/html; charset=utf-8');
-		expect(page.headers['content-security-policy']).toContain("default-src 'none'");
-		expect(page.headers['content-security-policy']).toContain("frame-ancestors 'none'");
+		// The whole policy, so loosening any one directive fails here.
+		expect(page.headers['content-security-policy']).toBe(
+			"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+		);
+		const css = await call(port, 'GET', '/setup.css', { host: `127.0.0.1:${port}` });
+		expect(css.headers['content-security-policy']).toBe(page.headers['content-security-policy']);
 		expect(page.headers['x-frame-options']).toBe('DENY');
 		expect(page.headers['access-control-allow-origin']).toBeUndefined();
 		expect(page.text).toBe(PAGE.html);
@@ -204,7 +208,15 @@ describe('the setup API walls', () => {
 
 	it('a config without a setup key (written before the installer) disables every API route', async () => {
 		const { port, own } = await agent({ noSecret: true });
-		for (const path of ['/setup/state', '/setup/printers', '/setup/pairing', '/setup/quit']) {
+		for (const path of [
+			'/setup/state',
+			'/setup/printers',
+			'/setup/origin',
+			'/setup/pairing',
+			'/setup/rekey',
+			'/setup/test-print',
+			'/setup/quit'
+		]) {
 			const answer = await call(
 				port,
 				'POST',
