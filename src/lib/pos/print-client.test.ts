@@ -11,9 +11,11 @@ import {
 	DEFAULT_AGENT_URL,
 	hasPendingPairing,
 	IMAGE_AGENT_VERSION,
+	listLocalPrinters,
 	localNetworkPermission,
 	parsePairingFragment,
 	printerChip,
+	printerKeyFor,
 	printerKeyOf,
 	pulseDrawer,
 	readAgentSettings,
@@ -692,5 +694,95 @@ describe('savePrinters', () => {
 			error: 'unreachable'
 		});
 		expect(await savePrinters(NEW_AGENT, printers, fetchFn, denied)).toEqual({ error: 'blocked' });
+	});
+});
+
+// ── A printer plugged into the till PC (feat/local-printers) ────────────────
+
+const LOCAL_AGENT: ReadyStatus = {
+	agentVersion: 2,
+	features: ['printers', 'setup', 'local-printers'],
+	printers: {
+		receipt: { name: 'SomStar-80mm-Series', width: 48, reachable: true, queued: 0 },
+		kitchen: null
+	}
+};
+
+describe('a printer on the till PC, named rather than addressed', () => {
+	it('printerKeyOf binds the logo confirmation to local:<name>:width; an empty name is no key', () => {
+		expect(printerKeyOf(LOCAL_AGENT)).toBe('local:SomStar-80mm-Series:48');
+		expect(printerKeyFor({ name: 'SomStar-80mm-Series', width: 48 })).toBe(
+			'local:SomStar-80mm-Series:48'
+		);
+		expect(printerKeyFor({ host: '192.168.1.50', port: 9100, width: 32 })).toBe(
+			'192.168.1.50:9100:32'
+		);
+		expect(printerKeyFor({ name: '', width: 48 })).toBeNull();
+		expect(printerKeyFor({ width: 48 })).toBeNull();
+	});
+
+	it('agentStatus keeps the name of a named printer and carries no host for it', async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		const { fetchFn } = stubFetch([{ status: 200, body: LOCAL_AGENT }]);
+		const state = await agentStatus(fetchFn, unknown);
+		expect(state.state).toBe('ready');
+		if (state.state !== 'ready') return;
+		expect(state.status.printers.receipt).toEqual({
+			name: 'SomStar-80mm-Series',
+			width: 48,
+			reachable: true,
+			queued: 0
+		});
+		expect(agentSupports(state.status, 'local-printers')).toBe(true);
+	});
+
+	it('listLocalPrinters asks GET /local-printers with the token and checks every entry', async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		const { fetchFn, calls } = stubFetch([
+			{
+				status: 200,
+				body: {
+					printers: [
+						{ name: 'SomStar-80mm-Series', state: 'idle' },
+						{ name: 'Old-Epson', state: 'stopped' },
+						{ name: 'Odd', state: 'dancing' },
+						{ name: '', state: 'idle' },
+						'garbage',
+						{ state: 'idle' }
+					]
+				}
+			}
+		]);
+		expect(await listLocalPrinters(LOCAL_AGENT, fetchFn, unknown)).toEqual({
+			ok: true,
+			printers: [
+				{ name: 'SomStar-80mm-Series', state: 'idle' },
+				{ name: 'Old-Epson', state: 'stopped' },
+				{ name: 'Odd', state: 'unknown' }
+			]
+		});
+		expect(calls[0]!.url).toBe(`${URL}/local-printers`);
+		expect(calls[0]!.init.method).toBe('GET');
+		expect(new Headers(calls[0]!.init.headers).get('authorization')).toBe(`Bearer ${TOKEN}`);
+		expect(calls[0]!.init.credentials).toBe('omit');
+	});
+
+	it('listLocalPrinters: an agent without the feature is unsupported with no request; 401 unauthorized; no answer unreachable', async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		const none = stubFetch([]);
+		expect(await listLocalPrinters(NEW_AGENT, none.fetchFn, unknown)).toEqual({
+			error: 'unsupported'
+		});
+		expect(none.calls).toHaveLength(0);
+		const { fetchFn } = stubFetch([
+			{ status: 401, body: { error: 'unauthorized' } },
+			{ throws: new TypeError('Failed to fetch') }
+		]);
+		expect(await listLocalPrinters(LOCAL_AGENT, fetchFn, unknown)).toEqual({
+			error: 'unauthorized'
+		});
+		expect(await listLocalPrinters(LOCAL_AGENT, fetchFn, unknown)).toEqual({
+			error: 'unreachable'
+		});
 	});
 });

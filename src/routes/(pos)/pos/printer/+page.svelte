@@ -25,6 +25,8 @@
 		agentSupports,
 		clearAgentSettings,
 		DEFAULT_AGENT_URL,
+		listLocalPrinters,
+		type LocalPrinterInfo,
 		parsePairingFragment,
 		printerChip,
 		printerKeyOf,
@@ -44,9 +46,12 @@
 		addressText,
 		agentSentence,
 		applyPrinters,
+		localNameOf,
 		messageFor,
 		parseAddress,
+		placeOf,
 		type PrinterFields,
+		type PrinterPlace,
 		type PrinterWidth
 	} from '$lib/pos/printer-form';
 	import { logoForAgent, logoGate } from '$lib/pos/printing';
@@ -119,6 +124,17 @@
 	let fieldsError = $state('');
 	let receiptInvalid = $state(false);
 	let kitchenInvalid = $state(false);
+	// WHERE EACH PRINTER IS: plugged into this PC (USB — reached by its name in
+	// the PC's own print service, which the agent lists) or on the network (IP).
+	// With nothing set yet the page starts on this PC when it lists a printer,
+	// else on the network; the owner's own choice is never overridden.
+	let receiptPlace = $state<PrinterPlace>('network');
+	let kitchenPlace = $state<PrinterPlace>('network');
+	let receiptName = $state('');
+	let kitchenName = $state('');
+	let placeTouched = $state(false);
+	let localPrinters = $state<LocalPrinterInfo[]>([]);
+	let localList = $state<'idle' | 'loading' | 'ready' | 'failed'>('idle');
 	// The paired agent's status while it answers (with or without a printer), else null.
 	const answering = $derived(
 		paired && status !== null && (status.state === 'ready' || status.state === 'no_printer')
@@ -126,6 +142,26 @@
 			: null
 	);
 	const canSetPrinters = $derived(answering !== null && agentSupports(answering, 'printers'));
+	const canListLocal = $derived(answering !== null && agentSupports(answering, 'local-printers'));
+
+	/** The printers this PC knows, from the agent; the receipt's place defaults from the answer. */
+	async function loadLocalPrinters() {
+		if (status === null || (status.state !== 'ready' && status.state !== 'no_printer')) return;
+		if (!agentSupports(status.status, 'local-printers')) return;
+		localList = 'loading';
+		const listed = await listLocalPrinters(status.status);
+		if ('ok' in listed) {
+			localPrinters = listed.printers;
+			localList = 'ready';
+			if (!placeTouched && status.status.printers.receipt === null) {
+				receiptPlace = localPrinters.length > 0 ? 'local' : 'network';
+			}
+			if (!receiptName && localPrinters[0]) receiptName = localPrinters[0].name;
+			if (!kitchenName && localPrinters[0]) kitchenName = localPrinters[0].name;
+		} else {
+			localList = 'failed';
+		}
+	}
 
 	// THE PRINT AGENT INSTALLER (print-agent-installer T-15): one download per OS,
 	// served by this app (GET /downloads/print-agent). Fetched on mount and never
@@ -221,6 +257,7 @@
 				// The rule receipts use: a confirmation counts for the printer it was watched on.
 				({ cached: logoCached, confirmed: logoConfirmed } = await logoGate(status));
 				fillFields(status);
+				void loadLocalPrinters();
 			}
 			ready = true;
 			// A link pasted while the lines above were still loading.
@@ -287,19 +324,38 @@
 		const { receipt, kitchen } = state.status.printers;
 		receiptAddress = addressText(receipt);
 		receiptWidth = receipt?.width ?? null;
+		receiptPlace = placeOf(receipt, receiptPlace);
+		if (receipt) placeTouched = true;
+		receiptName = localNameOf(receipt) || receiptName;
 		separateKitchen = kitchen !== null;
 		kitchenAddress = addressText(kitchen);
 		kitchenWidth = kitchen?.width ?? null;
+		kitchenPlace = placeOf(kitchen, kitchenPlace);
+		kitchenName = localNameOf(kitchen) || kitchenName;
 		fieldsError = '';
 		receiptInvalid = false;
 		kitchenInvalid = false;
 	}
 
 	/** The fields as the PUT /printers body, or the first thing wrong with them — nothing is sent then. */
+	/** One printer from its fields: a name on this PC, or a parsed network address. */
+	function readPrinter(
+		place: PrinterPlace,
+		name: string,
+		address: string
+	): { host: string; port: number } | { name: string } | { error: string } {
+		if (place === 'local') {
+			return name
+				? { name }
+				: { error: 'Pick it from the list — or plug it in and press Refresh the list' };
+		}
+		return parseAddress(address);
+	}
+
 	function readFields():
 		| { ok: true; receipt: PrinterFields; kitchen: PrinterFields | null }
 		| { ok: false; error: string; field: 'receipt' | 'kitchen' } {
-		const receipt = parseAddress(receiptAddress);
+		const receipt = readPrinter(receiptPlace, receiptName, receiptAddress);
 		if ('error' in receipt)
 			return { ok: false, error: `Receipt printer: ${receipt.error}`, field: 'receipt' };
 		if (receiptWidth === null) {
@@ -307,7 +363,7 @@
 		}
 		if (!separateKitchen)
 			return { ok: true, receipt: { ...receipt, width: receiptWidth }, kitchen: null };
-		const kitchen = parseAddress(kitchenAddress);
+		const kitchen = readPrinter(kitchenPlace, kitchenName, kitchenAddress);
 		if ('error' in kitchen)
 			return { ok: false, error: `Kitchen printer: ${kitchen.error}`, field: 'kitchen' };
 		if (kitchenWidth === null) {
@@ -407,6 +463,7 @@
 			status = await agentStatus();
 			results = [status.state === 'ready' ? `● Paired with the agent at ${url}` : explain(status)];
 			fillFields(status);
+			void loadLocalPrinters();
 		} catch (err) {
 			failure = `✕ ${err instanceof Error ? err.message : 'The pairing could not be saved'}`;
 			status = await agentStatus();
@@ -612,10 +669,97 @@
 		if (target === 'receipt') receiptWidth = width;
 		else kitchenWidth = width;
 	}
+	const PLACES: { place: PrinterPlace; label: string }[] = [
+		{ place: 'local', label: 'Plugged into this PC (USB)' },
+		{ place: 'network', label: 'On the network (IP address)' }
+	];
+	const placeOfTarget = (target: 'receipt' | 'kitchen') =>
+		target === 'receipt' ? receiptPlace : kitchenPlace;
+	function setPlace(target: 'receipt' | 'kitchen', place: PrinterPlace) {
+		placeTouched = true;
+		if (target === 'receipt') receiptPlace = place;
+		else kitchenPlace = place;
+	}
+	/** The list's words beside a printer's name. */
+	function stateWords(state: LocalPrinterInfo['state']): string {
+		if (state === 'stopped') return ' — not reachable now';
+		if (state === 'unknown') return '';
+		return ' — ready';
+	}
 </script>
 
 <svelte:head><title>Printer · matcami</title></svelte:head>
 <svelte:window onhashchange={onHashChange} />
+
+{#snippet printerPlace(target: 'receipt' | 'kitchen', legend: string)}
+	<fieldset class="flex flex-col gap-2">
+		<legend class="mb-1 font-semibold">{legend}</legend>
+		<div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+			{#each PLACES as option (option.place)}
+				<label class="min-h-touch-lg has-checked:border-accent flex items-center gap-3 px-4 {KEY}">
+					<input
+						type="radio"
+						name="{target}-place"
+						value={option.place}
+						class="accent-accent size-6"
+						checked={placeOfTarget(target) === option.place}
+						onchange={() => setPlace(target, option.place)}
+					/>
+					{option.label}
+				</label>
+			{/each}
+		</div>
+	</fieldset>
+{/snippet}
+
+{#snippet localPicker(target: 'receipt' | 'kitchen')}
+	<div class="flex flex-col gap-2">
+		<label for="{target}-name" class="font-semibold">
+			{target === 'receipt' ? 'Receipt' : 'Kitchen'} printer on this PC
+		</label>
+		{#if !canListLocal}
+			<p class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">
+				<span aria-hidden="true" class="font-mono">◆</span> Update the print agent on this PC to use a
+				USB printer — download it below
+			</p>
+		{:else}
+			<select
+				id="{target}-name"
+				class={TILL_FIELD}
+				value={target === 'receipt' ? receiptName : kitchenName}
+				onchange={(event) => {
+					const name = (event.currentTarget as HTMLSelectElement).value;
+					if (target === 'receipt') receiptName = name;
+					else kitchenName = name;
+				}}
+			>
+				{#each localPrinters as printer (printer.name)}
+					<option value={printer.name}>{printer.name}{stateWords(printer.state)}</option>
+				{/each}
+			</select>
+			{#if localList === 'ready' && localPrinters.length === 0}
+				<p class="bg-raise-2 text-ink-2 rounded-control px-3 py-2">
+					<span aria-hidden="true" class="font-mono">○</span> This PC lists no printer. Plug it in and
+					add it in the PC's own printer settings, then press Refresh the list.
+				</p>
+			{:else if localList === 'failed'}
+				<p class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2">
+					<span aria-hidden="true" class="font-mono">◆</span> The agent did not answer with its printers
+					— press Refresh the list
+				</p>
+			{/if}
+			<button
+				type="button"
+				class="{secondary} self-start"
+				disabled={busy || localList === 'loading'}
+				data-testid="refresh-local-printers"
+				onclick={() => void loadLocalPrinters()}
+			>
+				{localList === 'loading' ? 'Looking…' : 'Refresh the list'}
+			</button>
+		{/if}
+	</div>
+{/snippet}
 
 {#snippet paperWidth(target: 'receipt' | 'kitchen', legend: string)}
 	<fieldset class="flex flex-col gap-2">
@@ -764,43 +908,55 @@
 					}}
 				>
 					<h3 id="printer-fields-heading" class="text-ink font-semibold">Printers</h3>
-					<div class="flex flex-col gap-1">
-						<label for="receipt-address" class="font-semibold">Receipt printer address (IP)</label>
-						<input
-							id="receipt-address"
-							type="text"
-							autocomplete="off"
-							autocapitalize="off"
-							spellcheck="false"
-							placeholder="192.168.1.50"
-							aria-invalid={receiptInvalid}
-							aria-describedby={receiptInvalid ? 'printer-fields-error' : undefined}
-							bind:value={receiptAddress}
-							class="font-mono {TILL_FIELD}"
-						/>
-					</div>
+					{@render printerPlace('receipt', 'Where is the receipt printer?')}
+					{#if receiptPlace === 'local'}
+						{@render localPicker('receipt')}
+					{:else}
+						<div class="flex flex-col gap-1">
+							<label for="receipt-address" class="font-semibold">Receipt printer address (IP)</label
+							>
+							<input
+								id="receipt-address"
+								type="text"
+								autocomplete="off"
+								autocapitalize="off"
+								spellcheck="false"
+								placeholder="192.168.1.50"
+								aria-invalid={receiptInvalid}
+								aria-describedby={receiptInvalid ? 'printer-fields-error' : undefined}
+								bind:value={receiptAddress}
+								class="font-mono {TILL_FIELD}"
+							/>
+						</div>
+					{/if}
 					{@render paperWidth('receipt', 'Receipt paper')}
 					<label class="min-h-touch flex items-center gap-3 px-4 {KEY}">
 						<input type="checkbox" class="accent-accent size-6" bind:checked={separateKitchen} />
 						Separate kitchen printer
 					</label>
 					{#if separateKitchen}
-						<div class="flex flex-col gap-1">
-							<label for="kitchen-address" class="font-semibold">Kitchen printer address (IP)</label
-							>
-							<input
-								id="kitchen-address"
-								type="text"
-								autocomplete="off"
-								autocapitalize="off"
-								spellcheck="false"
-								placeholder="192.168.1.51"
-								aria-invalid={kitchenInvalid}
-								aria-describedby={kitchenInvalid ? 'printer-fields-error' : undefined}
-								bind:value={kitchenAddress}
-								class="font-mono {TILL_FIELD}"
-							/>
-						</div>
+						{@render printerPlace('kitchen', 'Where is the kitchen printer?')}
+						{#if kitchenPlace === 'local'}
+							{@render localPicker('kitchen')}
+						{:else}
+							<div class="flex flex-col gap-1">
+								<label for="kitchen-address" class="font-semibold"
+									>Kitchen printer address (IP)</label
+								>
+								<input
+									id="kitchen-address"
+									type="text"
+									autocomplete="off"
+									autocapitalize="off"
+									spellcheck="false"
+									placeholder="192.168.1.51"
+									aria-invalid={kitchenInvalid}
+									aria-describedby={kitchenInvalid ? 'printer-fields-error' : undefined}
+									bind:value={kitchenAddress}
+									class="font-mono {TILL_FIELD}"
+								/>
+							</div>
+						{/if}
 						{@render paperWidth('kitchen', 'Kitchen paper')}
 					{:else}
 						<p class="text-ink-2">Kitchen tickets print on the receipt printer.</p>

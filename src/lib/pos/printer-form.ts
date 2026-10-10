@@ -9,6 +9,7 @@
 // this is the owner's early answer, not the control.
 
 import {
+	printerKeyFor,
 	printerKeyOf,
 	type AgentStatus,
 	type PrinterStatus,
@@ -16,8 +17,12 @@ import {
 } from './print-client';
 
 export type PrinterWidth = 32 | 48;
-export type PrinterFields = { host: string; port: number; width: PrinterWidth };
+/** A network printer, or one plugged into (or installed on) the till PC, by its name there. */
+export type PrinterFields =
+	{ host: string; port: number; width: PrinterWidth } | { name: string; width: PrinterWidth };
 export type PrintersBody = { receipt: PrinterFields; kitchen: PrinterFields | null };
+/** Where a printer is: on the till PC, or on the network. */
+export type PrinterPlace = 'local' | 'network';
 
 /** The port an ESC/POS network printer listens on unless it was changed. */
 export const DEFAULT_PRINTER_PORT = 9100;
@@ -47,13 +52,25 @@ export function addressText(printer: PrinterStatus | null): string {
 		: printer.host;
 }
 
+/** The name of the printer on the till PC a status reports, or '' for a network printer or none. */
+export function localNameOf(printer: PrinterStatus | null): string {
+	return printer?.name ?? '';
+}
+
+/** Where the printer a status reports is; `fallback` when none is set yet. */
+export function placeOf(printer: PrinterStatus | null, fallback: PrinterPlace): PrinterPlace {
+	if (!printer) return fallback;
+	return printer.name ? 'local' : 'network';
+}
+
 /**
  * True when saving `next` changes the receipt printer the agent reports — its
- * host, port or width (printerKeyOf). A status with no receipt printer, or one
- * from an older agent ('legacy'), never matches, so the confirmation is withdrawn.
+ * host, port or width, or its name on the till PC (printerKeyOf). A status with
+ * no receipt printer, or one from an older agent ('legacy'), never matches, so
+ * the confirmation is withdrawn.
  */
 export function receiptChanged(status: AgentStatus, next: PrintersBody): boolean {
-	return printerKeyOf(status) !== `${next.receipt.host}:${next.receipt.port}:${next.receipt.width}`;
+	return printerKeyOf(status) !== printerKeyFor(next.receipt);
 }
 
 /**
@@ -117,7 +134,9 @@ export function messageFor(result: SavePrintersResult, url: string): string {
 			return `◆ ${queued} ${what} waiting for the old printer. Let them print, or reconnect it, before changing the paper width.`;
 		}
 		case 'bad_printers':
-			return '✕ Check the printer address';
+			return /\.name$/.test((result as { field: string }).field)
+				? '✕ Pick the printer from the list'
+				: '✕ Check the printer address';
 		case 'unsupported':
 			return '◆ Update the print agent on this PC to set printers here — download it below';
 		case 'unauthorized':
