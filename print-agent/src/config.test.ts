@@ -1,8 +1,27 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+	chmodSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { initConfig, loadConfig, parseConfig, parseOrigin, parsePrinterAddress } from './config.ts';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+	ConfigMissingError,
+	createConfig,
+	initConfig,
+	loadConfig,
+	parseConfig,
+	parseOrigin,
+	parsePrinterAddress,
+	saveConfig,
+	writeFileAtomic,
+	writeSeam
+} from './config.ts';
 
 const complete = {
 	origin: 'https://pos.example.com',
@@ -28,7 +47,7 @@ const tmp = () => {
 describe('parseConfig', () => {
 	it('accepts a complete config and normalises the origin', () => {
 		const parsed = parseConfig({ ...complete, origin: 'https://pos.example.com/' });
-		expect(parsed).toEqual(complete);
+		expect(parsed).toEqual({ ...complete, setupSecret: null });
 		expect(
 			parseConfig({ ...complete, printers: { receipt: complete.printers.receipt } }).printers
 				.kitchen
@@ -68,6 +87,101 @@ describe('parseConfig', () => {
 		expect(parseOrigin('http://localhost:4173')).toBe('http://localhost:4173');
 		expect(parseOrigin('http://127.0.0.1:5173/')).toBe('http://127.0.0.1:5173');
 		expect(() => parseOrigin('http://192.168.1.5:5173')).toThrow(/https/);
+	});
+
+	it("still reads the e2e harness's config (written before the installer: no setupSecret)", () => {
+		// e2e/print-agent-harness.ts writeAgentConfig, verbatim in shape.
+		const harness = {
+			origin: 'http://localhost:4173',
+			token: 'b'.repeat(64),
+			port: 9512,
+			printers: {
+				receipt: { host: '127.0.0.1', port: 9513, width: 32 },
+				kitchen: { host: '127.0.0.1', port: 9514, width: 48 }
+			},
+			dataDir: '/tmp/x/data'
+		};
+		const parsed = parseConfig(harness);
+		expect(parsed.setupSecret).toBeNull();
+		expect(parsed.printers).toEqual(harness.printers);
+	});
+
+	it('a config with no printer yet is valid; a kitchen printer without a receipt printer is not', () => {
+		expect(
+			parseConfig({ ...complete, printers: { receipt: null, kitchen: null } }).printers
+		).toEqual({ receipt: null, kitchen: null });
+		expect(parseConfig({ ...complete, printers: {} }).printers).toEqual({
+			receipt: null,
+			kitchen: null
+		});
+		expect(() =>
+			parseConfig({ ...complete, printers: { receipt: null, kitchen: complete.printers.kitchen } })
+		).toThrow('config: printers.kitchen needs a receipt printer first');
+	});
+
+	it('the setup key, when present, is 64 lowercase hex', () => {
+		expect(parseConfig({ ...complete, setupSecret: 'c'.repeat(64) }).setupSecret).toBe(
+			'c'.repeat(64)
+		);
+		expect(() => parseConfig({ ...complete, setupSecret: 'XYZ' })).toThrow(/setupSecret/);
+		expect(() => parseConfig({ ...complete, setupSecret: 'C'.repeat(64) })).toThrow(/setupSecret/);
+	});
+});
+
+describe('createConfig and saveConfig', () => {
+	it('mints a pairing token and a setup key — two different secrets — and no printers', () => {
+		const config = createConfig({ origin: 'https://pos.example.com', dataDir: '/tmp/d' });
+		expect(config.token).toMatch(/^[0-9a-f]{64}$/);
+		expect(config.setupSecret).toMatch(/^[0-9a-f]{64}$/);
+		expect(config.setupSecret).not.toBe(config.token);
+		expect(config.printers).toEqual({ receipt: null, kitchen: null });
+		expect(config.port).toBe(9471);
+	});
+
+	it.skipIf(process.platform === 'win32')(
+		'saves at mode 0600, leaves no temporary file, and reads back equal',
+		() => {
+			const dir = tmp();
+			const path = join(dir, 'config.json');
+			const config = createConfig({ origin: 'https://pos.example.com', dataDir: join(dir, 'd') });
+			saveConfig(path, config);
+			expect(statSync(path).mode & 0o777).toBe(0o600);
+			expect(readdirSync(dir).filter((name) => name.includes('.tmp-'))).toEqual([]);
+			expect(loadConfig(path)).toEqual(config);
+		}
+	);
+
+	it('refuses to save a config that would not load', () => {
+		const dir = tmp();
+		const config = createConfig({ origin: 'https://pos.example.com', dataDir: join(dir, 'd') });
+		expect(() => saveConfig(join(dir, 'c.json'), { ...config, port: 1 })).toThrow(/port/);
+	});
+});
+
+describe('writeFileAtomic', () => {
+	it('a write that fails before the rename leaves the old file untouched and no temporary file', () => {
+		const dir = tmp();
+		const path = join(dir, 'config.json');
+		writeFileSync(path, 'OLD CONTENT');
+		const spy = vi.spyOn(writeSeam, 'renameSync').mockImplementation(() => {
+			throw new Error('power cut');
+		});
+		try {
+			expect(() => writeFileAtomic(path, 'NEW CONTENT')).toThrow('power cut');
+		} finally {
+			spy.mockRestore();
+		}
+		expect(readFileSync(path, 'utf8')).toBe('OLD CONTENT');
+		expect(readdirSync(dir)).toEqual(['config.json']);
+	});
+
+	it('replaces an existing file', () => {
+		const dir = tmp();
+		const path = join(dir, 'f.json');
+		writeFileSync(path, 'a');
+		writeFileAtomic(path, 'b');
+		expect(readFileSync(path, 'utf8')).toBe('b');
+		expect(readdirSync(dir)).toEqual(['f.json']);
 	});
 });
 
@@ -151,5 +265,21 @@ describe('initConfig', () => {
 		const bad = join(dir, 'bad.json');
 		writeFileSync(bad, '{not json');
 		expect(() => loadConfig(bad)).toThrow(/not valid JSON/);
+	});
+
+	it('a MISSING config is a ConfigMissingError; a corrupt one is not (the installer tells them apart)', () => {
+		const dir = tmp();
+		expect(() => loadConfig(join(dir, 'nope.json'))).toThrow(ConfigMissingError);
+		const bad = join(dir, 'bad.json');
+		writeFileSync(bad, '{');
+		let thrown: unknown;
+		try {
+			loadConfig(bad);
+		} catch (error) {
+			thrown = error;
+		}
+		expect(thrown).toBeInstanceOf(Error);
+		expect(thrown).not.toBeInstanceOf(ConfigMissingError);
+		expect(String(thrown)).toMatch(/not valid JSON/);
 	});
 });

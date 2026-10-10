@@ -68,6 +68,7 @@ describe('runInit', () => {
 		expect(config).toEqual({
 			origin: 'https://pos.example.com',
 			token: config.token,
+			setupSecret: config.setupSecret,
 			port: 9471,
 			printers: {
 				receipt: { host: '192.168.10.50', port: 9100, width: 48 },
@@ -76,6 +77,7 @@ describe('runInit', () => {
 			dataDir: defaultPaths().dataDir
 		});
 		expect(config.token).toMatch(/^[0-9a-f]{64}$/);
+		expect(config.setupSecret).toMatch(/^[0-9a-f]{64}$/);
 		expect(loadConfig(path)).toEqual(config);
 		if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600);
 	});
@@ -108,9 +110,14 @@ describe('runInit', () => {
 		const path = join(tmp(), 'config.json');
 		const base = ['init', '--receipt', '10.0.0.5', '--width', '48', '--config', path];
 		expect(() => runInit(parseFlags(base).flags)).toThrow(/--origin is required/);
+		// Every refusal below throws BEFORE anything is written — none passes --config,
+		// so a write would land in the repo's own print-agent/config.json.
 		expect(() =>
 			runInit(parseFlags(['init', '--origin', 'https://x.example', '--width', '48']).flags)
-		).toThrow(/--receipt is required/);
+		).toThrow(/--width needs --receipt/);
+		expect(() =>
+			runInit(parseFlags(['init', '--origin', 'https://x.example', '--kitchen', '10.0.0.6']).flags)
+		).toThrow(/--kitchen needs --receipt/);
 		expect(() =>
 			runInit(parseFlags(['init', '--origin', 'https://x.example', '--receipt', '10.0.0.5']).flags)
 		).toThrow(/--width is required/);
@@ -121,6 +128,15 @@ describe('runInit', () => {
 		expect(() => runInit(parseFlags(good).flags)).toThrow(/already exists/);
 		const second = runInit(parseFlags([...good, '--force']).flags).config;
 		expect(second.token).not.toBe(first.token);
+	});
+
+	it('the printers are optional: init with only --origin writes a config with no printer yet', () => {
+		const path = join(tmp(), 'config.json');
+		const { config } = runInit(
+			parseFlags(['init', '--origin', 'https://pos.example.com', '--config', path]).flags
+		);
+		expect(config.printers).toEqual({ receipt: null, kitchen: null });
+		expect(loadConfig(path)).toEqual(config);
 	});
 
 	it('the default paths sit beside src/, inside print-agent/', () => {

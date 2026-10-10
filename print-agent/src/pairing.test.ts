@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { claimPairing, openPairing } from './pairing.ts';
+import { claimPairing, openPairing, pairingState } from './pairing.ts';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -53,6 +53,16 @@ describe('open pairing', () => {
 		expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ openedAt: T0, claimedAt: null });
 		expect(claimPairing(dir, T0 + 9)).toBe('ok');
 		expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ openedAt: T0, claimedAt: T0 + 9 });
+	});
+
+	it('pairingState reads where pairing stands without changing it', () => {
+		const dir = tmp();
+		expect(pairingState(dir)).toBe('not_open');
+		openPairing(dir, T0);
+		expect(pairingState(dir)).toBe('open');
+		expect(pairingState(dir)).toBe('open');
+		expect(claimPairing(dir, T0 + 1)).toBe('ok');
+		expect(pairingState(dir)).toBe('claimed');
 	});
 
 	it('a damaged state file is closed pairing, never open pairing', () => {

@@ -24,7 +24,7 @@ import {
 	writeFileSync
 } from 'node:fs';
 import { join } from 'node:path';
-import type { AgentConfig, PrinterConfig } from './config.ts';
+import type { PrinterConfig, ReadyPrinters } from './config.ts';
 import { DRAWER_PULSE, encodeJob } from './escpos.ts';
 import { paperStatus, reachable, send } from './printer.ts';
 import type { AgentStatus, DrawerOutcome, DrawerRequest, Job, SubmitOutcome } from './server.ts';
@@ -101,7 +101,8 @@ export function createSeenStore(dataDir: string, now: () => number): SeenStore {
 
 export type QueueOptions = {
 	dataDir: string;
-	printers: AgentConfig['printers'];
+	/** Built only once a receipt printer is set (tasks/print-agent-installer T-02). */
+	printers: ReadyPrinters;
 	now?: () => number;
 	/** Retry back-off: first wait, doubling to the cap. Defaults 2 s → 30 s. */
 	retry?: { baseMs: number; maxMs: number };

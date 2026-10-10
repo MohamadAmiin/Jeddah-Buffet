@@ -1,6 +1,6 @@
 // THE PRINT AGENT'S COMMAND LINE (spec 11; tasks/menu-and-printing T-24).
 //
-//   node print-agent/src/main.ts init --origin <url> --receipt <host[:port]> --width <32|48>
+//   node print-agent/src/main.ts init --origin <url> [--receipt <host[:port]> --width <32|48>]
 //        [--kitchen <host[:port]>] [--kitchen-width <32|48>] [--port <n>] [--config <path>] [--force]
 //   node print-agent/src/main.ts pair [--config <path>]
 //   node print-agent/src/main.ts link [--config <path>]
@@ -29,7 +29,8 @@ import {
 	initConfig,
 	loadConfig,
 	parsePrinterAddress,
-	type AgentConfig
+	type AgentConfig,
+	type PrinterConfig
 } from './config.ts';
 import { claimPairing, openPairing } from './pairing.ts';
 import { bakedBuild, defaultPaths, isPackaged } from './paths.ts';
@@ -39,7 +40,7 @@ import { createAgentServer, listen } from './server.ts';
 const USAGE = `matcami print agent
 
 Usage:
-  node print-agent/src/main.ts init --origin <url> --receipt <host[:port]> --width <32|48>
+  node print-agent/src/main.ts init --origin <url> [--receipt <host[:port]> --width <32|48>]
        [--kitchen <host[:port]>] [--kitchen-width <32|48>] [--port <n>]
        [--config <path>] [--force]
   node print-agent/src/main.ts pair [--config <path>]
@@ -58,13 +59,14 @@ run    starts the agent on 127.0.0.1:<port> (default ${DEFAULT_AGENT_PORT}).
 --version  prints the agent's version and, for an installer, the app address it answers.
 
 --origin        the app's https address exactly as the till opens it, e.g. https://pos.example.com
---receipt       the receipt printer, host[:port]; the port defaults to 9100 (raw TCP)
---width         the receipt printer's columns: 32 (58 mm) or 48 (80 mm)
+--receipt       the receipt printer, host[:port]; the port defaults to 9100 (raw TCP).
+                Optional: it can be set later on the till's Printer page
+--width         the receipt printer's columns: 32 (58 mm) or 48 (80 mm); needs --receipt
 --kitchen       the kitchen printer, host[:port]; without one, kitchen tickets print on the receipt printer
 --kitchen-width the kitchen printer's columns: 32 or 48 (defaults to --width)
 --port          the agent's loopback port, 1024-65535 (default ${DEFAULT_AGENT_PORT})
 --config        the config file to write or read (default: the agent's config.json)
---force        replace an existing config (the till must be paired again)
+--force         replace an existing config (the till must be paired again)
 `;
 
 type Flags = Record<string, string | true>;
@@ -148,18 +150,27 @@ function openPairingLines(config: AgentConfig): string[] {
 export function runInit(flags: Flags): { path: string; config: AgentConfig } {
 	const origin = text(flags, 'origin');
 	if (!origin) throw new Error('--origin is required');
+	// The printers are optional: they can be set later on the till's Printer page
+	// or the agent's own setup page (tasks/print-agent-installer).
 	const receiptAddress = text(flags, 'receipt');
-	if (!receiptAddress) throw new Error('--receipt is required');
-	const receiptWidth = width(flags, 'width');
 	const kitchenAddress = text(flags, 'kitchen');
+	if (!receiptAddress && kitchenAddress) throw new Error('--kitchen needs --receipt');
+	if (!receiptAddress && flags.width !== undefined) throw new Error('--width needs --receipt');
+	let receipt: PrinterConfig | null = null;
+	let kitchen: PrinterConfig | null = null;
+	if (receiptAddress) {
+		const receiptWidth = width(flags, 'width');
+		receipt = parsePrinterAddress(receiptAddress, receiptWidth);
+		if (kitchenAddress) {
+			kitchen = parsePrinterAddress(kitchenAddress, width(flags, 'kitchen-width', receiptWidth));
+		}
+	}
 	const portText = text(flags, 'port');
 	const path = text(flags, 'config') ?? defaultPaths().configPath;
 	const config = initConfig(path, {
 		origin,
-		receipt: parsePrinterAddress(receiptAddress, receiptWidth),
-		kitchen: kitchenAddress
-			? parsePrinterAddress(kitchenAddress, width(flags, 'kitchen-width', receiptWidth))
-			: null,
+		receipt,
+		kitchen,
 		port: portText === undefined ? undefined : Number.parseInt(portText, 10),
 		dataDir: defaultPaths().dataDir,
 		force: flags.force === true
@@ -168,9 +179,14 @@ export function runInit(flags: Flags): { path: string; config: AgentConfig } {
 }
 
 async function runServer(config: AgentConfig): Promise<void> {
-	const queue = createQueue({ dataDir: config.dataDir, printers: config.printers });
+	const receipt = config.printers.receipt;
+	if (!receipt) {
+		throw new Error('config: printers.receipt is not set — set the receipt printer first');
+	}
+	const printers = { receipt, kitchen: config.printers.kitchen };
+	const queue = createQueue({ dataDir: config.dataDir, printers });
 	const drawer = createDrawer({
-		receipt: config.printers.receipt,
+		receipt,
 		seen: queue.seen,
 		log: queue.log
 	});

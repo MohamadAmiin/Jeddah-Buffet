@@ -23,7 +23,7 @@
 // wall for both.
 import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { AgentConfig } from './config.ts';
+import type { AgentConfig, ReadyPrinters } from './config.ts';
 import { DOTS, MAX_IMAGE_HEIGHT_DOTS } from './escpos.ts';
 import type { PairingClaim } from './pairing.ts';
 
@@ -159,7 +159,7 @@ function imageLine(l: Record<string, unknown>, i: number, width: 32 | 48): Image
  * image line is at most the printer's dots wide and MAX_IMAGE_HEIGHT_DOTS
  * tall, and a job carries at most MAX_IMAGE_LINES of them.
  */
-export function parseJob(raw: unknown, printers: AgentConfig['printers']): Job {
+export function parseJob(raw: unknown, printers: ReadyPrinters): Job {
 	const body = obj(raw, 'job');
 	const jobId = id(body.id);
 	if (body.printer !== 'receipt' && body.printer !== 'kitchen') {
@@ -352,7 +352,15 @@ export function createAgentServer(config: AgentConfig, deps: AgentDeps): Server 
 			}
 			try {
 				if (path === '/jobs') {
-					const outcome = await deps.submitJob(parseJob(raw, config.printers));
+					// A job is validated against the printer it targets; with no receipt
+					// printer set yet there is nothing to print on (tasks/print-agent-installer).
+					const receipt = config.printers.receipt;
+					if (!receipt) {
+						send(res, 503, { error: 'no_printer' });
+						return;
+					}
+					const printers = { receipt, kitchen: config.printers.kitchen };
+					const outcome = await deps.submitJob(parseJob(raw, printers));
 					send(res, outcome === 'queued' ? 202 : 200, { status: outcome });
 				} else {
 					const outcome = await deps.pulseDrawer(parseDrawerRequest(raw));

@@ -1,6 +1,6 @@
 import { request as httpRequest, type Server } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AgentConfig } from './config.ts';
+import type { AgentConfig, ReadyPrinters } from './config.ts';
 import type { PairingClaim } from './pairing.ts';
 import {
 	createAgentServer,
@@ -17,14 +17,17 @@ import {
 const ORIGIN = 'https://pos.example.com';
 const TOKEN = 'ab'.repeat(32);
 
+const PRINTERS: ReadyPrinters = {
+	receipt: { host: '127.0.0.1', port: 9100, width: 48 },
+	kitchen: { host: '127.0.0.1', port: 9101, width: 32 }
+};
+
 const config: AgentConfig = {
 	origin: ORIGIN,
 	token: TOKEN,
+	setupSecret: null,
 	port: 0,
-	printers: {
-		receipt: { host: '127.0.0.1', port: 9100, width: 48 },
-		kitchen: { host: '127.0.0.1', port: 9101, width: 32 }
-	},
+	printers: PRINTERS,
 	dataDir: '/tmp/unused'
 };
 
@@ -466,7 +469,7 @@ describe('routes', () => {
 
 describe('parseJob', () => {
 	it('falls back to the receipt printer width for a kitchen job with no kitchen printer', () => {
-		const printers = { receipt: config.printers.receipt, kitchen: null };
+		const printers = { receipt: PRINTERS.receipt, kitchen: null };
 		expect(() =>
 			parseJob(
 				{ id: 'k', printer: 'kitchen', lines: [{ text: 'x'.repeat(48) }], cut: false },
@@ -482,7 +485,7 @@ describe('parseJob', () => {
 	});
 
 	it('refuses a bad id, an empty line list, a non-boolean cut and unknown sizes', () => {
-		const printers = config.printers;
+		const printers = PRINTERS;
 		expect(() =>
 			parseJob({ id: 'has space', printer: 'receipt', lines: [{ text: 'a' }], cut: true }, printers)
 		).toThrow(/id/);
@@ -512,7 +515,7 @@ describe('parseJob', () => {
 	) => ({ id: 'img', printer, lines: [{ image: { widthDots, heightDots, bitmap } }], cut: false });
 
 	it("accepts image lines up to the target printer's dots", () => {
-		const printers = config.printers;
+		const printers = PRINTERS;
 		// 48 columns on the receipt printer: 576 dots.
 		expect(() => parseJob(imageJob('receipt', 576, 1), printers)).not.toThrow();
 		// 32 columns on the kitchen printer: 384 dots, and not one byte more.
@@ -532,7 +535,7 @@ describe('parseJob', () => {
 	});
 
 	it('refuses malformed image lines', () => {
-		const printers = config.printers;
+		const printers = PRINTERS;
 		const bad = (lines: unknown[]) => () =>
 			parseJob({ id: 'a', printer: 'receipt', lines, cut: true }, printers);
 		const img = (over: Record<string, unknown> = {}) => ({
