@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Redeploy matcami on the VPS: pull → install → build → backup+migrate → restart → health check.
+# Redeploy matcami on the VPS: pull → install → build → print agent installers →
+# backup+migrate → restart → health check.
 #
 # Run ON the server as the user that owns the checkout AND the PM2 daemon that
 # runs the app (on this server that is root, app dir /root/buufiya). It finds
@@ -20,6 +21,13 @@
 # tracked files and resets hard to origin/$BRANCH. Ignored files (.env,
 # backups/, node_modules) are never touched by the reset. Never hand-edit code
 # on the server — it will be gone on the next deploy.
+#
+# The print agent installers (one download per OS, served at
+# /downloads/print-agent) are built from .env's ORIGIN into
+# dist/print-agent/current, with the last good set kept in previous/ (about
+# 0.5 GB together); the Node binaries they are made from are cached in
+# .cache/print-agent. When neither the agent nor ORIGIN changed, that step is a
+# no-op, and a failure there never stops the app's own deploy.
 #
 # What it deliberately does NOT do:
 #   - no nginx, TLS, PM2 process-definition or .env changes — it restarts the
@@ -146,6 +154,17 @@ pnpm install --frozen-lockfile || die "pnpm install failed"
 
 log "Building"
 pnpm build || die "build failed — the running app was not touched"
+
+# Non-fatal on purpose: the app must deploy even when nodejs.org is unreachable,
+# and it runs BEFORE migrations so a slow build never leaves the database
+# migrated while the old app is still serving.
+log "Building the print agent installers"
+if ! pnpm build:print-agent; then
+	echo "WARNING: the print agent installers were NOT rebuilt."
+	echo "  The previous installers (if any) stay in dist/print-agent/current and keep"
+	echo "  answering the ORIGIN they were built for. Fix the error above and run"
+	echo "  'pnpm build:print-agent' in $APP_DIR."
+fi
 
 # ── Backup, then migrations (spec 29: the backup ALWAYS runs first) ───────────
 if [ "${SKIP_MIGRATE:-}" = "1" ]; then
