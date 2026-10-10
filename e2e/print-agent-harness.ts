@@ -74,9 +74,11 @@ export function fakeCups(
 	const tape = join(dir, 'cups-tape.bin');
 	const script = (name: string, body: string) =>
 		writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+	// Two printers, the one under test SECOND: a page must select the configured
+	// printer, never whichever is first on the list.
 	script(
 		'lpstat',
-		`case "$1" in -p) echo "printer ${printerName} is idle.  enabled since Sat Oct 10 15:54:12 2026";; esac\nexit 0`
+		`case "$1" in -p) echo "printer Office-Laser is idle.  enabled since Sat Oct 10 15:00:00 2026"; echo "printer ${printerName} is idle.  enabled since Sat Oct 10 15:54:12 2026";; esac\nexit 0`
 	);
 	script('lp', `cat >> "$FAKE_CUPS_TAPE"\necho "request id is ${printerName}-$$ (0 file(s))"`);
 	script('cancel', 'exit 0');

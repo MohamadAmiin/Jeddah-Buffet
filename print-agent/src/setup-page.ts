@@ -316,18 +316,34 @@ export const SETUP_JS = String.raw`(function () {
 
 	// The printers this PC's print service knows — a USB printer is one of them.
 	var localPrinters = [];
+	function configuredName(id) {
+		var p = current && current.printers[id === 'receiptName' ? 'receipt' : 'kitchen'];
+		return p && p.name ? p.name : '';
+	}
 	function fillSelect(id) {
 		var select = $(id);
-		var chosen = select.value;
+		// What the owner picked, else the printer the agent has NOW: the list
+		// arrives after the one-time prefill, and a save must never switch the
+		// printer to whichever is first on the list.
+		var want = select.value || configuredName(id);
 		select.textContent = '';
+		var listed = false;
 		localPrinters.forEach(function (p) {
 			var option = document.createElement('option');
 			option.value = p.name;
 			option.textContent =
-				p.name + (p.state === 'stopped' ? ' — not reachable now' : p.state === 'unknown' ? '' : ' — ready');
+				p.name +
+				(p.state === 'stopped' ? ' — not reachable now' : p.state === 'unknown' ? '' : ' — ready');
 			select.appendChild(option);
+			if (p.name === want) listed = true;
 		});
-		if (chosen) select.value = chosen;
+		if (want && !listed) {
+			var missing = document.createElement('option');
+			missing.value = want;
+			missing.textContent = want + ' — not listed on this PC now';
+			select.appendChild(missing);
+		}
+		if (want) select.value = want;
 		var none = id === 'receiptName' ? 'receiptNone' : 'kitchenNone';
 		$(none).hidden = localPrinters.length > 0;
 	}

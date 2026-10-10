@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { acquireRunLock, closeResetPool, resetDb } from '../src/lib/server/db/test/reset';
@@ -478,7 +478,7 @@ test('an agent with no printer is set up from the till', async ({ browser }) => 
 	const config = writeAgentConfig(dir, { agentPort: port, token: SETUP_TOKEN, printers: null });
 	// The PC's print service, faked: one USB printer the agent can list and print to.
 	const cups = fakeCups(dir);
-	const setupAgent = await startAgent(config, cups.env);
+	let setupAgent = await startAgent(config, cups.env);
 	try {
 		// 1. A fresh browser registered as the till: nothing paired, nothing cached.
 		const till = await browser.newContext();
@@ -581,6 +581,28 @@ test('an agent with no printer is set up from the till', async ({ browser }) => 
 			.toBeGreaterThanOrEqual(2);
 		// Raw ESC/POS reached the service untouched: the 32-column ruler is there.
 		expect(tapeText()).toContain('12345678901234567890123456789012\n');
+
+		// 8. The agent's own setup page shows the printer the agent HAS selected —
+		//    Fake-Thermal, second on the list — and a save there keeps it. The page
+		//    needs a setup key, which the harness config lacks: restart with one.
+		await stopAgent(setupAgent);
+		const SETUP_KEY = 'ab'.repeat(32);
+		const withKey = { ...JSON.parse(readFileSync(config, 'utf8')), setupSecret: SETUP_KEY };
+		writeFileSync(config, JSON.stringify(withKey), { mode: 0o600 });
+		setupAgent = await startAgent(config, cups.env);
+		const setupPage = await till.newPage();
+		await setupPage.goto(`http://127.0.0.1:${port}/setup#s=${SETUP_KEY}`);
+		await expect(setupPage.locator('#status')).toContainText('Fake-Thermal (this PC)');
+		const receiptSelect = setupPage.locator('#receiptName');
+		await expect(receiptSelect).toHaveValue('Fake-Thermal');
+		await expect(receiptSelect.locator('option')).toHaveCount(2);
+		await setupPage.locator('#printers button[type="submit"]').click();
+		await expect(setupPage.locator('#printersResult')).toContainText('● Saved');
+		expect(JSON.parse(readFileSync(config, 'utf8')).printers.receipt).toEqual({
+			name: 'Fake-Thermal',
+			width: 32
+		});
+		await setupPage.close();
 
 		await till.close();
 	} finally {

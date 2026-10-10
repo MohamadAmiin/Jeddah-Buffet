@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -153,6 +153,23 @@ describe('sending through the service (CUPS)', () => {
 		expect(calls.some((c) => c.cmd === 'cancel')).toBe(false);
 	});
 
+	it('THE DRAWER RULE: a failed or hung lpstat never counts as "printed" — the job is cancelled at the deadline', async () => {
+		for (const broken of [
+			{ status: 1, stdout: '', stderr: 'lpstat: Bad file descriptor' },
+			{ status: -1, stdout: '', stderr: 'lpstat timed out after 5000 ms' }
+		]) {
+			calls = [];
+			answer = (c) => {
+				if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-53 (0 file(s))\n');
+				if (c.cmd === 'lpstat') return broken;
+				if (c.cmd === 'cancel') return ok();
+				return undefined;
+			};
+			await expect(sendLocalNow(SOMSTAR, bytes, 400)).rejects.toThrow(/cancelled/);
+			expect(calls.find((c) => c.cmd === 'cancel')?.args).toEqual(['SomStar-80mm-Series-53']);
+		}
+	});
+
 	it('THE DRAWER RULE: a job still waiting at the timeout is CANCELLED and the send fails', async () => {
 		answer = (c) => {
 			if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-52 (0 file(s))\n');
@@ -208,6 +225,23 @@ describe('the Windows spooler helpers', () => {
 		expect(parseGetPrinter('Microsoft Print to PDF\tNormal')).toEqual([
 			{ name: 'Microsoft Print to PDF', state: 'idle' }
 		]);
+	});
+
+	it('the drawer opens on "printed <job>" with exit 0, and the spooler job count is read from the status helper', async () => {
+		answer = (c) =>
+			c.cmd === 'powershell'
+				? c.opts.env?.MATCAMI_WAIT_MS === '3000'
+					? ok('printed 13\r\n')
+					: ok('Normal\t2\r\n')
+				: undefined;
+		const printer: LocalPrinter = { name: 'POS-80', width: 48 };
+		await expect(sendLocalNow(printer, DRAWER_PULSE, 3000)).resolves.toBeUndefined();
+		expect(await localQueued(printer)).toBe(2);
+		answer = (c) => (c.cmd === 'powershell' ? ok('') : undefined);
+		expect(await localQueued(printer)).toBe(0);
+		// A job the spooler no longer lists is printed; a failed query is not.
+		expect(PS_SEND).toContain("Category -eq 'ObjectNotFound'");
+		expect(PS_SEND).toContain('-ErrorAction Stop');
 	});
 
 	it('spools and reads the job id; a helper that cancelled the job (exit 3) fails the drawer send', async () => {
@@ -279,6 +313,32 @@ describe('a receipt printer on this PC, through the queue and the drawer', () =>
 			queued: 1
 		});
 		expect(status.printers.receipt).not.toHaveProperty('host');
+	});
+
+	it('a job that carries the logo is bound to the named printer on disk, by its label', async () => {
+		answer = () => ({ status: 1, stdout: '', stderr: 'lp: The printer or class does not exist.' });
+		const dir = tmp();
+		const q = createQueue({
+			dataDir: dir,
+			printers: { receipt: SOMSTAR, kitchen: null },
+			retry: { baseMs: 40, maxMs: 160 },
+			paperStatusTimeoutMs: 40,
+			sendTimeoutMs: 1000
+		});
+		queues.push(q);
+		expect(
+			q.submit({
+				id: 'img1',
+				printer: 'receipt',
+				lines: [{ image: { widthDots: 8, heightDots: 1, bitmap: 'AA==' } }],
+				cut: true
+			})
+		).toBe('queued');
+		const [file] = readdirSync(join(dir, 'queue')).filter((n) => n.endsWith('.json'));
+		const queued = JSON.parse(readFileSync(join(dir, 'queue', file!), 'utf8')) as {
+			imagePrinter?: string;
+		};
+		expect(queued.imagePrinter).toBe('local:SomStar-80mm-Series');
 	});
 
 	it('the drawer opens only when the pulse PRINTED within the window; a waiting pulse is cancelled, never left behind', async () => {

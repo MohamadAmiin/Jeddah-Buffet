@@ -145,9 +145,15 @@ $job = [MatcamiRaw]::Send($env:MATCAMI_PRINTER, $buffer.ToArray())
 $wait = [int]($env:MATCAMI_WAIT_MS)
 if ($wait -gt 0) {
   $deadline = (Get-Date).AddMilliseconds($wait)
-  while ((Get-Date) -lt $deadline) {
-    $j = Get-PrintJob -PrinterName $env:MATCAMI_PRINTER -ID $job -ErrorAction SilentlyContinue
-    if (-not $j -or $j.JobStatus -match 'Completed|Printed') { Write-Output "printed $job"; exit 0 }
+    while ((Get-Date) -lt $deadline) {
+    try {
+      $j = Get-PrintJob -PrinterName $env:MATCAMI_PRINTER -ID $job -ErrorAction Stop
+      if ($j.JobStatus -match 'Completed|Printed') { Write-Output "printed $job"; exit 0 }
+    } catch {
+      # Gone from the queue = printed. Any other failure says nothing about the
+      # job: keep waiting, and let the deadline take it back.
+      if ($_.CategoryInfo.Category -eq 'ObjectNotFound') { Write-Output "printed $job"; exit 0 }
+    }
     Start-Sleep -Milliseconds 150
   }
   Remove-PrintJob -PrinterName $env:MATCAMI_PRINTER -ID $job -ErrorAction SilentlyContinue
@@ -321,10 +327,15 @@ export async function sendLocalNow(
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
 		const out = await localIo.exec('lpstat', ['-o', printer.name], { timeoutMs: 5000 });
-		const waiting = out.stdout
-			.split('\n')
-			.some((line) => line.startsWith(`${job} `) || line.startsWith(`${job}\t`));
-		if (!waiting) return;
+		// A failed or hung lpstat says NOTHING about the job — an empty answer is
+		// not "gone". Only a successful listing without the job means printed;
+		// anything else keeps waiting, and the deadline takes the job back.
+		if (out.status === 0) {
+			const waiting = out.stdout
+				.split('\n')
+				.some((line) => line.startsWith(`${job} `) || line.startsWith(`${job}\t`));
+			if (!waiting) return;
+		}
 		await sleep(150);
 	}
 	await localIo.exec('cancel', [job], { timeoutMs: 5000 });
