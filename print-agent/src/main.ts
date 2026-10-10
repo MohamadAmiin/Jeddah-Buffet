@@ -24,7 +24,11 @@
 // executable application; tasks/print-agent-installer): paths.ts decides where
 // config.json and data/ live in each mode, and the entry guard at the bottom runs
 // main() both when Node starts this file and when the installer starts.
+import { spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { nextDelay } from './autostart.ts';
 import {
 	DEFAULT_AGENT_PORT,
 	initConfig,
@@ -34,9 +38,9 @@ import {
 	type PrinterConfig
 } from './config.ts';
 import { claimPairing, openPairing, pairingState } from './pairing.ts';
-import { bakedBuild, defaultPaths, isPackaged } from './paths.ts';
-import { createRuntime } from './runtime.ts';
-import { createAgentServer, listen } from './server.ts';
+import { bakedBuild, defaultPaths, isPackaged, selfCommand } from './paths.ts';
+import { createRuntime, type Runtime } from './runtime.ts';
+import { AGENT_FEATURES, createAgentServer, listen, type AgentDeps } from './server.ts';
 import { SETUP_CSS, SETUP_HTML, SETUP_JS } from './setup-page.ts';
 import { createSetupHandler } from './setup.ts';
 
@@ -182,36 +186,117 @@ export function runInit(flags: Flags): { path: string; config: AgentConfig } {
 }
 
 async function runServer(configPath: string, config: AgentConfig): Promise<void> {
+	// THE PORT IS THE SINGLE-INSTANCE LOCK, so it is bound BEFORE the queue
+	// exists: a second copy (a second sign-in trigger, a double-click) must find
+	// the port taken and leave without its queue ever resuming the jobs on disk —
+	// two queues on one data/ would print every waiting receipt twice. Until the
+	// runtime is built every dependency falls back to "no printer"; nothing can
+	// reach them in between, because the runtime is built in the same tick that
+	// `listen` resolves, before any connection is handled.
+	let runtime: Runtime | null = null;
+	let setup: AgentDeps['setup'] | null = null;
+	const server = createAgentServer(() => runtime?.config() ?? config, {
+		submitJob: (job) => runtime?.deps.submitJob(job) ?? 'no_printer',
+		pulseDrawer: async (request) => (runtime ? runtime.deps.pulseDrawer(request) : 'no_printer'),
+		status: async () =>
+			runtime
+				? runtime.deps.status()
+				: { agentVersion: 2, features: AGENT_FEATURES, printers: { receipt: null, kitchen: null } },
+		setPrinters: async (printers) => {
+			if (!runtime) throw new Error('the agent is still starting');
+			return runtime.deps.setPrinters(printers);
+		},
+		claimPairing: () => claimPairing((runtime?.config() ?? config).dataDir),
+		setup: async (req, res, ctx) => (setup ? setup(req, res, ctx) : false)
+	});
+	let port: number;
+	try {
+		port = await listen(server, config.port);
+	} catch (error) {
+		if ((error as { code?: unknown }).code === 'EADDRINUSE') {
+			// Another agent already holds the port: not a failure, so no supervisor
+			// (systemd, launchd, the Windows supervisor) restarts this one in a loop.
+			mkdirSync(config.dataDir, { recursive: true });
+			appendFileSync(
+				join(config.dataDir, 'agent.log'),
+				`${new Date().toISOString()} already running on 127.0.0.1:${config.port}\n`
+			);
+			process.stdout.write(`matcami print agent is already running on 127.0.0.1:${config.port}\n`);
+			process.exit(0);
+		}
+		throw error;
+	}
 	// The runtime builds the queue and the drawer once a receipt printer is set,
 	// and rebuilds them when the printers change (runtime.ts).
-	const runtime = createRuntime({ configPath, config });
-	const dataDir = () => runtime.config().dataDir;
-	const setup = createSetupHandler({
-		runtime,
+	const live = createRuntime({ configPath, config });
+	runtime = live;
+	const dataDir = () => live.config().dataDir;
+	setup = createSetupHandler({
+		runtime: live,
 		openPairing: () => openPairing(dataDir()),
 		pairingState: () => pairingState(dataDir()),
 		rekey: async () => {
-			await runtime.setToken(randomBytes(32).toString('hex'));
+			await live.setToken(randomBytes(32).toString('hex'));
 			openPairing(dataDir());
 		},
 		quit: () => shutdown(),
 		page: { html: SETUP_HTML, js: SETUP_JS, css: SETUP_CSS }
 	});
-	const server = createAgentServer(runtime.config, {
-		...runtime.deps,
-		claimPairing: () => claimPairing(dataDir()),
-		setup
-	});
-	const port = await listen(server, config.port);
 	// The URL, never the token.
 	process.stdout.write(`matcami print agent listening on http://127.0.0.1:${port}\n`);
 	const shutdown = () => {
 		// Let a print already on the wire finish and be recorded, then leave.
-		void runtime.close().then(() => server.close(() => process.exit(0)));
+		void live.close().then(() => server.close(() => process.exit(0)));
 		setTimeout(() => process.exit(0), 5000).unref();
 	};
 	process.once('SIGINT', shutdown);
 	process.once('SIGTERM', shutdown);
+}
+
+/** `--config <path>` passed on to a relaunched copy, when one was given. */
+function configArgs(flags: Flags): string[] {
+	const path = text(flags, 'config');
+	return path ? ['--config', path] : [];
+}
+
+/**
+ * `run --detach` (the Windows logon task): start `run --supervise` with no
+ * console — on Windows `detached` means DETACHED_PROCESS — and return at once.
+ * The only window anyone sees is this launcher's sub-second flash.
+ */
+function detach(flags: Flags): void {
+	const self = selfCommand(['run', '--supervise', ...configArgs(flags)]);
+	spawn(self.command, self.args, { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
+}
+
+/**
+ * `run --supervise`: keep a console-less `run` going. A clean exit (0 — a quit
+ * from the setup page, or "already running") ends supervision; a crash is
+ * restarted after nextDelay. SIGTERM/SIGINT are passed on to the worker.
+ */
+async function supervise(flags: Flags): Promise<number> {
+	const self = selfCommand(['run', ...configArgs(flags)]);
+	let worker: ChildProcess | null = null;
+	let stopping = false;
+	const stop = () => {
+		stopping = true;
+		worker?.kill('SIGTERM');
+	};
+	process.once('SIGTERM', stop);
+	process.once('SIGINT', stop);
+	let delay = 0;
+	for (;;) {
+		const started = Date.now();
+		const child = spawn(self.command, self.args, { windowsHide: true, stdio: 'ignore' });
+		worker = child;
+		const code = await new Promise<number | null>((resolve) => {
+			child.once('exit', (exitCode) => resolve(exitCode));
+			child.once('error', () => resolve(-1));
+		});
+		if (stopping || code === 0) return 0;
+		delay = nextDelay(delay, Date.now() - started);
+		await new Promise((resolve) => setTimeout(resolve, delay));
+	}
 }
 
 /** `--version`: the protocol version, and for an installer when it was built and which app it answers. */
@@ -248,6 +333,15 @@ function main(argv: string[]): number {
 		return 0;
 	}
 	if (command === 'run') {
+		// The Windows logon task's launcher: start a console-less supervisor, leave.
+		if (flags.detach === true) {
+			detach(flags);
+			return 0;
+		}
+		if (flags.supervise === true) {
+			void supervise(flags).then((code) => process.exit(code));
+			return 0;
+		}
 		// Loaded first so a broken file fails here, with the field named, not at
 		// the first print job.
 		const configPath = text(flags, 'config') ?? defaultPaths().configPath;
