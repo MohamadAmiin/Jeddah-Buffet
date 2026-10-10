@@ -54,6 +54,9 @@ importers:
       drizzle-kit:
         specifier: 0.31.10
         version: 0.31.10
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       eslint:
         specifier: 10.10.0
         version: 10.10.0(jiti@2.7.0)
@@ -66,6 +69,9 @@ importers:
       fake-indexeddb:
         specifier: 6.2.5
         version: 6.2.5
+      postject:
+        specifier: 1.0.0-alpha.6
+        version: 1.0.0-alpha.6
       prettier:
         specifier: 3.9.6
         version: 3.9.6
@@ -1229,6 +1235,10 @@ packages:
     resolution: {integrity: sha512-eYm0QWBtUrBWZWG0d386OGAw16Z995PiOVo2B7bjWSbHedGl5e0ZWaq65kOGgUSNesEIDkB9ISbTg/JK9dhCZA==}
     engines: {node: '>=6'}
 
+  commander@9.5.0:
+    resolution: {integrity: sha512-KRs7WVDKg86PWiuAqhDrAQnTXZKraVcCc6vFdL14qrZ/DcWwuRo7VoiYXalXO7S5GKpqYiVEwCbgFDfxNHKJBQ==}
+    engines: {node: ^12.20.0 || >=14}
+
   commondir@1.0.1:
     resolution: {integrity: sha512-W9pAhw0ja1Edb5GVdIF1mjZw/ASI0AlShXM83UUGe2DVr5TdAPEA1OA8m/g8zWp9x6On7gqufY+FatDbC3MDQg==}
 
@@ -1933,6 +1943,11 @@ packages:
   postgres-interval@1.2.0:
     resolution: {integrity: sha512-9ZhXKM/rw350N1ovuWHbGxnGh/SNJ4cnxHiM0rxE4VN41wsg8P8zWn9hv/buK00RP4WvlOyr/RBDiptyxVbkZQ==}
     engines: {node: '>=0.10.0'}
+
+  postject@1.0.0-alpha.6:
+    resolution: {integrity: sha512-b9Eb8h2eVqNE8edvKdwqkrY6O7kAwmI8kcnBv1NScolYJbo59XUF0noFq+lxbC1yN20bmC0WBEbDC5H/7ASb0A==}
+    engines: {node: '>=14.0.0'}
+    hasBin: true
 
   prelude-ls@1.2.1:
     resolution: {integrity: sha512-vkcDPrRZo1QZLbn5RLGPpg/WmIQ65qoWWhcGKf/b5eplkkarX0m9z8ppCat4mlOqUsWpyNuYgO3VRyrYHSzX5g==}
@@ -3025,6 +3040,8 @@ snapshots:
 
   clsx@2.1.1: {}
 
+  commander@9.5.0: {}
+
   commondir@1.0.1: {}
 
   cookie@0.6.0: {}
@@ -3612,6 +3629,10 @@ snapshots:
   postgres-interval@1.2.0:
     dependencies:
       xtend: 4.0.2
+
+  postject@1.0.0-alpha.6:
+    dependencies:
+      commander: 9.5.0
 
   prelude-ls@1.2.1: {}
 
