@@ -28,11 +28,15 @@ export function freePort(): Promise<number> {
 /**
  * Write the agent's config.json into `dir` and return its path. Receipt 32
  * columns (58 mm), kitchen 48 (80 mm): the two widths in one run. The file is
- * 0600 because it holds the pairing token.
+ * 0600 because it holds the pairing token. `printers: null` writes an agent with
+ * no printer yet — what the installer leaves until the owner enters one
+ * (print-agent-installer T-16).
  */
 export function writeAgentConfig(
 	dir: string,
-	c: { agentPort: number; receiptPort: number; kitchenPort: number; token: string }
+	c: { agentPort: number; token: string } & (
+		{ receiptPort: number; kitchenPort: number; printers?: undefined } | { printers: null }
+	)
 ): string {
 	const configPath = join(dir, 'config.json');
 	writeFileSync(
@@ -41,10 +45,13 @@ export function writeAgentConfig(
 			origin: ORIGIN,
 			token: c.token,
 			port: c.agentPort,
-			printers: {
-				receipt: { host: '127.0.0.1', port: c.receiptPort, width: 32 },
-				kitchen: { host: '127.0.0.1', port: c.kitchenPort, width: 48 }
-			},
+			printers:
+				c.printers === null
+					? { receipt: null, kitchen: null }
+					: {
+							receipt: { host: '127.0.0.1', port: c.receiptPort, width: 32 },
+							kitchen: { host: '127.0.0.1', port: c.kitchenPort, width: 48 }
+						},
 			dataDir: join(dir, 'data')
 		}),
 		{ mode: 0o600 }

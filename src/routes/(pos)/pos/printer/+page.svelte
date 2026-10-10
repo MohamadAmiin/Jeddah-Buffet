@@ -22,6 +22,7 @@
 	import { RESTORED_CONTEXT, signedIn } from '$lib/pos/employee.svelte';
 	import {
 		agentStatus,
+		agentSupports,
 		clearAgentSettings,
 		DEFAULT_AGENT_URL,
 		parsePairingFragment,
@@ -30,6 +31,7 @@
 		readAgentSettings,
 		requestPairing,
 		saveAgentSettings,
+		savePrinters,
 		stashPairing,
 		submitJob,
 		takePairing,
@@ -38,6 +40,15 @@
 		type PairingRefusal,
 		type SubmitResult
 	} from '$lib/pos/print-client';
+	import {
+		addressText,
+		agentSentence,
+		messageFor,
+		parseAddress,
+		receiptChanged,
+		type PrinterFields,
+		type PrinterWidth
+	} from '$lib/pos/printer-form';
 	import { logoForAgent, logoGate } from '$lib/pos/printing';
 	import { renderTestPage } from '$lib/pos/receipt';
 	import {
@@ -46,7 +57,7 @@
 		withdrawReceiptLogoConfirmation
 	} from '$lib/pos/settings';
 	import { readCachedSetting } from '$lib/pos/store';
-	import { KEY } from '$lib/components/pos/keys';
+	import { KEY, TILL_FIELD } from '$lib/components/pos/keys';
 	import {
 		firstRunSteps,
 		guessPlatform,
@@ -93,6 +104,27 @@
 	const chip = $derived(
 		status === null ? null : printerChip(status, { logoCached, logoConfirmed })
 	);
+
+	// THE PRINTER FIELDS (print-agent-installer T-16): the receipt printer's
+	// address and paper width, typed here once and kept by the agent on this PC
+	// (PUT /printers). Offered only to an agent that says it can set printers; a
+	// paired older agent gets one sentence instead. A width starts unchosen when
+	// the agent has no printer: a guessed width wraps every line of a receipt.
+	let receiptAddress = $state('');
+	let receiptWidth = $state<PrinterWidth | null>(null);
+	let separateKitchen = $state(false);
+	let kitchenAddress = $state('');
+	let kitchenWidth = $state<PrinterWidth | null>(null);
+	let fieldsError = $state('');
+	let receiptInvalid = $state(false);
+	let kitchenInvalid = $state(false);
+	// The paired agent's status while it answers (with or without a printer), else null.
+	const answering = $derived(
+		paired && status !== null && (status.state === 'ready' || status.state === 'no_printer')
+			? status.status
+			: null
+	);
+	const canSetPrinters = $derived(answering !== null && agentSupports(answering, 'printers'));
 
 	// THE PRINT AGENT INSTALLER (print-agent-installer T-15): one download per OS,
 	// served by this app (GET /downloads/print-agent). Fetched on mount and never
@@ -187,6 +219,7 @@
 				else status = await agentStatus();
 				// The rule receipts use: a confirmation counts for the printer it was watched on.
 				({ cached: logoCached, confirmed: logoConfirmed } = await logoGate(status));
+				fillFields(status);
 			}
 			ready = true;
 			// A link pasted while the lines above were still loading.
@@ -236,15 +269,112 @@
 			case 'ready':
 				return '● The agent answered';
 			case 'no_printer':
-				return '◆ The agent answered, but no printer address is set yet';
+				return '◆ The agent answered, but no printer address is set yet — enter it below';
 			case 'unauthorized':
-				return '✕ Printer pairing is wrong — the print agent on this PC was set up again, or for another address. Forget the pairing, then pair again';
 			case 'blocked':
-				return "✕ Printing blocked by Chrome — open Chrome's site settings for this address and allow local network access, then try again";
 			case 'unreachable':
-				return `◆ Printer unreachable — nothing answered at ${url}. Is the matcami print agent installed on this PC? Download it below.`;
+				// The same sentences a failed Save printers shows (printer-form.ts).
+				return agentSentence(state.state, url);
 			case 'not_set_up':
 				return '○ Printer not set up';
+		}
+	}
+
+	/** The fields show what the agent has now. Never called on a refresh the owner did not ask for. */
+	function fillFields(state: AgentState | null) {
+		if (!state || (state.state !== 'ready' && state.state !== 'no_printer')) return;
+		const { receipt, kitchen } = state.status.printers;
+		receiptAddress = addressText(receipt);
+		receiptWidth = receipt?.width ?? null;
+		separateKitchen = kitchen !== null;
+		kitchenAddress = addressText(kitchen);
+		kitchenWidth = kitchen?.width ?? null;
+		fieldsError = '';
+		receiptInvalid = false;
+		kitchenInvalid = false;
+	}
+
+	/** The fields as the PUT /printers body, or the first thing wrong with them — nothing is sent then. */
+	function readFields():
+		| { ok: true; receipt: PrinterFields; kitchen: PrinterFields | null }
+		| { ok: false; error: string; field: 'receipt' | 'kitchen' } {
+		const receipt = parseAddress(receiptAddress);
+		if ('error' in receipt)
+			return { ok: false, error: `Receipt printer: ${receipt.error}`, field: 'receipt' };
+		if (receiptWidth === null) {
+			return { ok: false, error: 'Choose the receipt printer’s paper width', field: 'receipt' };
+		}
+		if (!separateKitchen)
+			return { ok: true, receipt: { ...receipt, width: receiptWidth }, kitchen: null };
+		const kitchen = parseAddress(kitchenAddress);
+		if ('error' in kitchen)
+			return { ok: false, error: `Kitchen printer: ${kitchen.error}`, field: 'kitchen' };
+		if (kitchenWidth === null) {
+			return { ok: false, error: 'Choose the kitchen printer’s paper width', field: 'kitchen' };
+		}
+		return {
+			ok: true,
+			receipt: { ...receipt, width: receiptWidth },
+			kitchen: { ...kitchen, width: kitchenWidth }
+		};
+	}
+
+	/**
+	 * "Save printers". THE LOGO GATE FIRST (invariant 9's drawer rule rides on it):
+	 * a confirmation vouches for the printer it was watched on, so whenever the
+	 * receipt printer's host, port or width changes it is withdrawn BEFORE the
+	 * agent is asked — the same order as saveAgentSettings — and a save that then
+	 * fails still leaves the gate closed. It is withdrawn whether or not a logo is
+	 * cached now (a confirmation outlives a removed logo that comes back with the
+	 * same fingerprint). The printer key binding (printing.ts logoForAgent) closes
+	 * the gate too, for a change made on the agent's own setup page, which cannot
+	 * reach this till's store; this withdrawal is not the only path, nor the
+	 * binding.
+	 */
+	async function savePrintersHere() {
+		if (busy || status === null || (status.state !== 'ready' && status.state !== 'no_printer')) {
+			return;
+		}
+		const fields = readFields();
+		receiptInvalid = !fields.ok && fields.field === 'receipt';
+		kitchenInvalid = !fields.ok && fields.field === 'kitchen';
+		if (!fields.ok) {
+			fieldsError = `✕ ${fields.error}`;
+			return;
+		}
+		fieldsError = '';
+		const next = { receipt: fields.receipt, kitchen: fields.kitchen };
+		const before = status.status;
+		busy = true;
+		failure = '';
+		results = [];
+		try {
+			let withdrawn = false;
+			if (receiptChanged(before, next)) {
+				try {
+					await withdrawReceiptLogoConfirmation();
+				} catch {
+					// Not withdrawn: the agent is not asked, so no printer changes under a confirmation.
+					failure = '✕ The printers could not be saved — try again';
+					return;
+				}
+				withdrawn = true;
+				// A test page printed on the old printer is no longer answered here.
+				logoSent = false;
+				testedPrinterKey = null;
+			}
+			const result = await savePrinters(before, next);
+			const lines = [messageFor(result, url)];
+			status = await agentStatus();
+			({ cached: logoCached, confirmed: logoConfirmed } = await logoGate(status));
+			if (withdrawn && logoCached) lines.push('◆ Test-print the logo again before receipts use it');
+			results = lines;
+			if (result === 'saved') fillFields(status);
+			announceChange();
+		} catch (err) {
+			failure = `✕ ${err instanceof Error ? err.message : 'The printers could not be saved'}`;
+		} finally {
+			busy = false;
 		}
 	}
 
@@ -275,6 +405,7 @@
 			announceChange();
 			status = await agentStatus();
 			results = [status.state === 'ready' ? `● Paired with the agent at ${url}` : explain(status)];
+			fillFields(status);
 		} catch (err) {
 			failure = `✕ ${err instanceof Error ? err.message : 'The pairing could not be saved'}`;
 			status = await agentStatus();
@@ -467,10 +598,44 @@
 	const primary =
 		'min-h-touch-xl w-full border border-control-line rounded-control bg-accent text-accent-ink font-semibold text-pos disabled:bg-disabled-bg disabled:text-disabled-ink';
 	const secondary = `min-h-touch-lg px-4 ${KEY}`;
+	const savePrimary =
+		'min-h-touch-lg w-full border border-control-line rounded-control bg-accent text-accent-ink font-semibold text-pos disabled:bg-disabled-bg disabled:text-disabled-ink';
+	// The chosen width carries the radio's own dot, not colour alone.
+	const WIDTHS: { width: PrinterWidth; label: string }[] = [
+		{ width: 32, label: '58 mm paper' },
+		{ width: 48, label: '80 mm paper' }
+	];
+	const widthOf = (target: 'receipt' | 'kitchen') =>
+		target === 'receipt' ? receiptWidth : kitchenWidth;
+	function setWidth(target: 'receipt' | 'kitchen', width: PrinterWidth) {
+		if (target === 'receipt') receiptWidth = width;
+		else kitchenWidth = width;
+	}
 </script>
 
 <svelte:head><title>Printer · matcami</title></svelte:head>
 <svelte:window onhashchange={onHashChange} />
+
+{#snippet paperWidth(target: 'receipt' | 'kitchen', legend: string)}
+	<fieldset class="flex flex-col gap-2">
+		<legend class="mb-1 font-semibold">{legend}</legend>
+		<div class="grid grid-cols-2 gap-2">
+			{#each WIDTHS as option (option.width)}
+				<label class="min-h-touch-lg has-checked:border-accent flex items-center gap-3 px-4 {KEY}">
+					<input
+						type="radio"
+						name="{target}-width"
+						value={option.width}
+						class="accent-accent size-6"
+						checked={widthOf(target) === option.width}
+						onchange={() => setWidth(target, option.width)}
+					/>
+					{option.label}
+				</label>
+			{/each}
+		</div>
+	</fieldset>
+{/snippet}
 
 {#snippet installer()}
 	<section
@@ -582,6 +747,83 @@
 				>
 					{busy ? 'Working…' : 'Pair this till'}
 				</button>
+			{/if}
+
+			<!-- The printer fields (print-agent-installer T-16): only for an agent that says it
+			     can set printers; a paired older agent gets the sentence that says why not. -->
+			{#if canSetPrinters}
+				<form
+					class="border-line flex flex-col gap-4 border-t pt-4"
+					aria-labelledby="printer-fields-heading"
+					data-testid="printer-fields"
+					novalidate
+					onsubmit={(event) => {
+						event.preventDefault();
+						void savePrintersHere();
+					}}
+				>
+					<h3 id="printer-fields-heading" class="text-ink font-semibold">Printers</h3>
+					<div class="flex flex-col gap-1">
+						<label for="receipt-address" class="font-semibold">Receipt printer address (IP)</label>
+						<input
+							id="receipt-address"
+							type="text"
+							autocomplete="off"
+							autocapitalize="off"
+							spellcheck="false"
+							placeholder="192.168.1.50"
+							aria-invalid={receiptInvalid}
+							aria-describedby={receiptInvalid ? 'printer-fields-error' : undefined}
+							bind:value={receiptAddress}
+							class="font-mono {TILL_FIELD}"
+						/>
+					</div>
+					{@render paperWidth('receipt', 'Receipt paper')}
+					<label class="min-h-touch flex items-center gap-3 px-4 {KEY}">
+						<input type="checkbox" class="accent-accent size-6" bind:checked={separateKitchen} />
+						Separate kitchen printer
+					</label>
+					{#if separateKitchen}
+						<div class="flex flex-col gap-1">
+							<label for="kitchen-address" class="font-semibold">Kitchen printer address (IP)</label
+							>
+							<input
+								id="kitchen-address"
+								type="text"
+								autocomplete="off"
+								autocapitalize="off"
+								spellcheck="false"
+								placeholder="192.168.1.51"
+								aria-invalid={kitchenInvalid}
+								aria-describedby={kitchenInvalid ? 'printer-fields-error' : undefined}
+								bind:value={kitchenAddress}
+								class="font-mono {TILL_FIELD}"
+							/>
+						</div>
+						{@render paperWidth('kitchen', 'Kitchen paper')}
+					{:else}
+						<p class="text-ink-2">Kitchen tickets print on the receipt printer.</p>
+					{/if}
+					{#if fieldsError}
+						<p
+							id="printer-fields-error"
+							class="bg-danger-bg text-danger rounded-control px-3 py-2"
+							role="alert"
+						>
+							{fieldsError}
+						</p>
+					{/if}
+					<button type="submit" class={savePrimary} disabled={busy} data-testid="save-printers">
+						{busy ? 'Working…' : 'Save printers'}
+					</button>
+				</form>
+			{:else if answering !== null}
+				<p
+					class="bg-st-offline-bg text-st-offline rounded-control px-3 py-2"
+					data-testid="printers-unsupported"
+				>
+					{messageFor({ error: 'unsupported' }, url)}
+				</p>
 			{/if}
 
 			{#if failure}
