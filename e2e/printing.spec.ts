@@ -1,12 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { ChildProcess } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { acquireRunLock, closeResetPool, resetDb } from '../src/lib/server/db/test/reset';
 import { startFakePrinter, type FakePrinter } from './fake-printer';
 import {
 	agentPairingLink,
+	fakeCups,
 	freePort,
 	openAgentPairing,
 	startAgent,
@@ -475,7 +476,9 @@ test('an agent with no printer is set up from the till', async ({ browser }) => 
 	const dir = mkdtempSync(join(tmpdir(), 'matcami-printer-setup-e2e-'));
 	const port = await freePort();
 	const config = writeAgentConfig(dir, { agentPort: port, token: SETUP_TOKEN, printers: null });
-	const setupAgent = await startAgent(config);
+	// The PC's print service, faked: one USB printer the agent can list and print to.
+	const cups = fakeCups(dir);
+	const setupAgent = await startAgent(config, cups.env);
 	try {
 		// 1. A fresh browser registered as the till: nothing paired, nothing cached.
 		const till = await browser.newContext();
@@ -506,6 +509,9 @@ test('an agent with no printer is set up from the till', async ({ browser }) => 
 		const fields = tillPage.getByTestId('printer-fields');
 		const address = fields.getByLabel('Receipt printer address (IP)');
 		const paper = fields.getByRole('group', { name: 'Receipt paper' });
+		// The page starts on "this PC" because the fake service lists a printer; the
+		// first part of this journey is the network printer, chosen on purpose.
+		await fields.getByRole('radio', { name: 'On the network (IP address)' }).check();
 		// Nothing is sent while the address is wrong or the width unchosen.
 		await address.fill('http://192.168.1.50');
 		await fields.getByRole('button', { name: 'Save printers' }).click();
@@ -547,6 +553,34 @@ test('an agent with no printer is set up from the till', async ({ browser }) => 
 			'◆ 1 receipt is waiting for the old printer. Let them print, or reconnect it, before changing the paper width.'
 		);
 		expect(JSON.parse(readFileSync(config, 'utf8')).printers.receipt.width).toBe(32);
+
+		// 7. The printer moves onto this PC (USB): the agent lists what the PC's print
+		//    service knows, the owner picks it from the list, and both the page still
+		//    waiting from step 6 and a new test page go out through that service.
+		await fields.getByRole('radio', { name: 'Plugged into this PC (USB)' }).check();
+		const picker = fields.getByLabel('Receipt printer on this PC');
+		await expect(picker).toContainText('Fake-Thermal');
+		await picker.selectOption('Fake-Thermal');
+		// Step 6 left the width on 80 mm with a 58 mm page still waiting: the move
+		// alone is allowed, a width change under that page is not — so 58 mm again.
+		await paper.getByRole('radio', { name: '58 mm paper' }).check();
+		await fields.getByRole('button', { name: 'Save printers' }).click();
+		await expect(results).toContainText('● Printer saved. Press Test print.');
+		expect(JSON.parse(readFileSync(config, 'utf8')).printers.receipt).toEqual({
+			name: 'Fake-Thermal',
+			width: 32
+		});
+		await expect(chip).toContainText('Printer ready');
+		await tillPage.getByTestId('test-print').click();
+		await expect(results).toContainText('● Test page sent to the receipt printer', {
+			timeout: 15_000
+		});
+		const tapeText = () => (existsSync(cups.tape) ? readFileSync(cups.tape, 'latin1') : '');
+		await expect
+			.poll(() => tapeText().split('TEST PRINT').length - 1, { timeout: 15_000 })
+			.toBeGreaterThanOrEqual(2);
+		// Raw ESC/POS reached the service untouched: the 32-column ruler is there.
+		expect(tapeText()).toContain('12345678901234567890123456789012\n');
 
 		await till.close();
 	} finally {
