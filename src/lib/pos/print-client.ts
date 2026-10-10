@@ -42,15 +42,32 @@ export const DEFAULT_AGENT_URL = 'http://127.0.0.1:9471';
 
 export type AgentSettings = { url: string; token: string };
 
-/** The agent's `GET /status` body (print-agent/src/server.ts AgentStatus). */
-export type PrinterStatus = { width: 32 | 48; reachable: boolean; queued: number };
+/**
+ * The agent's `GET /status` body (print-agent/src/server.ts AgentStatus).
+ * `host`/`port` come from an agent that can set printers (print-agent-installer
+ * T-04) and let a logo confirmation be bound to ONE printer (printerKeyOf).
+ */
+export type PrinterStatus = {
+	width: 32 | 48;
+	reachable: boolean;
+	queued: number;
+	host?: string;
+	port?: number;
+};
 export type AgentStatus = {
 	/**
 	 * 1 prints text; 2 adds the validated image line (print-agent T-25), which
-	 * is what lets a page carry the logo. The body is an unvalidated cast, so
-	 * every reader asks agentPrintsImages rather than trusting the field.
+	 * is what lets a page carry the logo. Every reader asks agentPrintsImages
+	 * rather than trusting the field.
 	 */
 	agentVersion: number;
+	/** What the agent can do beyond printing ('printers', 'setup'); absent from an older agent. */
+	features?: readonly string[];
+	/** `receipt` null: the agent runs, but no printer address is set yet. */
+	printers: { receipt: PrinterStatus | null; kitchen: PrinterStatus | null };
+};
+/** A status with a receipt printer set — what printing needs. */
+export type ReadyStatus = AgentStatus & {
 	printers: { receipt: PrinterStatus; kitchen: PrinterStatus | null };
 };
 
@@ -62,9 +79,32 @@ export function agentPrintsImages(status: AgentStatus): boolean {
 	return typeof status.agentVersion === 'number' && status.agentVersion >= IMAGE_AGENT_VERSION;
 }
 
+/** The agent offers this (`features` in its status) — e.g. 'printers' = PUT /printers. */
+export function agentSupports(status: AgentStatus, feature: 'printers' | 'setup'): boolean {
+	return Array.isArray(status.features) && status.features.includes(feature);
+}
+
+/**
+ * Which receipt printer a status describes, as the key a logo confirmation is
+ * bound to: `host:port:width` from an agent that reports them; 'legacy' from an
+ * older agent, whose printer can only change through a re-key — and a new
+ * pairing withdraws the confirmation anyway (saveAgentSettings); null when
+ * there is no receipt printer, or the agent claims the feature but reports no
+ * address — a key that matches nothing, so the gate stays closed.
+ */
+export function printerKeyOf(status: AgentStatus): string | null {
+	const receipt = status.printers.receipt;
+	if (!receipt) return null;
+	if (!agentSupports(status, 'printers')) return 'legacy';
+	if (typeof receipt.host !== 'string' || typeof receipt.port !== 'number') return null;
+	return `${receipt.host}:${receipt.port}:${receipt.width}`;
+}
+
 export type AgentState =
 	| { state: 'not_set_up' }
-	| { state: 'ready'; status: AgentStatus }
+	| { state: 'ready'; status: ReadyStatus }
+	/** Paired and answering, but no printer address is set yet (print-agent-installer). */
+	| { state: 'no_printer'; status: AgentStatus }
 	| { state: 'unauthorized' }
 	| { state: 'blocked' }
 	| { state: 'unreachable' };
@@ -230,7 +270,7 @@ export async function requestPairing(
 async function agentFetch(
 	settings: AgentSettings,
 	path: string,
-	init: { method: 'GET' | 'POST'; body?: unknown },
+	init: { method: 'GET' | 'POST' | 'PUT'; body?: unknown },
 	timeoutMs: number,
 	fetchFn: typeof fetch
 ): Promise<Response> {
@@ -309,12 +349,104 @@ export async function agentStatus(
 	} catch {
 		return { state: await failureState(probe) };
 	}
-	if (response.status === 200) {
-		const body = await bodyOf(response);
-		return { state: 'ready', status: body as unknown as AgentStatus };
-	}
+	if (response.status === 200) return stateOf(await bodyOf(response));
 	if (response.status === 401 || response.status === 403) return { state: 'unauthorized' };
 	return { state: 'unreachable' };
+}
+
+function printerStatusOf(value: unknown): PrinterStatus | null {
+	if (typeof value !== 'object' || value === null) return null;
+	const p = value as Record<string, unknown>;
+	if ((p.width !== 32 && p.width !== 48) || typeof p.reachable !== 'boolean') return null;
+	if (typeof p.queued !== 'number') return null;
+	const status: PrinterStatus = { width: p.width, reachable: p.reachable, queued: p.queued };
+	if (typeof p.host === 'string') status.host = p.host;
+	if (typeof p.port === 'number') status.port = p.port;
+	return status;
+}
+
+/**
+ * A 200 /status body, VALIDATED here — the one place every caller goes through —
+ * because the layout's chip dereferences it inside a $derived: a garbled body
+ * must read as unreachable, never throw in the till's chrome. A body from an
+ * older agent (no features, no host) is still ready.
+ */
+function stateOf(body: Record<string, unknown>): AgentState {
+	const printers = body.printers;
+	if (typeof printers !== 'object' || printers === null) return { state: 'unreachable' };
+	const { receipt: rawReceipt, kitchen: rawKitchen } = printers as Record<string, unknown>;
+	const kitchen =
+		rawKitchen === null || rawKitchen === undefined ? null : printerStatusOf(rawKitchen);
+	if (rawKitchen !== null && rawKitchen !== undefined && kitchen === null) {
+		return { state: 'unreachable' };
+	}
+	const features = Array.isArray(body.features)
+		? body.features.filter((f): f is string => typeof f === 'string')
+		: undefined;
+	const base = {
+		agentVersion: typeof body.agentVersion === 'number' ? body.agentVersion : 0,
+		...(features ? { features } : {})
+	};
+	if (rawReceipt === null) {
+		return { state: 'no_printer', status: { ...base, printers: { receipt: null, kitchen } } };
+	}
+	const receipt = printerStatusOf(rawReceipt);
+	if (!receipt) return { state: 'unreachable' };
+	return { state: 'ready', status: { ...base, printers: { receipt, kitchen } } };
+}
+
+export type SavePrintersResult =
+	| 'saved'
+	| { error: 'jobs_waiting'; target: 'receipt' | 'kitchen'; queued: number }
+	| { error: 'bad_printers'; field: string }
+	| { error: 'unsupported' | 'unauthorized' | 'blocked' | 'unreachable' | 'not_set_up' }
+	| { error: string };
+
+type PrinterAddress = { host: string; port: number; width: 32 | 48 };
+
+/**
+ * Set the printers on the agent (PUT /printers). Sent only to an agent whose
+ * status lists the 'printers' feature: an older one would refuse the preflight,
+ * and the failure would read like an agent that is not running.
+ */
+export async function savePrinters(
+	status: AgentStatus,
+	printers: { receipt: PrinterAddress; kitchen: PrinterAddress | null },
+	fetchFn: typeof fetch = fetch,
+	probe: () => Promise<LocalNetworkPermission> = localNetworkPermission
+): Promise<SavePrintersResult> {
+	if (!agentSupports(status, 'printers')) return { error: 'unsupported' };
+	const settings = await readAgentSettings();
+	if (!settings) return { error: 'not_set_up' };
+	let response: Response;
+	try {
+		response = await agentFetch(
+			settings,
+			'/printers',
+			{ method: 'PUT', body: printers },
+			JOB_TIMEOUT_MS,
+			fetchFn
+		);
+	} catch {
+		return { error: await failureState(probe) };
+	}
+	const body = await bodyOf(response);
+	if (response.status === 200) return 'saved';
+	if (response.status === 409 && body.error === 'jobs_waiting') {
+		return {
+			error: 'jobs_waiting',
+			target: body.target === 'kitchen' ? 'kitchen' : 'receipt',
+			queued: typeof body.queued === 'number' ? body.queued : 0
+		};
+	}
+	if (response.status === 422 && body.error === 'bad_printers') {
+		return {
+			error: 'bad_printers',
+			field: typeof body.field === 'string' ? body.field : 'printers'
+		};
+	}
+	if (response.status === 401 || response.status === 403) return { error: 'unauthorized' };
+	return { error: errorCode(body, response.status) };
 }
 
 export async function submitJob(
@@ -411,6 +543,8 @@ export function printerChip(state: AgentState, opts: PrinterChipOptions = {}): P
 			}
 			return { glyph: '●', text: `Printer ready${suffix}`, tone: 'ok' };
 		}
+		case 'no_printer':
+			return { glyph: '◆', text: 'Printer address not set — open Printer', tone: 'offline' };
 		case 'unreachable':
 			return { glyph: '◆', text: 'Printer unreachable', tone: 'offline' };
 		case 'blocked':

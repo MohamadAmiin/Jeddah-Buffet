@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { ChildProcess } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { acquireRunLock, closeResetPool, resetDb } from '../src/lib/server/db/test/reset';
@@ -58,6 +58,10 @@ const OWNER_PIN = '1234';
 const CASHIER = { displayName: 'Sam', pin: '5678' };
 const TOKEN = 'c0ffee00'.repeat(8);
 const PULSE = Buffer.from([0x1b, 0x70, 0x00, 0x19, 0xfa]);
+
+// The second journey uses the restaurant the first one signs up: when the first
+// fails, the second is skipped rather than failing for the wrong reason.
+test.describe.configure({ mode: 'serial' });
 
 let receipt: FakePrinter;
 let kitchen: FakePrinter;
@@ -454,4 +458,100 @@ test('receipts, kitchen tickets and the drawer: cash prints, a reprint is COPY, 
 	]);
 
 	await till.close();
+});
+
+// THE PRINTER IS SET UP FROM THE TILL (print-agent-installer T-16). The agent as
+// the installer leaves it — running, waiting for a till, no printer address yet —
+// is given its receipt printer on the till's Printer page, keeps it in its own
+// config, and prints. It reuses the restaurant and the owner's PIN of the journey
+// above instead of signing up a second company: the suite's sign-ups already
+// fill the public sign-up throttle (10 per address per 10 minutes), so one more
+// would refuse a later spec's. Hence serial mode (top of the file).
+const SETUP_TOKEN = 'feedface'.repeat(8);
+
+test('an agent with no printer is set up from the till', async ({ browser }) => {
+	test.setTimeout(300_000);
+	const printer = await startFakePrinter();
+	const dir = mkdtempSync(join(tmpdir(), 'matcami-printer-setup-e2e-'));
+	const port = await freePort();
+	const config = writeAgentConfig(dir, { agentPort: port, token: SETUP_TOKEN, printers: null });
+	const setupAgent = await startAgent(config);
+	try {
+		// 1. A fresh browser registered as the till: nothing paired, nothing cached.
+		const till = await browser.newContext();
+		const tillPage = await till.newPage();
+		await registerDevice(tillPage, OWNER, 'Office PC');
+
+		// 2. Only the installer list fails to load (the app is otherwise reachable):
+		//    the page still works, and says the download needs a connection.
+		await tillPage.route('**/downloads/print-agent', (route) => route.abort());
+
+		// 3. The owner pairs from the agent's own link. The agent answers, with no printer.
+		await tillPage.goto(agentPairingLink(config));
+		await expect(tillPage.getByTestId('pairing-waiting')).toBeVisible();
+		await pickEmployee(tillPage, 'The Owner');
+		await enterPin(tillPage, OWNER_PIN);
+		await expect(tillPage).toHaveURL(/\/pos\/printer$/);
+		await expect(tillPage.getByTestId('paired-agent')).toContainText(`http://127.0.0.1:${port}`);
+		const chip = tillPage.getByTestId('printer-chip');
+		const results = tillPage.getByTestId('test-results');
+		await expect(chip).toContainText('Printer address not set');
+		await expect(results).toContainText('no printer address is set yet');
+		await tillPage.getByTestId('agent-download-details').locator('summary').click();
+		await expect(tillPage.getByTestId('agent-download')).toContainText(
+			'The installer needs a connection'
+		);
+
+		// 4. The receipt printer's address and 58 mm paper, saved to the agent.
+		const fields = tillPage.getByTestId('printer-fields');
+		const address = fields.getByLabel('Receipt printer address (IP)');
+		const paper = fields.getByRole('group', { name: 'Receipt paper' });
+		// Nothing is sent while the address is wrong or the width unchosen.
+		await address.fill('http://192.168.1.50');
+		await fields.getByRole('button', { name: 'Save printers' }).click();
+		await expect(fields.getByRole('alert')).toContainText('Enter the printer’s IP address');
+		await address.fill(`127.0.0.1:${printer.port}`);
+		await fields.getByRole('button', { name: 'Save printers' }).click();
+		await expect(fields.getByRole('alert')).toContainText('paper width');
+		expect(JSON.parse(readFileSync(config, 'utf8')).printers.receipt).toBeNull();
+		await paper.getByRole('radio', { name: '58 mm paper' }).check();
+		await fields.getByRole('button', { name: 'Save printers' }).click();
+		await expect(results).toContainText('● Printer saved. Press Test print.');
+		await expect(chip).toContainText('Printer ready');
+		// The agent keeps it in its own config, and the fields show what it has now.
+		expect(JSON.parse(readFileSync(config, 'utf8')).printers).toEqual({
+			receipt: { host: '127.0.0.1', port: printer.port, width: 32 },
+			kitchen: null
+		});
+		await expect(address).toHaveValue(`127.0.0.1:${printer.port}`);
+		await expect(paper.getByRole('radio', { name: '58 mm paper' })).toBeChecked();
+
+		// 5. Test print: the page reaches the printer, ruled at exactly 32 columns.
+		await tillPage.getByTestId('test-print').click();
+		await expect(results).toContainText('● Test page sent to the receipt printer', {
+			timeout: 15_000
+		});
+		await printer.waitFor('TEST PRINT');
+		expect(printer.count('12345678901234567890123456789012\n')).toBe(1);
+
+		// 6. The printer goes away with a page still to print: that page is already
+		//    laid out for 58 mm, so the agent refuses a width change under it.
+		await printer.close();
+		await tillPage.getByTestId('test-print').click();
+		await expect(results).toContainText('● Test page sent to the receipt printer', {
+			timeout: 15_000
+		});
+		await paper.getByRole('radio', { name: '80 mm paper' }).check();
+		await fields.getByRole('button', { name: 'Save printers' }).click();
+		await expect(results).toContainText(
+			'◆ 1 receipt is waiting for the old printer. Let them print, or reconnect it, before changing the paper width.'
+		);
+		expect(JSON.parse(readFileSync(config, 'utf8')).printers.receipt.width).toBe(32);
+
+		await till.close();
+	} finally {
+		await stopAgent(setupAgent);
+		await printer.close();
+		rmSync(dir, { recursive: true, force: true });
+	}
 });

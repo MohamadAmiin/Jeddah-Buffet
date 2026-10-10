@@ -1,4 +1,8 @@
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll, vi } from 'vitest';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { RequestEvent } from '@sveltejs/kit';
 import { eq } from 'drizzle-orm';
 import { testDb, closeTestDb } from '$lib/server/db/test/db';
@@ -97,6 +101,11 @@ type DevicePageData = {
 	settings: { complete: boolean; missing: string[] };
 	idleLockSeconds: number | null;
 	timeZone: string | null;
+	printAgent: {
+		origin: string;
+		builtAt: string;
+		files: { name: string; url: string; os: string; arch: string; verified: boolean }[];
+	} | null;
 };
 
 async function loadAs(user: Principal): Promise<DevicePageData> {
@@ -243,4 +252,95 @@ describe('the /device page', () => {
 			expect(await settingsComplete(db, a.restaurantId)).toEqual(NOTHING_SET);
 		}
 	);
+});
+
+// The print agent download card (tasks/print-agent-installer T-13).
+describe('the /device page — the print agent installers', () => {
+	const NAMES = [
+		['matcami-print-agent-linux-x64.zip', 'linux', 'x64'],
+		['matcami-print-agent-windows-x64.exe', 'windows', 'x64'],
+		['matcami-print-agent-macos-arm64.zip', 'macos', 'arm64'],
+		['matcami-print-agent-macos-x64.zip', 'macos', 'x64']
+	] as const;
+
+	/** A built downloads folder: four small files and their manifest. */
+	function buildFolder(): string {
+		const dir = mkdtempSync(join(tmpdir(), 'matcami-device-agent-'));
+		const files = NAMES.map(([name, os, arch]) => {
+			const data = Buffer.from(`fake ${name}`);
+			writeFileSync(join(dir, name), data);
+			return {
+				name,
+				os,
+				arch,
+				bytes: data.length,
+				sha256: createHash('sha256').update(data).digest('hex'),
+				// As the build writes it today: only Linux has been run on its own OS.
+				verified: os === 'linux'
+			};
+		});
+		writeFileSync(
+			join(dir, 'manifest.json'),
+			JSON.stringify({
+				schema: 1,
+				origin: 'https://pos.example.com',
+				agentVersion: 2,
+				builtAt: '2026-10-10T09:00:00.000Z',
+				sourceSha: 'a'.repeat(64),
+				nodeVersion: 'v24.21.0',
+				buildKey: 'b'.repeat(64),
+				files
+			})
+		);
+		return dir;
+	}
+
+	function withDownloads<T>(dir: string, run: () => Promise<T>): Promise<T> {
+		const previous = process.env.PRINT_AGENT_DIST;
+		process.env.PRINT_AGENT_DIST = dir;
+		return run().finally(() => {
+			if (previous === undefined) delete process.env.PRINT_AGENT_DIST;
+			else process.env.PRINT_AGENT_DIST = previous;
+			rmSync(dir, { recursive: true, force: true });
+		});
+	}
+
+	it('gives the owner every installer with its download URL', async () => {
+		const a = await makeRestaurant();
+		const owner = principal(a.ownerId, a.restaurantId, 'owner');
+		const result = await withDownloads(buildFolder(), () => loadAs(owner));
+		expect(result.printAgent?.origin).toBe('https://pos.example.com');
+		expect(result.printAgent?.files.map((f) => f.url)).toEqual(
+			NAMES.map(([name]) => `/downloads/print-agent/${name}`)
+		);
+		// The Windows and the two Mac builds stay "not yet checked" until T-18 records a run.
+		expect(result.printAgent?.files.map((f) => f.verified)).toEqual([true, false, false, false]);
+	});
+
+	it('before any build there is no card data — printAgent is null', async () => {
+		const a = await makeRestaurant();
+		const owner = principal(a.ownerId, a.restaurantId, 'owner');
+		const empty = mkdtempSync(join(tmpdir(), 'matcami-device-empty-'));
+		const result = await withDownloads(empty, () => loadAs(owner));
+		expect(result.printAgent).toBeNull();
+	});
+
+	it('a staff caller is refused (403) before any manifest is read', async () => {
+		const a = await makeRestaurant();
+		const staff = await seedStaff(db, a.restaurantId, { displayName: 'Staff' });
+		const asStaff = principal(staff.id, a.restaurantId, 'staff');
+		// A manifest that would be logged as invalid the moment anything read it.
+		const dir = mkdtempSync(join(tmpdir(), 'matcami-device-staff-'));
+		writeFileSync(join(dir, 'manifest.json'), '{"not": "a manifest"}');
+		const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const status = await withDownloads(dir, () =>
+				statusOf(() => load(makeEvent(asStaff) as never))
+			);
+			expect(status).toBe(403);
+			expect(logged).not.toHaveBeenCalled();
+		} finally {
+			logged.mockRestore();
+		}
+	});
 });

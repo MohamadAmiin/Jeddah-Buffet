@@ -9,6 +9,8 @@ node_modules/
 build/
 dist/
 .vite/
+# Print agent build cache (scripts/build-print-agent.ts): Node binaries, rcodesign
+.cache/
 
 # Environment & secrets
 .env

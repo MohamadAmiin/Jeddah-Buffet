@@ -51,12 +51,13 @@ export default defineConfig({
 				}
 			},
 			// The print agent (print-agent/) is a standalone Node program outside src/,
-			// so the unit project's glob never reaches it (menu-and-printing T-24).
+			// so the unit project's glob never reaches it (menu-and-printing T-24). The
+			// pure helpers of its installer build ride along (print-agent-installer T-09).
 			{
 				test: {
 					name: 'print-agent',
 					environment: 'node',
-					include: ['print-agent/src/**/*.test.ts']
+					include: ['print-agent/src/**/*.test.ts', 'scripts/build-print-agent/**/*.test.ts']
 				}
 			}
 		]

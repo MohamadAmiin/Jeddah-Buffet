@@ -30,7 +30,14 @@ export const PUBLIC_ROUTE_IDS: ReadonlySet<string> = new Set([
 	// Credential-authenticated, exactly like /login: it takes the owner's email
 	// and password in the body and answers with no session of its own. It is the
 	// ONE /api route that is not device-guarded, and T-22 asserts it by name.
-	'/api/pos/register'
+	'/api/pos/register',
+	// The print agent installer and its manifest (tasks/print-agent-installer
+	// T-12): the till PC downloads it before anything is paired, so no session can
+	// exist. It carries the app's public origin and no secret; names are served
+	// only by exact match against the build manifest. Neither path begins with
+	// "pos", which keeps the service worker's /pos string-prefix scope off them.
+	'/downloads/print-agent',
+	'/downloads/print-agent/[file]'
 ]);
 
 /** Route ids UNDER these are public too — the POS screens T-24..T-26 add. Pages only, never /api. */

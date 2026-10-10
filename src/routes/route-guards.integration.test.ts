@@ -133,7 +133,9 @@ describe('MANDATORY (spec 29): every non-public route refuses an anonymous reque
 		expect(result.location).toMatch(/^\/login\?next=/);
 	});
 
-	it.each([...['/', '/login', '/register']])('%s answers without a session', async (routeId) => {
+	it.each([
+		...['/', '/login', '/register', '/downloads/print-agent', '/downloads/print-agent/[file]']
+	])('%s answers without a session', async (routeId) => {
 		const result = await runHook(routeId);
 		expect(result.status).toBe(200);
 	});

@@ -75,7 +75,8 @@ export default ts.config(
 			'src/lib/money/**/*.ts',
 			'src/lib/sync-ops/**/*.ts',
 			'src/lib/menu-images.ts',
-			'src/lib/receipt-layout.ts'
+			'src/lib/receipt-layout.ts',
+			'src/lib/print-agent-download.ts'
 		],
 		rules: {
 			'no-restricted-imports': [

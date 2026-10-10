@@ -17,8 +17,9 @@
 // pairing that is opened and never used stays open. It is single-use, and a
 // stolen claim is visible (the till's own Pair is refused with `claimed`).
 // `link` pairs without opening anything.
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { writeFileAtomic } from './config.ts';
 
 export type PairingClaim = 'ok' | 'claimed' | 'not_open';
 
@@ -41,8 +42,18 @@ function read(dataDir: string): PairingState | null {
 }
 
 function write(dataDir: string, state: PairingState): void {
-	mkdirSync(dataDir, { recursive: true });
-	writeFileSync(fileOf(dataDir), JSON.stringify(state) + '\n', { mode: 0o600 });
+	// Atomic: a claim half-written by a power cut must not read back as "never opened".
+	writeFileAtomic(fileOf(dataDir), JSON.stringify(state) + '\n', 0o600);
+}
+
+/** Where pairing stands: open and waiting, taken by a till, or never opened. */
+export type PairingStatus = 'open' | 'claimed' | 'not_open';
+
+/** Where pairing stands, read-only — the agent's setup page shows it. */
+export function pairingState(dataDir: string): PairingStatus {
+	const state = read(dataDir);
+	if (!state) return 'not_open';
+	return state.claimedAt === null ? 'open' : 'claimed';
 }
 
 /** Open (or re-open) pairing: the next till to ask is paired. */

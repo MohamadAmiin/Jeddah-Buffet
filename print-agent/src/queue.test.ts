@@ -6,7 +6,15 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { PrinterConfig } from './config.ts';
 import { DRAWER_PULSE, PAPER_STATUS_QUERY } from './escpos.ts';
-import { createDrawer, createQueue, createSeenStore, SEEN_TTL_MS, type Queue } from './queue.ts';
+import {
+	bytesFor,
+	createDrawer,
+	createQueue,
+	createSeenStore,
+	SEEN_TTL_MS,
+	type Queue,
+	type QueuedJob
+} from './queue.ts';
 import type { Job } from './server.ts';
 
 // ── Fakes ───────────────────────────────────────────────────────────────────
@@ -363,6 +371,63 @@ describe('createQueue', () => {
 		expect(fallback.submit(imageJob('i2:kitchen:0', 'kitchen'))).toBe('queued');
 		await until(() => only.jobs.length === 1, 4000, 'the kitchen image on the receipt printer');
 		expect(only.jobs[0]!.includes(rasterHeader(0x48))).toBe(true);
+	});
+
+	it('binds a job that carries the logo to its printer on disk; a text job carries no binding', async () => {
+		// A printer that is down, so both jobs stay on disk to be read.
+		const gone = await startFake();
+		await gone.stop();
+		const dir = tmp();
+		const q = makeQueue(dir, gone.cfg);
+		expect(q.submit(imageJob('b1:receipt:0', 'receipt'))).toBe('queued');
+		expect(q.submit(job('b2:receipt:0', 'Tea'))).toBe('queued');
+		const [withLogo, plain] = queueFiles(dir)
+			.sort()
+			.map((name) => JSON.parse(readFileSync(join(dir, 'queue', name), 'utf8')) as QueuedJob);
+		expect(withLogo!.imagePrinter).toBe(`127.0.0.1:${gone.cfg.port}`);
+		expect(Buffer.from(withLogo!.bytesBase64, 'base64').includes(rasterHeader(0x48))).toBe(true);
+		expect(Buffer.from(withLogo!.plainBase64!, 'base64').includes(rasterHeader(0x48))).toBe(false);
+		expect(plain).not.toHaveProperty('imagePrinter');
+		expect(plain).not.toHaveProperty('plainBase64');
+	});
+});
+
+describe('bytesFor — a logo goes only to the printer it was laid out for', () => {
+	const A: PrinterConfig = { host: '192.168.1.50', port: 9100, width: 48 };
+	const queued: QueuedJob = {
+		id: 'r1',
+		target: 'receipt',
+		bytesBase64: Buffer.from('WITH LOGO').toString('base64'),
+		plainBase64: Buffer.from('NO LOGO').toString('base64'),
+		imagePrinter: '192.168.1.50:9100',
+		enqueuedAt: '2026-10-10T09:00:00.000Z'
+	};
+
+	it('the printer it was queued for gets the logo', () => {
+		const out = bytesFor(queued, A);
+		expect(out.bytes.toString()).toBe('WITH LOGO');
+		expect(out.withoutLogo).toBe(false);
+	});
+
+	it('another host or another port gets the job without the logo', () => {
+		for (const other of [
+			{ ...A, host: '192.168.1.60' },
+			{ ...A, port: 9101 }
+		]) {
+			const out = bytesFor(queued, other);
+			expect(out.bytes.toString()).toBe('NO LOGO');
+			expect(out.withoutLogo).toBe(true);
+		}
+	});
+
+	it('a job with no binding (a text job) is sent as queued, anywhere', () => {
+		const text: QueuedJob = {
+			id: 't1',
+			target: 'receipt',
+			bytesBase64: queued.bytesBase64,
+			enqueuedAt: queued.enqueuedAt
+		};
+		expect(bytesFor(text, { ...A, host: '10.0.0.1' }).bytes.toString()).toBe('WITH LOGO');
 	});
 });
 

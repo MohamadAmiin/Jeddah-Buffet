@@ -78,15 +78,30 @@ type Sent = { path: string; body: Record<string, unknown> };
  * refused ones included.
  */
 function stubAgent(
-	over: { kitchen?: boolean; drawer?: number; agentVersion?: number; refuseImages?: boolean } = {}
+	over: {
+		kitchen?: boolean;
+		drawer?: number;
+		agentVersion?: number;
+		refuseImages?: boolean;
+		/** An agent that sets printers (print-agent-installer): features + this receipt host. */
+		receiptHost?: string;
+		/** Answering, but no printer address set yet. */
+		noPrinter?: boolean;
+	} = {}
 ) {
 	const sent: Sent[] = [];
+	const receipt = over.receiptHost
+		? { host: over.receiptHost, port: 9100, width: 48, reachable: true, queued: 0 }
+		: { width: 48, reachable: true, queued: 0 };
 	const status = {
 		agentVersion: over.agentVersion ?? 1,
-		printers: {
-			receipt: { width: 48, reachable: true, queued: 0 },
-			kitchen: over.kitchen === false ? null : { width: 32, reachable: true, queued: 0 }
-		}
+		...(over.receiptHost || over.noPrinter ? { features: ['printers', 'setup'] } : {}),
+		printers: over.noPrinter
+			? { receipt: null, kitchen: null }
+			: {
+					receipt,
+					kitchen: over.kitchen === false ? null : { width: 32, reachable: true, queued: 0 }
+				}
 	};
 	const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
 		const url = String(input);
@@ -368,7 +383,7 @@ describe('printOriginals', () => {
 describe('the logo (T-24)', () => {
 	it('a cached logo is left off for an agent of version 1, confirmed or not', async () => {
 		await cacheLogo();
-		await confirmReceiptLogo(LOGO_SHA);
+		await confirmReceiptLogo(LOGO_SHA, 'legacy');
 		const agent = stubAgent({ agentVersion: 1 });
 		const { orderId } = await sell('cash');
 		const result = await printOriginals(orderId, { drawer: false, fetchFn: agent.fetchFn });
@@ -410,7 +425,7 @@ describe('the logo (T-24)', () => {
 		});
 
 		// Confirmed: the receipt carries it.
-		await confirmReceiptLogo(LOGO_SHA);
+		await confirmReceiptLogo(LOGO_SHA, 'legacy');
 		const second = await sell('cash');
 		await printOriginals(second.orderId, { drawer: false, fetchFn: agent.fetchFn });
 		expect(hasImage(agent.jobs()[2]!)).toBe(true);
@@ -446,7 +461,7 @@ describe('the logo (T-24)', () => {
 	it('MANDATORY (the logo confirmation gate): "It did not print correctly" withdraws THIS logo\'s confirmation — no logo on a later receipt or a reprint, still on the test page; another fingerprint withdraws nothing', async () => {
 		// Confirmed on printer P1, which implements GS v 0.
 		await cacheLogo();
-		await confirmReceiptLogo(LOGO_SHA);
+		await confirmReceiptLogo(LOGO_SHA, 'legacy');
 		const agent = stubAgent({ agentVersion: 2 });
 		const v2 = statusAt(2);
 		const first = await sell('cash');
@@ -490,7 +505,7 @@ describe('the logo (T-24)', () => {
 
 	it('MANDATORY (the logo confirmation gate): Forget pairing and a new pairing withdraw the confirmation — the next receipt prints without the logo until it is confirmed again', async () => {
 		await cacheLogo();
-		await confirmReceiptLogo(LOGO_SHA);
+		await confirmReceiptLogo(LOGO_SHA, 'legacy');
 		const agent = stubAgent({ agentVersion: 2 });
 		const v2 = statusAt(2);
 		const withdrawn = { cached: true, confirmed: false, logo: null };
@@ -505,7 +520,7 @@ describe('the logo (T-24)', () => {
 		expect((await logoForAgent(v2, 'test')).logo).toEqual(LOGO_IMAGE);
 
 		// Confirmed again on this pairing: the receipt carries it.
-		await confirmReceiptLogo(LOGO_SHA);
+		await confirmReceiptLogo(LOGO_SHA, 'legacy');
 		const second = await sell('cash');
 		await printOriginals(second.orderId, { drawer: false, fetchFn: agent.fetchFn });
 		expect(hasImage(agent.jobs()[2]!)).toBe(true);
@@ -521,7 +536,7 @@ describe('the logo (T-24)', () => {
 
 	it('cached AND confirmed on agent v2: the receipt starts with exactly the image, the kitchen ticket has none, a reprint has the COPY banner then the image, and no drawer request', async () => {
 		await cacheLogo();
-		await confirmReceiptLogo(LOGO_SHA);
+		await confirmReceiptLogo(LOGO_SHA, 'legacy');
 		const agent = stubAgent({ agentVersion: 2 });
 		const { orderId } = await sell('cash');
 		const result = await printOriginals(orderId, {
@@ -561,7 +576,7 @@ describe('the logo (T-24)', () => {
 
 	it('a receipt the agent refuses because of its image is sent once more without it, under the SAME id — a logo never costs the customer a receipt', async () => {
 		await cacheLogo();
-		await confirmReceiptLogo(LOGO_SHA);
+		await confirmReceiptLogo(LOGO_SHA, 'legacy');
 		const agent = stubAgent({ agentVersion: 2, refuseImages: true });
 		const { orderId } = await sell('cash');
 		const result = await printOriginals(orderId, {
@@ -592,7 +607,7 @@ describe('the logo (T-24)', () => {
 
 	it('MANDATORY (invariant 5 — fail closed), with a cached, confirmed logo on agent v2: a pending card sale sends NOTHING; once accepted it prints both, with the logo, and never the drawer', async () => {
 		await cacheLogo();
-		await confirmReceiptLogo(LOGO_SHA);
+		await confirmReceiptLogo(LOGO_SHA, 'legacy');
 		const agent = stubAgent({ agentVersion: 2 });
 		const { orderId } = await sell('card');
 		const pending = await printOriginals(orderId, { drawer: true, fetchFn: agent.fetchFn });
@@ -617,7 +632,7 @@ describe('the logo (T-24)', () => {
 
 	it('the drawer clause is untouched by the logo (invariant 9): one pulse for a cash original within 30 s, none on a reprint, none at 31 s', async () => {
 		await cacheLogo();
-		await confirmReceiptLogo(LOGO_SHA);
+		await confirmReceiptLogo(LOGO_SHA, 'legacy');
 		const agent = stubAgent({ agentVersion: 2 });
 		const { orderId } = await sell('cash');
 		const result = await printOriginals(orderId, {
@@ -646,6 +661,73 @@ describe('the logo (T-24)', () => {
 		expect(tooLate).toEqual({ receipt: 'queued', kitchen: 'queued', drawer: 'too_late' });
 		expect(agent.drawers()).toHaveLength(1);
 		expect((await readOrder(late.orderId))?.printed?.drawerAt).toBeUndefined();
+	});
+
+	// print-agent-installer T-14: a confirmation vouches for ONE printer (invariant 9 —
+	// a printer without GS v 0 could read the raster as a drawer pulse).
+	it('MANDATORY: the confirmation counts only on the printer it was watched on', async () => {
+		await cacheLogo();
+		await confirmReceiptLogo(LOGO_SHA, '192.168.1.50:9100:48');
+
+		// The same printer: the receipt carries the logo.
+		const same = stubAgent({ agentVersion: 2, receiptHost: '192.168.1.50' });
+		const first = await sell('cash');
+		await printOriginals(first.orderId, { drawer: false, fetchFn: same.fetchFn });
+		expect(hasImage(same.jobs()[0]!)).toBe(true);
+
+		// The printer moved (set on the till or on the agent's own setup page): no logo.
+		const moved = stubAgent({ agentVersion: 2, receiptHost: '192.168.1.60' });
+		const second = await sell('cash');
+		await printOriginals(second.orderId, { drawer: false, fetchFn: moved.fetchFn });
+		expect(moved.jobs().length).toBeGreaterThan(0);
+		for (const job of moved.jobs()) expect(hasImage(job)).toBe(false);
+
+		// A confirmation for an older agent ('legacy') does not carry over to a newer one.
+		await confirmReceiptLogo(LOGO_SHA, 'legacy');
+		const upgraded = stubAgent({ agentVersion: 2, receiptHost: '192.168.1.50' });
+		const third = await sell('cash');
+		await printOriginals(third.orderId, { drawer: false, fetchFn: upgraded.fetchFn });
+		for (const job of upgraded.jobs()) expect(hasImage(job)).toBe(false);
+	});
+
+	it('a confirmation stored before printers were named (no printer key) does not count: fail closed', async () => {
+		await cacheLogo();
+		// Exactly what a till confirmed before this plan holds: the fingerprint alone.
+		await cacheSettings([{ key: 'receiptLogoConfirmed', value: LOGO_SHA }]);
+		const agent = stubAgent({ agentVersion: 2 });
+		const { orderId } = await sell('cash');
+		await printOriginals(orderId, { drawer: false, fetchFn: agent.fetchFn });
+		for (const job of agent.jobs()) expect(hasImage(job)).toBe(false);
+		expect((await logoForAgent(statusAt(2), 'receipt')).confirmed).toBe(false);
+		// The other null key: an agent that names the 'printers' feature but reports
+		// no address. A key-less confirmation must not match that null either.
+		const unnamed: AgentStatus = { ...statusAt(2), features: ['printers'] };
+		const gate = await logoForAgent(unnamed, 'receipt');
+		expect(gate.confirmed).toBe(false);
+		expect(gate.logo).toBeNull();
+	});
+});
+
+describe('an agent with no printer yet (print-agent-installer T-14)', () => {
+	it('printOriginals answers no_printer for all three and sends no job and no drawer pulse', async () => {
+		const agent = stubAgent({ agentVersion: 2, noPrinter: true });
+		const { orderId } = await sell('cash');
+		expect(await printOriginals(orderId, { drawer: true, fetchFn: agent.fetchFn })).toEqual({
+			receipt: { error: 'no_printer' },
+			kitchen: { error: 'no_printer' },
+			drawer: { error: 'no_printer' }
+		});
+		expect(agent.jobs()).toHaveLength(0);
+		expect(agent.drawers()).toHaveLength(0);
+	});
+
+	it('reprint answers no_printer and sends nothing', async () => {
+		const agent = stubAgent({ agentVersion: 2, noPrinter: true });
+		const { orderId } = await sell('cash');
+		expect(await reprint(orderId, 'receipt', 'Amina', { fetchFn: agent.fetchFn })).toEqual({
+			error: 'no_printer'
+		});
+		expect(agent.sent).toHaveLength(0);
 	});
 });
 

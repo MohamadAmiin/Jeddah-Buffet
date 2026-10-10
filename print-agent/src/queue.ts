@@ -24,13 +24,57 @@ import {
 	writeFileSync
 } from 'node:fs';
 import { join } from 'node:path';
-import type { AgentConfig, PrinterConfig } from './config.ts';
+import type { PrinterConfig, ReadyPrinters } from './config.ts';
 import { DRAWER_PULSE, encodeJob } from './escpos.ts';
 import { paperStatus, reachable, send } from './printer.ts';
-import type { AgentStatus, DrawerOutcome, DrawerRequest, Job, SubmitOutcome } from './server.ts';
+import {
+	AGENT_FEATURES,
+	type AgentStatus,
+	type DrawerOutcome,
+	type DrawerRequest,
+	type Job,
+	type SubmitOutcome
+} from './server.ts';
 
 export type Target = 'receipt' | 'kitchen';
-export type QueuedJob = { id: string; target: Target; bytesBase64: string; enqueuedAt: string };
+export type QueuedJob = {
+	id: string;
+	target: Target;
+	bytesBase64: string;
+	enqueuedAt: string;
+	/**
+	 * Only on a job that carries the logo: the printer (`host:port`) its image
+	 * was laid out for, and the same job encoded WITHOUT the image. The logo
+	 * confirmation vouches for one printer, and a printer that does not
+	 * implement `GS v 0` reads the raster as ordinary bytes — which could hold
+	 * the drawer pulse — so a job whose printer has changed since it was
+	 * queued goes out without its logo (bytesFor). Written at submit, never
+	 * re-encoded at send time.
+	 */
+	imagePrinter?: string;
+	plainBase64?: string;
+};
+
+const printerId = (printer: PrinterConfig) => `${printer.host}:${printer.port}`;
+
+/**
+ * The bytes to send to `printer`: the job as queued, or — when it carries a
+ * logo laid out for another printer — the same job without the logo. A width
+ * change is refused while a job waits (runtime.ts), so host and port decide.
+ */
+export function bytesFor(
+	job: QueuedJob,
+	printer: PrinterConfig
+): { bytes: Buffer; withoutLogo: boolean } {
+	if (
+		typeof job.imagePrinter === 'string' &&
+		typeof job.plainBase64 === 'string' &&
+		job.imagePrinter !== printerId(printer)
+	) {
+		return { bytes: Buffer.from(job.plainBase64, 'base64'), withoutLogo: true };
+	}
+	return { bytes: Buffer.from(job.bytesBase64, 'base64'), withoutLogo: false };
+}
 
 export const SEEN_TTL_MS = 48 * 60 * 60 * 1000;
 export const DRAWER_WINDOW_MS = 30_000;
@@ -101,7 +145,8 @@ export function createSeenStore(dataDir: string, now: () => number): SeenStore {
 
 export type QueueOptions = {
 	dataDir: string;
-	printers: AgentConfig['printers'];
+	/** Built only once a receipt printer is set (tasks/print-agent-installer T-02). */
+	printers: ReadyPrinters;
 	now?: () => number;
 	/** Retry back-off: first wait, doubling to the cap. Defaults 2 s → 30 s. */
 	retry?: { baseMs: number; maxMs: number };
@@ -115,9 +160,14 @@ export type Queue = {
 	status: () => Promise<AgentStatus>;
 	seen: SeenStore;
 	log: (line: string) => void;
-	/** Stop the workers and timers; queued files stay on disk for the next start. */
 	/** Stop the workers and timers and wait for an in-flight print to finish; queued files stay on disk. */
 	close: () => Promise<void>;
+	/**
+	 * Jobs waiting per worker, raw — no folding of kitchen into receipt. Each is
+	 * already encoded for its worker's printer width, which is why a width change
+	 * is refused while one waits (runtime.ts setPrinters).
+	 */
+	queuedByTarget: () => { receipt: number; kitchen: number };
 };
 
 type Worker = {
@@ -261,8 +311,9 @@ export function createQueue(options: QueueOptions): Queue {
 					await backOff(worker, `paper out on ${worker.target}`);
 					continue;
 				}
+				const { bytes, withoutLogo } = bytesFor(head.job, worker.printer);
 				try {
-					await send(worker.printer, Buffer.from(head.job.bytesBase64, 'base64'), sendTimeout);
+					await send(worker.printer, bytes, sendTimeout);
 				} catch (error) {
 					if (closed) break;
 					await backOff(worker, `${worker.target} unreachable: ${(error as Error).message}`);
@@ -272,7 +323,11 @@ export function createQueue(options: QueueOptions): Queue {
 				// the PC loses power in between, the next start finds the file, finds
 				// the id in `seen`, and drops it instead of printing it again.
 				seen.record(head.job.id);
-				log(`printed ${head.job.id}`);
+				log(
+					withoutLogo
+						? `printed ${head.job.id} without its logo: the receipt printer changed`
+						: `printed ${head.job.id}`
+				);
 				discard(head.file);
 				worker.jobs.shift();
 				worker.delayMs = retry.baseMs;
@@ -316,7 +371,8 @@ export function createQueue(options: QueueOptions): Queue {
 			const target: Target =
 				job.printer === 'kitchen' && options.printers.kitchen ? 'kitchen' : 'receipt';
 			// The same printer whose width parseJob validated the job against.
-			const bytes = encodeJob(job.lines, { cut: job.cut, columns: workers[target].printer.width });
+			const printer = workers[target].printer;
+			const bytes = encodeJob(job.lines, { cut: job.cut, columns: printer.width });
 			seq += 1;
 			const name = `${String(seq).padStart(12, '0')}-${createHash('sha1').update(job.id).digest('hex')}.json`;
 			const file = join(queueDir, name);
@@ -326,6 +382,16 @@ export function createQueue(options: QueueOptions): Queue {
 				bytesBase64: Buffer.from(bytes).toString('base64'),
 				enqueuedAt: isoAt(now)
 			};
+			if (job.lines.some((line) => 'image' in line)) {
+				// Bound to this printer: elsewhere it prints without the logo (bytesFor).
+				queued.imagePrinter = printerId(printer);
+				queued.plainBase64 = Buffer.from(
+					encodeJob(
+						job.lines.filter((line) => !('image' in line)),
+						{ cut: job.cut, columns: printer.width }
+					)
+				).toString('base64');
+			}
 			writeAtomic(file, JSON.stringify(queued) + '\n');
 			// Only now, with the file on disk, is the job queued.
 			const worker = workers[target];
@@ -336,12 +402,16 @@ export function createQueue(options: QueueOptions): Queue {
 		},
 		status: async () => {
 			const receipt = {
+				host: options.printers.receipt.host,
+				port: options.printers.receipt.port,
 				width: options.printers.receipt.width,
 				reachable: await isReachable('receipt'),
 				queued: workers.receipt.jobs.length
 			};
 			const kitchen = options.printers.kitchen
 				? {
+						host: options.printers.kitchen.host,
+						port: options.printers.kitchen.port,
 						width: options.printers.kitchen.width,
 						reachable: await isReachable('kitchen'),
 						queued: workers.kitchen.jobs.length
@@ -349,8 +419,12 @@ export function createQueue(options: QueueOptions): Queue {
 				: null;
 			// With no kitchen printer, kitchen jobs ride the receipt worker — count them there.
 			if (!options.printers.kitchen) receipt.queued += workers.kitchen.jobs.length;
-			return { agentVersion: 2, printers: { receipt, kitchen } };
+			return { agentVersion: 2, features: AGENT_FEATURES, printers: { receipt, kitchen } };
 		},
+		queuedByTarget: () => ({
+			receipt: workers.receipt.jobs.length,
+			kitchen: workers.kitchen.jobs.length
+		}),
 		close: async () => {
 			closed = true;
 			clearInterval(pruneTimer);

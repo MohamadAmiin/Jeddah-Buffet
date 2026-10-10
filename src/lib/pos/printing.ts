@@ -31,8 +31,10 @@ import type { Cart } from './orders';
 import {
 	agentPrintsImages,
 	agentStatus,
+	printerKeyOf,
 	pulseDrawer,
 	submitJob,
+	type AgentState,
 	type AgentStatus,
 	type PrintJob,
 	type SubmitResult
@@ -49,6 +51,7 @@ import {
 } from './receipt';
 import { readSessionRow } from './session';
 import {
+	readConfirmedLogoPrinter,
 	readConfirmedLogoSha,
 	readPaymentMethods,
 	readReceiptLayout,
@@ -172,7 +175,10 @@ async function businessDateFor(order: LocalOrder<Cart>): Promise<string | null> 
 export type LogoForAgent = {
 	/** A logo is cached on this till. */
 	cached: boolean;
-	/** The cached logo's sha256 is the one the owner confirmed on /pos/printer. */
+	/**
+	 * The cached logo's sha256 is the one the owner confirmed on /pos/printer,
+	 * AND the agent still reports the printer it was confirmed on.
+	 */
 	confirmed: boolean;
 	/** What goes on the page, or null. Never spread from the cache, which carries `sha256`. */
 	logo: ImageLine['image'] | null;
@@ -192,17 +198,27 @@ export type LogoForAgent = {
  * a receipt never takes that chance. The three fields are copied EXPLICITLY —
  * the agent refuses an image object with any key beyond widthDots, heightDots
  * and bitmap (T-25).
+ *
+ * A CONFIRMATION VOUCHES FOR ONE PRINTER (print-agent-installer T-14): the
+ * printer can now change on the till's Printer page or on the agent's own setup
+ * page, so it counts only while the agent still reports the printer it was
+ * confirmed on (print-client.ts printerKeyOf). One stored before that key
+ * existed has none and does not count — fail closed, one fresh test print.
  */
 export async function logoForAgent(
 	status: AgentStatus,
 	purpose: 'receipt' | 'test'
 ): Promise<LogoForAgent> {
-	const [cached, confirmedSha] = await Promise.all([
+	const [cached, confirmedSha, confirmedPrinter] = await Promise.all([
 		readReceiptLogo().catch(() => null),
-		readConfirmedLogoSha().catch(() => null)
+		readConfirmedLogoSha().catch(() => null),
+		readConfirmedLogoPrinter().catch(() => null)
 	]);
 	if (cached === null) return { cached: false, confirmed: false, logo: null };
-	const confirmed = confirmedSha === cached.sha256;
+	const confirmed =
+		confirmedSha === cached.sha256 &&
+		confirmedPrinter !== null &&
+		confirmedPrinter === printerKeyOf(status);
 	if (!agentPrintsImages(status)) return { cached: true, confirmed, logo: null };
 	if (purpose === 'receipt' && !confirmed) return { cached: true, confirmed, logo: null };
 	return {
@@ -210,6 +226,23 @@ export async function logoForAgent(
 		confirmed,
 		logo: { widthDots: cached.widthDots, heightDots: cached.heightDots, bitmap: cached.bitmap }
 	};
+}
+
+/**
+ * The logo gate's two facts for a printer chip, by the SAME rule receipts use
+ * (logoForAgent) — so the chip never says "ready" while receipts quietly leave
+ * the logo off. With no status to judge (not paired, unreachable) nothing is
+ * confirmed; the chip does not show logo warnings in those states anyway.
+ */
+export async function logoGate(
+	state: AgentState | null
+): Promise<{ cached: boolean; confirmed: boolean }> {
+	if (state && (state.state === 'ready' || state.state === 'no_printer')) {
+		const { cached, confirmed } = await logoForAgent(state.status, 'receipt');
+		return { cached, confirmed };
+	}
+	const logo = await readReceiptLogo().catch(() => null);
+	return { cached: logo !== null, confirmed: false };
 }
 
 async function receiptInput(order: LocalOrder<Cart>, status: AgentStatus): Promise<ReceiptInput> {

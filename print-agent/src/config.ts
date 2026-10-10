@@ -2,35 +2,75 @@
 //
 // The agent is the one listener on the till PC that can open the cash drawer,
 // so the file that says who may talk to it is validated field by field here:
-// the app origin the browser will send, the 64-hex pairing token, the loopback
-// port, and the network printers (raw TCP, port 9100 by default) with their
-// paper widths. Anything the parser refuses names the field, so the owner can
-// fix `config.json` without reading code.
+// the app origin the browser will send, the 64-hex pairing token, the setup key
+// its own setup page presents, the loopback port, and the network printers (raw
+// TCP, port 9100 by default) with their paper widths. Anything the parser
+// refuses names the field, so the owner can fix `config.json` without reading
+// code.
+//
+// The file is written while the agent runs — by the installer, by the till's
+// Printer page and by the agent's setup page (tasks/print-agent-installer) — so
+// every write is ATOMIC (writeFileAtomic): a power cut mid-write leaves the old
+// file, never a zero-byte one that would lose the token and stop the agent.
 //
 // THIS FILE IMPORTS ONLY node: BUILTINS AND SIBLINGS WITH .ts EXTENSIONS. The
 // agent runs on another machine by `node print-agent/src/main.ts` (Node 24's
 // native type stripping), with no install step, so nothing from src/ or from
 // node_modules may be reached from here.
 import { randomBytes } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+	chmodSync,
+	closeSync,
+	existsSync,
+	fsyncSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeSync
+} from 'node:fs';
 import { dirname } from 'node:path';
 
 export type PrinterConfig = { host: string; port: number; width: 32 | 48 };
+
+/** Printers with the receipt printer set — what the queue, the drawer and the job parser need. */
+export type ReadyPrinters = { receipt: PrinterConfig; kitchen: PrinterConfig | null };
 
 export type AgentConfig = {
 	/** The app's exact origin, e.g. https://pos.example.com — what Origin must equal. */
 	origin: string;
 	/** 64 lowercase hex characters (32 random bytes); a secret, never logged. */
 	token: string;
+	/**
+	 * 64 lowercase hex characters: the key the agent's own setup page
+	 * (http://127.0.0.1:<port>/setup) must present. Null in a config written
+	 * before the installer existed (the e2e harness's shape), which disables the
+	 * setup API. A secret, never logged.
+	 */
+	setupSecret: string | null;
 	/** The loopback port the agent listens on, 1024–65535. */
 	port: number;
-	printers: { receipt: PrinterConfig; kitchen: PrinterConfig | null };
+	/**
+	 * `receipt` null = not set up yet: the installer writes the config before
+	 * anyone has typed a printer address. `kitchen` null = kitchen tickets ride
+	 * the receipt printer.
+	 */
+	printers: { receipt: PrinterConfig | null; kitchen: PrinterConfig | null };
 	/** Where the job queue, the seen-id store and agent.log live. */
 	dataDir: string;
 };
 
 export const DEFAULT_AGENT_PORT = 9471;
 export const DEFAULT_PRINTER_PORT = 9100;
+
+/** `loadConfig` on a path with no file: the installer tells "missing" (install fresh) from "corrupt" (refuse). */
+export class ConfigMissingError extends Error {
+	constructor(path: string) {
+		super(`config: cannot read ${path} — run \`init\` first`);
+		this.name = 'ConfigMissingError';
+	}
+}
 
 function fail(field: string, problem: string): never {
 	throw new Error(`config: ${field} ${problem}`);
@@ -42,6 +82,8 @@ function record(value: unknown, field: string): Record<string, unknown> {
 	}
 	return value as Record<string, unknown>;
 }
+
+const HEX64 = /^[0-9a-f]{64}$/;
 
 /**
  * An https origin with no path, or — for tests and a LAN trial only —
@@ -83,7 +125,8 @@ function parseWidth(value: unknown, field: string): 32 | 48 {
 	return value;
 }
 
-function parsePrinter(value: unknown, field: string): PrinterConfig {
+/** One printer — shared with the routes that set printers (server.ts, setup.ts), so every surface validates alike. */
+export function parsePrinter(value: unknown, field: string): PrinterConfig {
 	const printer = record(value, field);
 	const host = printer.host;
 	if (typeof host !== 'string' || host.length === 0 || /[/\s]/.test(host)) {
@@ -96,32 +139,42 @@ function parsePrinter(value: unknown, field: string): PrinterConfig {
 	};
 }
 
+function optionalPrinter(value: unknown, field: string): PrinterConfig | null {
+	return value === null || value === undefined ? null : parsePrinter(value, field);
+}
+
 export function parseConfig(raw: unknown): AgentConfig {
 	const config = record(raw, 'config');
 	const origin = parseOrigin(config.origin);
 	const token = config.token;
-	if (typeof token !== 'string' || !/^[0-9a-f]{64}$/.test(token)) {
+	if (typeof token !== 'string' || !HEX64.test(token)) {
 		fail('token', 'must be 64 lowercase hex characters');
+	}
+	const rawSecret = config.setupSecret;
+	const setupSecret = rawSecret === null || rawSecret === undefined ? null : rawSecret;
+	if (setupSecret !== null && (typeof setupSecret !== 'string' || !HEX64.test(setupSecret))) {
+		fail('setupSecret', 'must be 64 lowercase hex characters');
 	}
 	const port = parsePort(config.port, 'port', 1024);
 	const printers = record(config.printers, 'printers');
-	const receipt = parsePrinter(printers.receipt, 'printers.receipt');
-	const kitchen =
-		printers.kitchen === null || printers.kitchen === undefined
-			? null
-			: parsePrinter(printers.kitchen, 'printers.kitchen');
+	const receipt = optionalPrinter(printers.receipt, 'printers.receipt');
+	const kitchen = optionalPrinter(printers.kitchen, 'printers.kitchen');
+	if (kitchen !== null && receipt === null) {
+		fail('printers.kitchen', 'needs a receipt printer first');
+	}
 	const dataDir = config.dataDir;
 	if (typeof dataDir !== 'string' || dataDir.trim().length === 0) {
 		fail('dataDir', 'must be a non-empty path');
 	}
-	return { origin, token, port, printers: { receipt, kitchen }, dataDir };
+	return { origin, token, setupSecret, port, printers: { receipt, kitchen }, dataDir };
 }
 
 export function loadConfig(path: string): AgentConfig {
 	let text: string;
 	try {
 		text = readFileSync(path, 'utf8');
-	} catch {
+	} catch (error) {
+		if ((error as { code?: unknown }).code === 'ENOENT') throw new ConfigMissingError(path);
 		throw new Error(`config: cannot read ${path} — run \`init\` first`);
 	}
 	let raw: unknown;
@@ -142,9 +195,64 @@ export function parsePrinterAddress(value: string, width: 32 | 48): PrinterConfi
 	return parsePrinter({ host, port, width }, 'printer');
 }
 
+/** The one place a write can be made to fail in a test (config.test.ts); nothing else reads it. */
+export const writeSeam = { renameSync };
+
+/**
+ * Replace `path` with `text` all at once: write a temporary file beside it
+ * (created with `mode`, so it is never readable by others even for a moment),
+ * flush it to disk, then rename it over the target. A crash at any point leaves
+ * either the old file or the new one — never a truncated one. `rename` replaces
+ * an existing target on Windows too (Node uses MOVEFILE_REPLACE_EXISTING), so
+ * the target is never deleted first.
+ */
+export function writeFileAtomic(path: string, text: string, mode = 0o600): void {
+	mkdirSync(dirname(path), { recursive: true });
+	const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
+	try {
+		const fd = openSync(tmp, 'wx', mode);
+		try {
+			writeSync(fd, text);
+			fsyncSync(fd);
+		} finally {
+			closeSync(fd);
+		}
+		writeSeam.renameSync(tmp, path);
+		// `mode` on open is masked by the umask; Windows has no POSIX modes (the
+		// installer keeps the folder inside the user's own profile there).
+		if (process.platform !== 'win32') chmodSync(path, mode);
+	} catch (error) {
+		rmSync(tmp, { force: true });
+		throw error;
+	}
+}
+
+/** Write a config — checked by the same parser that will read it back, so a file that would not load is never written. */
+export function saveConfig(path: string, config: AgentConfig): void {
+	const checked = parseConfig(config);
+	writeFileAtomic(path, JSON.stringify(checked, null, '\t') + '\n');
+}
+
+/** A new config with a fresh pairing token and setup key, and no printers unless given. */
+export function createConfig(args: {
+	origin: string;
+	port?: number;
+	dataDir: string;
+	printers?: AgentConfig['printers'];
+}): AgentConfig {
+	return parseConfig({
+		origin: args.origin,
+		token: randomBytes(32).toString('hex'),
+		setupSecret: randomBytes(32).toString('hex'),
+		port: args.port ?? DEFAULT_AGENT_PORT,
+		printers: args.printers ?? { receipt: null, kitchen: null },
+		dataDir: args.dataDir
+	});
+}
+
 export type InitArgs = {
 	origin: string;
-	receipt: PrinterConfig;
+	receipt?: PrinterConfig | null;
 	kitchen?: PrinterConfig | null;
 	port?: number;
 	dataDir: string;
@@ -162,18 +270,14 @@ export function initConfig(path: string, args: InitArgs): AgentConfig {
 			`config: ${path} already exists — pass --force to replace it (the till must then be paired again)`
 		);
 	}
-	const config = parseConfig({
+	const config = createConfig({
 		origin: args.origin,
-		token: randomBytes(32).toString('hex'),
-		port: args.port ?? DEFAULT_AGENT_PORT,
-		printers: { receipt: args.receipt, kitchen: args.kitchen ?? null },
-		dataDir: args.dataDir
+		port: args.port,
+		dataDir: args.dataDir,
+		printers: { receipt: args.receipt ?? null, kitchen: args.kitchen ?? null }
 	});
-	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(path, JSON.stringify(config, null, '\t') + '\n', { mode: 0o600 });
-	// `mode` applies only when the file is CREATED: a --force over a file that was
-	// copied or hand-written at 0644 would leave the new token world-readable.
-	// Windows has no POSIX modes; the README says where to keep the folder there.
-	if (process.platform !== 'win32') chmodSync(path, 0o600);
+	// A --force over a file copied or hand-written at 0644 still ends at 0600:
+	// the rename puts a NEW file, created 0600, in its place.
+	saveConfig(path, config);
 	return config;
 }

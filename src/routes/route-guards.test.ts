@@ -114,10 +114,16 @@ describe('every route is guarded or deliberately public', () => {
 		//     email and password, like /login, and holds no session of its own.
 		//   PUBLIC_ROUTE_PREFIXES '/(pos)/pos' — the till's child screens (pages
 		//     only, never /api), for the same reason as the landing screen.
+		//   '/downloads/print-agent' and '/downloads/print-agent/[file]' — the
+		//     print agent installer and its manifest: a till PC downloads it before
+		//     anything is paired; names are served only by exact match against the
+		//     build manifest (downloads.integration.test.ts), and it holds no secret.
 		expect([...PUBLIC_ROUTE_IDS].sort()).toEqual([
 			'/',
 			'/(pos)/pos',
 			'/api/pos/register',
+			'/downloads/print-agent',
+			'/downloads/print-agent/[file]',
 			'/login',
 			'/register'
 		]);

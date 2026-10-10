@@ -11,7 +11,14 @@
 // ONE route runs after the first two walls and before the third: POST /pair,
 // whose whole job is to hand the till its token. It answers only while the
 // pairing is open and only once per opening (pairing.ts) — the single
-// place the token is ever sent.
+// place the token is ever sent. The origin it compares against is the one baked
+// into the installer or written by `init`, NEVER one adopted from a request
+// (tasks/print-agent-installer, the BLOCKER of its risk panel): an agent that
+// trusted the first page to pair would hand the drawer to any page on the PC.
+//
+// PUT /printers (tasks/print-agent-installer T-04) runs after all three walls:
+// the till's Printer page sets the printer address and paper width with the
+// pairing token, and the runtime re-wires the queue and the drawer around it.
 //
 // The agent is the one program on the till PC that can open the cash drawer,
 // which is why the drawer is its own endpoint (T-26 never queues or replays it)
@@ -23,7 +30,12 @@
 // wall for both.
 import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { AgentConfig } from './config.ts';
+import {
+	DEFAULT_PRINTER_PORT,
+	parsePrinter,
+	type AgentConfig,
+	type ReadyPrinters
+} from './config.ts';
 import { DOTS, MAX_IMAGE_HEIGHT_DOTS } from './escpos.ts';
 import type { PairingClaim } from './pairing.ts';
 
@@ -44,20 +56,52 @@ export type ImageLine = { image: { widthDots: number; heightDots: number; bitmap
 export type PrintLine = TextLine | ImageLine;
 export type Job = { id: string; printer: 'receipt' | 'kitchen'; lines: PrintLine[]; cut: boolean };
 export type DrawerRequest = { id: string; completedAt: string };
-export type PrinterStatus = { width: 32 | 48; reachable: boolean; queued: number };
+/**
+ * What this agent can do beyond printing, so a till can tell an agent that sets
+ * printers (PUT /printers) and serves a setup page from an older one before it
+ * sends anything (tasks/print-agent-installer). Additive: old tills ignore it.
+ */
+export const AGENT_FEATURES = ['printers', 'setup'] as const;
+/** `host`/`port` let the till bind a logo confirmation to ONE printer (T-14). */
+export type PrinterStatus = {
+	host: string;
+	port: number;
+	width: 32 | 48;
+	reachable: boolean;
+	queued: number;
+};
 export type AgentStatus = {
 	agentVersion: 2;
-	printers: { receipt: PrinterStatus; kitchen: PrinterStatus | null };
+	features: readonly string[];
+	/** `receipt` null: no printer set yet — the installer runs before anyone types an address. */
+	printers: { receipt: PrinterStatus | null; kitchen: PrinterStatus | null };
 };
-export type SubmitOutcome = 'queued' | 'duplicate';
-export type DrawerOutcome = 'opened' | 'duplicate' | 'too_late' | 'printer_unreachable';
+export type SubmitOutcome = 'queued' | 'duplicate' | 'no_printer';
+export type DrawerOutcome =
+	'opened' | 'duplicate' | 'too_late' | 'printer_unreachable' | 'no_printer';
+/** A paper-width change is refused while that printer has jobs encoded for the old width. */
+export type SetPrintersOutcome =
+	| { ok: true }
+	| { ok: false; error: 'jobs_waiting'; target: 'receipt' | 'kitchen'; queued: number };
 
 export type AgentDeps = {
 	submitJob: (job: Job) => SubmitOutcome | Promise<SubmitOutcome>;
 	pulseDrawer: (request: DrawerRequest) => Promise<DrawerOutcome>;
 	status: () => Promise<AgentStatus>;
+	/** Re-point the queue and the drawer at new printers (runtime.ts). */
+	setPrinters: (printers: AgentConfig['printers']) => Promise<SetPrintersOutcome>;
 	/** Take open pairing's one claim (pairing.ts claimPairing). */
 	claimPairing: () => PairingClaim;
+	/**
+	 * The agent's own setup page and API (setup.ts createSetupHandler). It has
+	 * walls of its own and answers the agent's OWN loopback origin, so it runs
+	 * after the Host wall and before the Origin wall; true = it answered.
+	 */
+	setup?: (
+		req: IncomingMessage,
+		res: ServerResponse,
+		ctx: { boundPort: number; config: AgentConfig }
+	) => Promise<boolean>;
 };
 
 export const MAX_BODY_BYTES = 65_536;
@@ -159,7 +203,7 @@ function imageLine(l: Record<string, unknown>, i: number, width: 32 | 48): Image
  * image line is at most the printer's dots wide and MAX_IMAGE_HEIGHT_DOTS
  * tall, and a job carries at most MAX_IMAGE_LINES of them.
  */
-export function parseJob(raw: unknown, printers: AgentConfig['printers']): Job {
+export function parseJob(raw: unknown, printers: ReadyPrinters): Job {
 	const body = obj(raw, 'job');
 	const jobId = id(body.id);
 	if (body.printer !== 'receipt' && body.printer !== 'kitchen') {
@@ -224,7 +268,8 @@ export function parseDrawerRequest(raw: unknown): DrawerRequest {
 
 // ── The server ──────────────────────────────────────────────────────────────
 
-function readBody(
+/** A request body up to MAX_BODY_BYTES — shared with the setup API (setup.ts). */
+export function readBody(
 	req: IncomingMessage
 ): Promise<{ ok: true; text: string } | { ok: false; reason: 'too_large' }> {
 	return new Promise((resolve, reject) => {
@@ -259,92 +304,182 @@ function tokenMatches(header: string | undefined, token: string): boolean {
 	return timingSafeEqual(presented, expected);
 }
 
-export function createAgentServer(config: AgentConfig, deps: AgentDeps): Server {
+/** A PUT /printers body the agent refuses, naming the field. */
+export class BadPrinters extends Error {
+	readonly field: string;
+	constructor(field: string) {
+		super(`bad printers: ${field}`);
+		this.field = field;
+	}
+}
+
+/**
+ * The printers body of PUT /printers and of the setup page's POST
+ * /setup/printers — ONE parser, so the two surfaces cannot disagree:
+ * `{ receipt: { host, port?, width }, kitchen: { host, port?, width } | null }`,
+ * port defaulting to 9100. Each printer is validated by config.ts parsePrinter,
+ * the same rules the config file is read with. A receipt printer is required:
+ * removing it is not offered. Only the three fields are copied.
+ */
+export function parsePrintersBody(raw: unknown): ReadyPrinters {
+	if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+		throw new BadPrinters('printers');
+	}
+	const body = raw as Record<string, unknown>;
+	const one = (value: unknown, field: 'receipt' | 'kitchen') => {
+		if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+			throw new BadPrinters(field);
+		}
+		const printer = value as Record<string, unknown>;
+		try {
+			return parsePrinter(
+				{ host: printer.host, port: printer.port ?? DEFAULT_PRINTER_PORT, width: printer.width },
+				field
+			);
+		} catch (error) {
+			// parsePrinter names the field: "config: receipt.host must be …".
+			const named = /^config: (\S+) /.exec(error instanceof Error ? error.message : '');
+			throw new BadPrinters(named?.[1] ?? field);
+		}
+	};
+	const receipt = one(body.receipt, 'receipt');
+	const kitchen =
+		body.kitchen === null || body.kitchen === undefined ? null : one(body.kitchen, 'kitchen');
+	return { receipt, kitchen };
+}
+
+type Send = (status: number, body: unknown, extra?: Record<string, string>) => void;
+
+/** A JSON body under the shared rules: 415 unless JSON, 413 when too large; null after answering. */
+async function jsonBody(req: IncomingMessage, send: Send): Promise<{ text: string } | null> {
+	const type = req.headers['content-type'] ?? '';
+	if (!/^application\/json\b/i.test(type)) {
+		send(415, { error: 'unsupported_media_type' });
+		return null;
+	}
+	const body = await readBody(req);
+	if (!body.ok) {
+		send(413, { error: 'payload_too_large' });
+		return null;
+	}
+	return { text: body.text };
+}
+
+/**
+ * `getConfig` is read ONCE per request and that snapshot judges the whole
+ * request — the Origin wall, the CORS header and the token check — so a config
+ * change made by the setup page mid-request cannot mix two configs.
+ */
+export function createAgentServer(getConfig: () => AgentConfig, deps: AgentDeps): Server {
 	const server = createServer((req, res) => {
-		void handle(req, res).catch(() => {
-			if (!res.headersSent) send(res, 500, { error: 'internal' });
+		const config = getConfig();
+		const send: Send = (status, body, extra = {}) => {
+			res.writeHead(status, {
+				'Content-Type': 'application/json',
+				'Cache-Control': 'no-store',
+				// Always the CONFIGURED origin, never echoed from the request.
+				'Access-Control-Allow-Origin': config.origin,
+				Vary: 'Origin',
+				...extra
+			});
+			res.end(status === 204 ? undefined : JSON.stringify(body));
+		};
+		void handle(req, res, config, send).catch(() => {
+			if (!res.headersSent) send(500, { error: 'internal' });
 			else res.end();
 		});
 	});
 
-	function send(
+	async function handle(
+		req: IncomingMessage,
 		res: ServerResponse,
-		status: number,
-		body: unknown,
-		extra: Record<string, string> = {}
-	) {
-		res.writeHead(status, {
-			'Content-Type': 'application/json',
-			'Cache-Control': 'no-store',
-			'Access-Control-Allow-Origin': config.origin,
-			Vary: 'Origin',
-			...extra
-		});
-		res.end(status === 204 ? undefined : JSON.stringify(body));
-	}
-
-	async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+		config: AgentConfig,
+		send: Send
+	): Promise<void> {
 		const address = server.address();
 		const boundPort = typeof address === 'object' && address ? address.port : config.port;
 		const allowedHosts = new Set([`127.0.0.1:${boundPort}`, `localhost:${boundPort}`]);
 
 		// 1. Host — a DNS-rebinding page reaches us with its own hostname.
 		if (!req.headers.host || !allowedHosts.has(req.headers.host)) {
-			send(res, 403, { error: 'bad_host' });
+			send(403, { error: 'bad_host' });
 			return;
 		}
+		// 1b. The agent's own setup page (setup.ts): its own origin, its own walls.
+		if (deps.setup && (await deps.setup(req, res, { boundPort, config }))) return;
 		// 2. Origin — exactly the configured app, present and equal.
 		if (req.headers.origin !== config.origin) {
-			send(res, 403, { error: 'bad_origin' });
+			send(403, { error: 'bad_origin' });
 			return;
 		}
 		// 3. Preflight — CORS headers, and Private Network Access for older Chrome.
 		if (req.method === 'OPTIONS') {
 			const extra: Record<string, string> = {
-				'Access-Control-Allow-Methods': 'GET, POST',
+				'Access-Control-Allow-Methods': 'GET, POST, PUT',
 				'Access-Control-Allow-Headers': 'authorization, content-type',
 				'Access-Control-Max-Age': '600'
 			};
 			if (req.headers['access-control-request-private-network'] === 'true') {
 				extra['Access-Control-Allow-Private-Network'] = 'true';
 			}
-			send(res, 204, undefined, extra);
+			send(204, undefined, extra);
 			return;
 		}
 		const path = (req.url ?? '/').split('?')[0];
 		// 4. Pairing — before the token wall, because the caller does not have it yet.
 		if (req.method === 'POST' && path === '/pair') {
 			const claim = deps.claimPairing();
-			if (claim === 'ok') send(res, 200, { token: config.token });
-			else send(res, 403, { error: 'pairing_closed', reason: claim });
+			if (claim === 'ok') send(200, { token: config.token });
+			else send(403, { error: 'pairing_closed', reason: claim });
 			return;
 		}
 		// 5. The pairing token, in constant time.
 		if (!tokenMatches(req.headers.authorization, config.token)) {
-			send(res, 401, { error: 'unauthorized' });
+			send(401, { error: 'unauthorized' });
 			return;
 		}
 
 		if (req.method === 'GET' && path === '/status') {
-			send(res, 200, await deps.status());
+			send(200, await deps.status());
 			return;
 		}
-		if (req.method === 'POST' && (path === '/jobs' || path === '/drawer')) {
-			const type = req.headers['content-type'] ?? '';
-			if (!/^application\/json\b/i.test(type)) {
-				send(res, 415, { error: 'unsupported_media_type' });
-				return;
-			}
-			const body = await readBody(req);
-			if (!body.ok) {
-				send(res, 413, { error: 'payload_too_large' });
-				return;
-			}
+		// The till's Printer page sets the printers (tasks/print-agent-installer T-04).
+		if (req.method === 'PUT' && path === '/printers') {
+			const body = await jsonBody(req, send);
+			if (!body) return;
 			let raw: unknown;
 			try {
 				raw = JSON.parse(body.text);
 			} catch {
-				send(res, 422, {
+				send(400, { error: 'bad_request', detail: 'body is not JSON' });
+				return;
+			}
+			let printers: ReadyPrinters;
+			try {
+				printers = parsePrintersBody(raw);
+			} catch (error) {
+				if (error instanceof BadPrinters) {
+					send(422, { error: 'bad_printers', field: error.field });
+					return;
+				}
+				throw error;
+			}
+			const outcome = await deps.setPrinters(printers);
+			if (!outcome.ok) {
+				send(409, { error: 'jobs_waiting', target: outcome.target, queued: outcome.queued });
+				return;
+			}
+			send(200, { printers: (await deps.status()).printers });
+			return;
+		}
+		if (req.method === 'POST' && (path === '/jobs' || path === '/drawer')) {
+			const body = await jsonBody(req, send);
+			if (!body) return;
+			let raw: unknown;
+			try {
+				raw = JSON.parse(body.text);
+			} catch {
+				send(422, {
 					error: path === '/jobs' ? 'bad_job' : 'bad_request',
 					detail: 'body is not JSON'
 				});
@@ -352,17 +487,27 @@ export function createAgentServer(config: AgentConfig, deps: AgentDeps): Server 
 			}
 			try {
 				if (path === '/jobs') {
-					const outcome = await deps.submitJob(parseJob(raw, config.printers));
-					send(res, outcome === 'queued' ? 202 : 200, { status: outcome });
+					// A job is validated against the printer it targets; with no receipt
+					// printer set yet there is nothing to print on.
+					const receipt = config.printers.receipt;
+					if (!receipt) {
+						send(503, { error: 'no_printer' });
+						return;
+					}
+					const printers = { receipt, kitchen: config.printers.kitchen };
+					const outcome = await deps.submitJob(parseJob(raw, printers));
+					if (outcome === 'no_printer') send(503, { error: 'no_printer' });
+					else send(outcome === 'queued' ? 202 : 200, { status: outcome });
 				} else {
 					const outcome = await deps.pulseDrawer(parseDrawerRequest(raw));
-					if (outcome === 'opened' || outcome === 'duplicate') send(res, 200, { status: outcome });
-					else if (outcome === 'too_late') send(res, 409, { error: 'too_late' });
-					else send(res, 503, { error: 'printer_unreachable' });
+					if (outcome === 'opened' || outcome === 'duplicate') send(200, { status: outcome });
+					else if (outcome === 'too_late') send(409, { error: 'too_late' });
+					else if (outcome === 'no_printer') send(503, { error: 'no_printer' });
+					else send(503, { error: 'printer_unreachable' });
 				}
 			} catch (error) {
 				if (error instanceof BadRequest) {
-					send(res, 422, {
+					send(422, {
 						error: path === '/jobs' ? 'bad_job' : 'bad_request',
 						detail: error.detail
 					});
@@ -372,7 +517,7 @@ export function createAgentServer(config: AgentConfig, deps: AgentDeps): Server 
 			}
 			return;
 		}
-		send(res, 404, { error: 'not_found' });
+		send(404, { error: 'not_found' });
 	}
 
 	return server;

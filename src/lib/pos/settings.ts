@@ -325,6 +325,17 @@ export async function refreshReceiptLogo(
  */
 const LOGO_CONFIRMED_KEY = 'receiptLogoConfirmed';
 
+/**
+ * WHICH receipt printer the confirmation was watched on (print-agent-installer
+ * T-14): print-client.ts printerKeyOf of the status the test print used. The
+ * printer can now change behind the till's back — on the till's Printer page,
+ * or on the agent's own setup page, which cannot reach this store — so a
+ * receipt carries the logo only while the agent still reports THIS printer
+ * (printing.ts logoForAgent). A confirmation stored before this key existed has
+ * none, and counts as unconfirmed: one fresh test print.
+ */
+const LOGO_PRINTER_KEY = 'receiptLogoConfirmedPrinter';
+
 /** The confirmed logo's fingerprint — a 64-hex string — or null when unset or garbled. */
 export async function readConfirmedLogoSha(): Promise<string | null> {
 	const value = await readCachedSetting(LOGO_CONFIRMED_KEY);
@@ -332,17 +343,32 @@ export async function readConfirmedLogoSha(): Promise<string | null> {
 	return typeof value === 'string' && SHA256_HEX.test(value) ? value : null;
 }
 
+/** The printer the confirmation was watched on (printerKeyOf), or null when unset or garbled. */
+export async function readConfirmedLogoPrinter(): Promise<string | null> {
+	const value = await readCachedSetting(LOGO_PRINTER_KEY);
+
+	return typeof value === 'string' && value.length > 0 && value.length <= 300 ? value : null;
+}
+
 /**
- * Record that the owner saw the logo with this fingerprint print correctly.
- * Refuses anything but a 64-hex string with a TypeError — synchronously, before
- * any write — so a garbled value can never be stored as a confirmation.
+ * Record that the owner saw the logo with this fingerprint print correctly on
+ * the printer `printerKey` names. Refuses a fingerprint that is not 64 hex, or
+ * an empty or overlong printer key, with a TypeError — synchronously, before
+ * any write — so a garbled value can never be stored as a confirmation. Both
+ * keys are written together.
  */
-export function confirmReceiptLogo(sha256: string): Promise<void> {
+export function confirmReceiptLogo(sha256: string, printerKey: string): Promise<void> {
 	if (typeof sha256 !== 'string' || !SHA256_HEX.test(sha256)) {
 		throw new TypeError("confirmReceiptLogo takes the logo's 64-hex sha256");
 	}
+	if (typeof printerKey !== 'string' || printerKey.length === 0 || printerKey.length > 300) {
+		throw new TypeError('confirmReceiptLogo takes the key of the printer the test page printed on');
+	}
 
-	return cacheSettings([{ key: LOGO_CONFIRMED_KEY, value: sha256 }]);
+	return cacheSettings([
+		{ key: LOGO_CONFIRMED_KEY, value: sha256 },
+		{ key: LOGO_PRINTER_KEY, value: printerKey }
+	]);
 }
 
 /**
@@ -367,8 +393,10 @@ export function withdrawReceiptLogoConfirmation(sha256?: string): Promise<void> 
 		inTransaction(db, ['settings'], 'readwrite', (tx) => {
 			const store = tx.objectStore('settings');
 
+			// The printer the confirmation was watched on goes with it, always.
 			if (sha256 === undefined) {
 				store.delete(LOGO_CONFIRMED_KEY);
+				store.delete(LOGO_PRINTER_KEY);
 				return;
 			}
 
@@ -377,7 +405,10 @@ export function withdrawReceiptLogoConfirmation(sha256?: string): Promise<void> 
 			current.onsuccess = () => {
 				const stored = (current.result as { value?: unknown } | undefined)?.value;
 
-				if (stored === sha256) store.delete(LOGO_CONFIRMED_KEY);
+				if (stored === sha256) {
+					store.delete(LOGO_CONFIRMED_KEY);
+					store.delete(LOGO_PRINTER_KEY);
+				}
 			};
 		})
 	);
