@@ -4,6 +4,7 @@ import { db } from '$lib/server/db/client';
 import { requirePermission } from '$lib/server/permissions';
 import { requestContext, writeAudit } from '$lib/server/audit';
 import { listDevices, revokeDevice } from '$lib/server/auth/pos-device';
+import { downloadsDir, publicManifest, readManifest } from '$lib/server/print-agent-downloads';
 import {
 	getRestaurantWithSettings,
 	settingsComplete,
@@ -40,6 +41,9 @@ export const load: ServerLoad = async (event) => {
 	const settings = await settingsComplete(db, restaurantId);
 	const restaurant = await getRestaurantWithSettings(db, restaurantId);
 	if (!restaurant) error(404, 'Restaurant not found');
+	// The print agent installers built at deploy (tasks/print-agent-installer): the
+	// public fields only — names, sizes, SHA-256s, download URLs. Null until built.
+	const manifest = await readManifest(downloadsDir());
 
 	// AN EXPLICIT OBJECT LITERAL per row, never a spread: pos_devices holds the
 	// token hash, and SvelteKit serialises load data into the page HTML and
@@ -59,7 +63,8 @@ export const load: ServerLoad = async (event) => {
 		idleLockSeconds: restaurant.posIdleLockSeconds,
 		// The restaurant's own clock for the dates on this page (invariant 11), which
 		// also keeps the server-rendered text and the hydrated text identical.
-		timeZone: restaurant.timeZone
+		timeZone: restaurant.timeZone,
+		printAgent: manifest ? publicManifest(manifest) : null
 	};
 };
 

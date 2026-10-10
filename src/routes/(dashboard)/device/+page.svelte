@@ -14,8 +14,10 @@
 		PageBody,
 		PageColumns,
 		PageHeader,
+		StatusMark,
 		Table
 	} from '$lib/components/ui';
+	import { firstRunSteps, osLabel, sizeLabel } from '$lib/print-agent-download';
 
 	let { data, form } = $props();
 	let saving = $state(false);
@@ -214,6 +216,59 @@
 				Installing needs the site served over HTTPS; on a plain http:// address the browser offers
 				no install and the till cannot start offline.
 			</p>
+		</Card>
+
+		<!-- The print agent installers (tasks/print-agent-installer T-13): one file per
+		     OS, built at deploy, carrying this app's address. Nothing to install first. -->
+		<Card class="flex flex-col gap-3">
+			<h3 class="text-section">Print agent</h3>
+			<p class="text-ink-2">
+				Prints receipts and kitchen tickets and opens the cash drawer. Install it once on the PC the
+				till runs on.
+			</p>
+			{#if data.printAgent === null}
+				<p class="text-ink-2">
+					<StatusMark
+						status="not-started"
+						label="Not built yet — the installers are made when the app is deployed"
+					/>
+				</p>
+			{:else}
+				<ul class="flex flex-col gap-4">
+					{#each data.printAgent.files as file (file.name)}
+						<li class="flex flex-col gap-1">
+							<div class="flex flex-wrap items-center gap-3">
+								<Button href={file.url} download={file.name}
+									>{`Download for ${osLabel(file.os, file.arch)}`}</Button
+								>
+								<span class="text-ink-2 text-sm">{sizeLabel(file.bytes)}</span>
+								{#if !file.verified}
+									<span class="text-ink-2 text-sm"
+										><span aria-hidden="true" class="font-mono">◆</span> Not yet checked on a Mac</span
+									>
+								{/if}
+							</div>
+							<p class="text-ink-2 font-mono text-xs break-all">SHA-256 {file.sha256}</p>
+						</li>
+					{/each}
+				</ul>
+				<p class="text-ink-2 text-sm">
+					Answers {data.printAgent.origin} · built {when(data.printAgent.builtAt)}
+				</p>
+				<details class="text-ink-2">
+					<summary class="text-ink cursor-pointer font-medium">First run on this PC</summary>
+					<dl class="mt-2 flex flex-col gap-2">
+						{#each [{ os: 'windows', name: 'Windows' }, { os: 'macos', name: 'Mac' }, { os: 'linux', name: 'Linux' }] as const as entry (entry.os)}
+							<div>
+								<dt class="text-ink font-medium">{entry.name}</dt>
+								{#each firstRunSteps(entry.os) as step, i (i)}
+									<dd>{step}</dd>
+								{/each}
+							</div>
+						{/each}
+					</dl>
+				</details>
+			{/if}
 		</Card>
 
 		{#snippet aside()}
