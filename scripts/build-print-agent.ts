@@ -28,7 +28,9 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	renameSync,
 	rmSync,
+	statSync,
 	writeFileSync
 } from 'node:fs';
 import { request } from 'node:http';
@@ -37,15 +39,28 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { build } from 'esbuild';
 import { createConfig, parseOrigin, saveConfig } from '../print-agent/src/config';
-import { NODE_VERSION, SEA_FUSE, TARGETS, sha256, type Target } from './build-print-agent/lib';
+import {
+	BUILD_SCRIPT_VERSION,
+	buildKey,
+	buildManifest,
+	NODE_VERSION,
+	RCODESIGN,
+	SEA_FUSE,
+	TARGETS,
+	sha256,
+	writeZip,
+	verifyAdHocSignature,
+	type Manifest,
+	type Target
+} from './build-print-agent/lib';
 
 const REPO = resolve(import.meta.dirname, '..');
 const CACHE = join(REPO, '.cache', 'print-agent');
 
 const say = (line: string) => process.stdout.write(line + '\n');
+/** Abort the build. Thrown, not process.exit, so the temporary work folder is still removed. */
 function fail(message: string): never {
-	process.stderr.write(`✕ ${message}\n`);
-	process.exit(1);
+	throw new Error(message);
 }
 
 type Flags = { origin?: string; targets?: string; out: string; force: boolean; smoke: boolean };
@@ -72,7 +87,10 @@ function parseArgs(argv: string[]): Flags {
 
 // ── 1. The bundle and the SEA blob ──────────────────────────────────────────
 
-async function bundle(work: string, origin: string): Promise<{ blob: string; bundleSha: string }> {
+async function bundle(
+	work: string,
+	origin: string
+): Promise<{ blob: string; bundleSha: string; builtAt: string }> {
 	const outfile = join(work, 'agent.cjs');
 	const result = await build({
 		entryPoints: [join(REPO, 'print-agent', 'src', 'main.ts')],
@@ -101,14 +119,10 @@ async function bundle(work: string, origin: string): Promise<{ blob: string; bun
 		if (!input.startsWith('print-agent/src/')) fail(`the agent bundle pulled in ${input}`);
 	}
 	const bundleSha = sha256(readFileSync(outfile));
+	const builtAt = new Date().toISOString();
 	writeFileSync(
 		join(work, 'build.json'),
-		JSON.stringify({
-			origin,
-			agentVersion: 2,
-			builtAt: new Date().toISOString(),
-			sourceSha: bundleSha
-		})
+		JSON.stringify({ origin, agentVersion: 2, builtAt, sourceSha: bundleSha })
 	);
 	writeFileSync(
 		join(work, 'sea-config.json'),
@@ -126,7 +140,7 @@ async function bundle(work: string, origin: string): Promise<{ blob: string; bun
 		cwd: work,
 		stdio: 'pipe'
 	});
-	return { blob: join(work, 'sea-prep.blob'), bundleSha };
+	return { blob: join(work, 'sea-prep.blob'), bundleSha, builtAt };
 }
 
 // ── 2. The official Node binaries, checked before use ───────────────────────
@@ -172,7 +186,104 @@ function inject(node: string, out: string, blob: string, macho: boolean): void {
 	const postject = join(REPO, 'node_modules', '.bin', 'postject');
 	const args = [out, 'NODE_SEA_BLOB', blob, '--sentinel-fuse', SEA_FUSE];
 	if (macho) args.push('--macho-segment-name', 'NODE_SEA');
+	// The Windows node.exe and the macOS node are signed by the Node.js project;
+	// injecting invalidates that signature and postject warns. Windows runs the
+	// result unsigned (Node docs); macOS is re-signed ad hoc below.
 	execFileSync(postject, args, { stdio: 'pipe' });
+}
+
+/** rcodesign from the cache, checked against its pinned SHA-256 before it is used. */
+async function rcodesign(): Promise<string> {
+	if (process.platform !== 'linux' || process.arch !== 'x64') {
+		fail('the macOS installers are signed with rcodesign on a Linux x64 build host');
+	}
+	const dir = join(CACHE, 'rcodesign', RCODESIGN.version);
+	const archive = join(dir, 'rcodesign.tar.gz');
+	const binary = join(dir, 'rcodesign');
+	const matches = () => existsSync(archive) && sha256(readFileSync(archive)) === RCODESIGN.sha256;
+	if (!matches()) {
+		say(`  downloading rcodesign ${RCODESIGN.version}`);
+		await download(RCODESIGN.url, archive);
+		if (!matches()) {
+			rmSync(archive, { force: true });
+			fail('rcodesign does not match its pinned SHA-256 — refusing to use it');
+		}
+	}
+	execFileSync('tar', [
+		'-xzf',
+		archive,
+		'-C',
+		dir,
+		'--strip-components=1',
+		RCODESIGN.binaryInArchive
+	]);
+	chmodSync(binary, 0o755);
+	return binary;
+}
+
+/**
+ * Sign a macOS binary ad hoc, then check the signature the way macOS will
+ * (verifyAdHocSignature: every code page against its stored hash). Apple
+ * silicon kills an unsigned Mach-O at exec ("Killed: 9"), so a binary that
+ * fails here is never shipped — the build aborts instead of falling back to an
+ * unsigned file. `rcodesign verify` is not used: it rejects every ad-hoc
+ * signature (see RCODESIGN in build-print-agent/lib.ts).
+ */
+function adHocSign(signer: string, binary: string): number {
+	try {
+		execFileSync(signer, ['sign', binary], { stdio: 'pipe' });
+	} catch (error) {
+		const stderr = (error as { stderr?: Buffer }).stderr?.toString().trim();
+		fail(`rcodesign could not sign ${binary}${stderr ? `: ${stderr}` : ''}`);
+	}
+	const check = verifyAdHocSignature(readFileSync(binary));
+	if (!check.ok) fail(`the ad-hoc signature of ${binary} does not check out: ${check.reason}`);
+	return check.pages;
+}
+
+/** The published file for a target: the bare .exe on Windows, a zip keeping mode 0755 elsewhere. */
+function packageTarget(target: Target, binary: string, building: string, builtAt: string): string {
+	const out = join(building, target.output);
+	if (target.os === 'windows') {
+		copyFileSync(binary, out);
+	} else {
+		const zip = writeZip(
+			[{ name: 'matcami-print-agent', data: readFileSync(binary), mode: 0o755 }],
+			new Date(builtAt)
+		);
+		writeFileSync(out, zip);
+	}
+	return out;
+}
+
+/** The installers already in `current/`, when they were built from exactly this agent and origin. */
+function unchanged(current: string, key: string): Manifest | null {
+	const path = join(current, 'manifest.json');
+	if (!existsSync(path)) return null;
+	try {
+		const manifest = JSON.parse(readFileSync(path, 'utf8')) as Manifest;
+		if (manifest.buildKey !== key || manifest.files.length !== TARGETS.length) return null;
+		for (const file of manifest.files) {
+			const full = join(current, file.name);
+			if (!existsSync(full) || statSync(full).size !== file.bytes) return null;
+		}
+		return manifest;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Swap the finished build in: current/ becomes previous/, .building/ becomes
+ * current/. The download route only ever sees a complete current/.
+ */
+function publish(out: string): void {
+	const building = join(out, '.building');
+	const current = join(out, 'current');
+	const previous = join(out, 'previous');
+	rmSync(previous, { recursive: true, force: true });
+	if (existsSync(current)) renameSync(current, previous);
+	renameSync(building, current);
 }
 
 // ── 3. The smoke test: the Linux installer, run for real ────────────────────
@@ -303,37 +414,72 @@ async function main(): Promise<void> {
 	const work = mkdtempSync(join(tmpdir(), 'matcami-agent-'));
 	try {
 		say(`Building the print agent installers for ${origin}`);
-		const { blob } = await bundle(work, origin);
+		const { blob, bundleSha, builtAt } = await bundle(work, origin);
+		const key = buildKey({
+			bundleSha,
+			origin,
+			nodeVersion: NODE_VERSION,
+			scriptVersion: BUILD_SCRIPT_VERSION
+		});
 		say('● Bundled the agent and made the SEA blob');
+		// The usual deploy changes neither the agent nor ORIGIN: nothing to download or build.
+		const current = join(flags.out, 'current');
+		if (
+			!flags.force &&
+			!flags.smoke &&
+			wanted.length === TARGETS.length &&
+			unchanged(current, key)
+		) {
+			say(`● Installers unchanged (${key.slice(0, 12)})`);
+			return;
+		}
 		const building = join(flags.out, '.building');
 		rmSync(building, { recursive: true, force: true });
 		mkdirSync(building, { recursive: true });
+		const files: Array<{ target: Target; bytes: number; sha256: string }> = [];
 		let linuxBinary: string | null = null;
+		let signer: string | null = null;
 		for (const target of TARGETS.filter((t) => wanted.includes(t.id))) {
-			if (target.id !== 'linux-x64') {
-				say(`○ ${target.id}: not built yet`);
-				continue;
-			}
 			const node = await nodeBinary(target);
-			const out = join(work, target.id, 'matcami-print-agent');
-			inject(node, out, blob, false);
-			copyFileSync(out, join(building, 'matcami-print-agent-linux-x64'));
-			chmodSync(join(building, 'matcami-print-agent-linux-x64'), 0o755);
-			linuxBinary = out;
-			say(`● ${target.id}: ${join(building, 'matcami-print-agent-linux-x64')}`);
+			const binary = join(
+				work,
+				target.id,
+				target.os === 'windows' ? 'matcami-print-agent.exe' : 'matcami-print-agent'
+			);
+			inject(node, binary, blob, target.os === 'macos');
+			let signed = '';
+			if (target.os === 'macos') {
+				signer ??= await rcodesign();
+				const pages = adHocSign(signer, binary);
+				signed = ` — signed ad hoc, all ${pages} page hashes checked`;
+			}
+			const published = packageTarget(target, binary, building, builtAt);
+			const data = readFileSync(published);
+			files.push({ target, bytes: data.length, sha256: sha256(data) });
+			if (target.id === 'linux-x64') linuxBinary = binary;
+			say(`● ${target.id}: ${target.output} (${Math.round(data.length / 1048576)} MB)${signed}`);
 		}
+		// Before publishing: a binary that fails its smoke test never reaches current/.
 		if (flags.smoke) {
-			if (process.platform !== 'linux' || process.arch !== 'x64')
+			if (process.platform !== 'linux' || process.arch !== 'x64') {
 				say('○ smoke skipped: not linux-x64');
-			else if (!linuxBinary) say('○ smoke skipped: linux-x64 was not built');
-			else {
+			} else if (!linuxBinary) {
+				say('○ smoke skipped: linux-x64 was not built');
+			} else {
 				say('Smoke test (linux-x64):');
 				await smoke(linuxBinary, origin);
 			}
 		}
+		const manifest = buildManifest({ origin, builtAt, sourceSha: bundleSha, buildKey: key, files });
+		writeFileSync(join(building, 'manifest.json'), JSON.stringify(manifest, null, '\t') + '\n');
+		publish(flags.out);
+		say(`● Published ${files.length} installer(s) to ${current}`);
 	} finally {
 		rmSync(work, { recursive: true, force: true });
 	}
 }
 
-await main();
+main().catch((error: unknown) => {
+	process.stderr.write(`✕ ${error instanceof Error ? error.message : String(error)}\n`);
+	process.exitCode = 1;
+});
