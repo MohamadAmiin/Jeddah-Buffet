@@ -27,7 +27,14 @@ import { join } from 'node:path';
 import type { PrinterConfig, ReadyPrinters } from './config.ts';
 import { DRAWER_PULSE, encodeJob } from './escpos.ts';
 import { paperStatus, reachable, send } from './printer.ts';
-import type { AgentStatus, DrawerOutcome, DrawerRequest, Job, SubmitOutcome } from './server.ts';
+import {
+	AGENT_FEATURES,
+	type AgentStatus,
+	type DrawerOutcome,
+	type DrawerRequest,
+	type Job,
+	type SubmitOutcome
+} from './server.ts';
 
 export type Target = 'receipt' | 'kitchen';
 export type QueuedJob = { id: string; target: Target; bytesBase64: string; enqueuedAt: string };
@@ -116,9 +123,14 @@ export type Queue = {
 	status: () => Promise<AgentStatus>;
 	seen: SeenStore;
 	log: (line: string) => void;
-	/** Stop the workers and timers; queued files stay on disk for the next start. */
 	/** Stop the workers and timers and wait for an in-flight print to finish; queued files stay on disk. */
 	close: () => Promise<void>;
+	/**
+	 * Jobs waiting per worker, raw — no folding of kitchen into receipt. Each is
+	 * already encoded for its worker's printer width, which is why a width change
+	 * is refused while one waits (runtime.ts setPrinters).
+	 */
+	queuedByTarget: () => { receipt: number; kitchen: number };
 };
 
 type Worker = {
@@ -337,12 +349,16 @@ export function createQueue(options: QueueOptions): Queue {
 		},
 		status: async () => {
 			const receipt = {
+				host: options.printers.receipt.host,
+				port: options.printers.receipt.port,
 				width: options.printers.receipt.width,
 				reachable: await isReachable('receipt'),
 				queued: workers.receipt.jobs.length
 			};
 			const kitchen = options.printers.kitchen
 				? {
+						host: options.printers.kitchen.host,
+						port: options.printers.kitchen.port,
 						width: options.printers.kitchen.width,
 						reachable: await isReachable('kitchen'),
 						queued: workers.kitchen.jobs.length
@@ -350,8 +366,12 @@ export function createQueue(options: QueueOptions): Queue {
 				: null;
 			// With no kitchen printer, kitchen jobs ride the receipt worker — count them there.
 			if (!options.printers.kitchen) receipt.queued += workers.kitchen.jobs.length;
-			return { agentVersion: 2, printers: { receipt, kitchen } };
+			return { agentVersion: 2, features: AGENT_FEATURES, printers: { receipt, kitchen } };
 		},
+		queuedByTarget: () => ({
+			receipt: workers.receipt.jobs.length,
+			kitchen: workers.kitchen.jobs.length
+		}),
 		close: async () => {
 			closed = true;
 			clearInterval(pruneTimer);

@@ -33,9 +33,10 @@ const config: AgentConfig = {
 
 const status: AgentStatus = {
 	agentVersion: 2,
+	features: ['printers', 'setup'],
 	printers: {
-		receipt: { width: 48, reachable: true, queued: 0 },
-		kitchen: { width: 32, reachable: false, queued: 2 }
+		receipt: { host: '127.0.0.1', port: 9100, width: 48, reachable: true, queued: 0 },
+		kitchen: { host: '127.0.0.1', port: 9101, width: 32, reachable: false, queued: 2 }
 	}
 };
 
@@ -93,6 +94,7 @@ function harness() {
 			return drawerAnswer;
 		},
 		status: async () => status,
+		setPrinters: async () => ({ ok: true }),
 		claimPairing: () => {
 			claims += 1;
 			return pairingAnswer;

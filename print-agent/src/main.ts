@@ -34,7 +34,7 @@ import {
 } from './config.ts';
 import { claimPairing, openPairing } from './pairing.ts';
 import { bakedBuild, defaultPaths, isPackaged } from './paths.ts';
-import { createDrawer, createQueue } from './queue.ts';
+import { createRuntime } from './runtime.ts';
 import { createAgentServer, listen } from './server.ts';
 
 const USAGE = `matcami print agent
@@ -178,30 +178,20 @@ export function runInit(flags: Flags): { path: string; config: AgentConfig } {
 	return { path, config };
 }
 
-async function runServer(config: AgentConfig): Promise<void> {
-	const receipt = config.printers.receipt;
-	if (!receipt) {
-		throw new Error('config: printers.receipt is not set — set the receipt printer first');
-	}
-	const printers = { receipt, kitchen: config.printers.kitchen };
-	const queue = createQueue({ dataDir: config.dataDir, printers });
-	const drawer = createDrawer({
-		receipt,
-		seen: queue.seen,
-		log: queue.log
-	});
-	const server = createAgentServer(config, {
-		submitJob: queue.submit,
-		pulseDrawer: drawer.pulse,
-		status: queue.status,
-		claimPairing: () => claimPairing(config.dataDir)
+async function runServer(configPath: string, config: AgentConfig): Promise<void> {
+	// The runtime builds the queue and the drawer once a receipt printer is set,
+	// and rebuilds them when the printers change (runtime.ts).
+	const runtime = createRuntime({ configPath, config });
+	const server = createAgentServer(runtime.config(), {
+		...runtime.deps,
+		claimPairing: () => claimPairing(runtime.config().dataDir)
 	});
 	const port = await listen(server, config.port);
 	// The URL, never the token.
 	process.stdout.write(`matcami print agent listening on http://127.0.0.1:${port}\n`);
 	const shutdown = () => {
 		// Let a print already on the wire finish and be recorded, then leave.
-		void queue.close().then(() => server.close(() => process.exit(0)));
+		void runtime.close().then(() => server.close(() => process.exit(0)));
 		setTimeout(() => process.exit(0), 5000).unref();
 	};
 	process.once('SIGINT', shutdown);
@@ -244,8 +234,9 @@ function main(argv: string[]): number {
 	if (command === 'run') {
 		// Loaded first so a broken file fails here, with the field named, not at
 		// the first print job.
-		const config = loadConfig(text(flags, 'config') ?? defaultPaths().configPath);
-		void runServer(config);
+		const configPath = text(flags, 'config') ?? defaultPaths().configPath;
+		const config = loadConfig(configPath);
+		void runServer(configPath, config);
 		return 0;
 	}
 	process.stderr.write(`unknown command "${command}"\n\n${USAGE}`);

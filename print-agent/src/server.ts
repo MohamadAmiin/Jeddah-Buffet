@@ -44,18 +44,40 @@ export type ImageLine = { image: { widthDots: number; heightDots: number; bitmap
 export type PrintLine = TextLine | ImageLine;
 export type Job = { id: string; printer: 'receipt' | 'kitchen'; lines: PrintLine[]; cut: boolean };
 export type DrawerRequest = { id: string; completedAt: string };
-export type PrinterStatus = { width: 32 | 48; reachable: boolean; queued: number };
+/**
+ * What this agent can do beyond printing, so a till can tell an agent that sets
+ * printers (PUT /printers) and serves a setup page from an older one before it
+ * sends anything (tasks/print-agent-installer). Additive: old tills ignore it.
+ */
+export const AGENT_FEATURES = ['printers', 'setup'] as const;
+/** `host`/`port` let the till bind a logo confirmation to ONE printer (T-14). */
+export type PrinterStatus = {
+	host: string;
+	port: number;
+	width: 32 | 48;
+	reachable: boolean;
+	queued: number;
+};
 export type AgentStatus = {
 	agentVersion: 2;
-	printers: { receipt: PrinterStatus; kitchen: PrinterStatus | null };
+	features: readonly string[];
+	/** `receipt` null: no printer set yet — the installer runs before anyone types an address. */
+	printers: { receipt: PrinterStatus | null; kitchen: PrinterStatus | null };
 };
-export type SubmitOutcome = 'queued' | 'duplicate';
-export type DrawerOutcome = 'opened' | 'duplicate' | 'too_late' | 'printer_unreachable';
+export type SubmitOutcome = 'queued' | 'duplicate' | 'no_printer';
+export type DrawerOutcome =
+	'opened' | 'duplicate' | 'too_late' | 'printer_unreachable' | 'no_printer';
+/** A paper-width change is refused while that printer has jobs encoded for the old width. */
+export type SetPrintersOutcome =
+	| { ok: true }
+	| { ok: false; error: 'jobs_waiting'; target: 'receipt' | 'kitchen'; queued: number };
 
 export type AgentDeps = {
 	submitJob: (job: Job) => SubmitOutcome | Promise<SubmitOutcome>;
 	pulseDrawer: (request: DrawerRequest) => Promise<DrawerOutcome>;
 	status: () => Promise<AgentStatus>;
+	/** Re-point the queue and the drawer at new printers (runtime.ts). */
+	setPrinters: (printers: AgentConfig['printers']) => Promise<SetPrintersOutcome>;
 	/** Take open pairing's one claim (pairing.ts claimPairing). */
 	claimPairing: () => PairingClaim;
 };
