@@ -156,7 +156,12 @@ if ($wait -gt 0) {
     }
     Start-Sleep -Milliseconds 150
   }
-  Remove-PrintJob -PrinterName $env:MATCAMI_PRINTER -ID $job -ErrorAction SilentlyContinue
+  try {
+    Remove-PrintJob -PrinterName $env:MATCAMI_PRINTER -ID $job -ErrorAction Stop
+  } catch {
+    # Gone already = cancelled; anything else leaves the pulse in the spooler: say so, loudly.
+    if ($_.CategoryInfo.Category -ne 'ObjectNotFound') { Write-Output "stuck $job"; exit 4 }
+  }
   Write-Output "cancelled $job"
   exit 3
 }
@@ -174,7 +179,8 @@ export function parseLpstat(output: string): LocalPrinterInfo[] {
 	const printers: LocalPrinterInfo[] = [];
 	for (const line of output.split('\n')) {
 		const head = /^printer (\S+) (.*)$/.exec(line);
-		if (head && head[1]) {
+		// A name beginning with '-' would be read as an option by lp, lpstat and cancel.
+		if (head && head[1] && !head[1].startsWith('-')) {
 			const rest = head[2] ?? '';
 			const state: LocalPrinterInfo['state'] = /^is idle/.test(rest)
 				? 'idle'
@@ -206,7 +212,7 @@ export function parseGetPrinter(output: string): LocalPrinterInfo[] {
 		if (at <= 0) continue;
 		const name = line.slice(0, at).trim();
 		const status = line.slice(at + 1).trim();
-		if (!name) continue;
+		if (!name || name.startsWith('-')) continue;
 		printers.push({
 			name,
 			state: /^Normal$/i.test(status) ? 'idle' : /^Printing$/i.test(status) ? 'printing' : 'stopped'
@@ -311,12 +317,16 @@ export async function sendLocalNow(
 	timeoutMs: number
 ): Promise<void> {
 	if (isWindows()) {
+		// The helper compiles its P/Invoke first (seconds on a slow PC) and then
+		// waits the window itself; the exec deadline must never cut off its cancel.
 		const out = await localIo.exec('powershell', powershellArgs(PS_SEND), {
 			stdin: bytes,
-			timeoutMs: timeoutMs + 20_000,
+			timeoutMs: timeoutMs + 60_000,
 			env: helperEnv(printer, timeoutMs)
 		});
 		if (out.status === 0 && /printed /.test(out.stdout)) return;
+		if (out.status === 4)
+			throw new Error(stuckMessage(printer, /stuck (\S+)/.exec(out.stdout)?.[1] ?? '?'));
 		throw new Error(
 			out.status === 3
 				? `printer ${printer.name}: did not print within ${timeoutMs} ms; the job was cancelled`
@@ -338,10 +348,24 @@ export async function sendLocalNow(
 		}
 		await sleep(150);
 	}
-	await localIo.exec('cancel', [job], { timeoutMs: 5000 });
-	throw new Error(
-		`printer ${printer.name}: did not print within ${timeoutMs} ms; ${job} was cancelled`
-	);
+	// The cancel must be KNOWN to have worked: a pulse left in the service would
+	// open the drawer by itself when the printer returns. Three tries, then the
+	// loudest failure the agent has — the log line names the job for the owner.
+	for (let attempt = 0; attempt < 3; attempt += 1) {
+		const out = await localIo.exec('cancel', [job], { timeoutMs: 5000 });
+		if (out.status === 0) {
+			throw new Error(
+				`printer ${printer.name}: did not print within ${timeoutMs} ms; ${job} was cancelled`
+			);
+		}
+		await sleep(200);
+	}
+	throw new Error(stuckMessage(printer, job));
+}
+
+/** The one failure that leaves a pulse in the service: named so it is never mistaken for a quiet refusal. */
+function stuckMessage(printer: LocalPrinter, job: string): string {
+	return `printer ${printer.name}: DRAWER PULSE ${job} COULD NOT BE CANCELLED — remove it from the PC's print queue before the printer comes back`;
 }
 
 /** The env the Windows helpers read the printer name and the wait from — never interpolated into the script. */

@@ -222,7 +222,17 @@ describe('a printer on this PC in the config (feat/local-printers)', () => {
 			name: 'SomStar-80mm-Series',
 			width: 48
 		});
-		for (const name of ['', '   ', 'x'.repeat(121), 'a\nb', 'a\x7fb', 42, true]) {
+		for (const name of [
+			'',
+			'   ',
+			'-Till',
+			' -Till',
+			'x'.repeat(121),
+			'a\nb',
+			'a\x7fb',
+			42,
+			true
+		]) {
 			expect(() => parsePrinter({ name, width: 48 }, 'printers.receipt')).toThrow(
 				/printers\.receipt\.name/
 			);

@@ -173,8 +173,14 @@ describe('setPrinters re-wires the queue and the drawer', () => {
 		await until(() => b.jobs.length === 1, 5000, 'the queued receipt on B');
 		expect(textOf(b.jobs[0]!)).toContain('Logo receipt');
 		expect(b.jobs[0]!.includes(RASTER)).toBe(false);
-		expect(readFileSync(join(dataDir, 'agent.log'), 'utf8')).toContain(
-			'printed l1 without its logo: the receipt printer changed'
+		// The log line lands after the agent's own socket closes, which can be a
+		// moment after the fake printer saw the bytes: wait for it.
+		const logged = () =>
+			existsSync(join(dataDir, 'agent.log')) && readFileSync(join(dataDir, 'agent.log'), 'utf8');
+		await until(
+			() => (logged() || '').includes('printed l1 without its logo: the receipt printer changed'),
+			4000,
+			'the log line'
 		);
 	});
 

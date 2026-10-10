@@ -23,7 +23,9 @@ import {
 	type ExecOpts,
 	type ExecOutcome
 } from './local-printer.ts';
+import { createConfig, saveConfig } from './config.ts';
 import { createDrawer, createQueue, type Queue } from './queue.ts';
+import { createRuntime } from './runtime.ts';
 
 type Call = { cmd: string; args: string[]; opts: ExecOpts };
 
@@ -170,6 +172,30 @@ describe('sending through the service (CUPS)', () => {
 		}
 	});
 
+	it('THE DRAWER RULE: a cancel that fails is retried, then reported as a STUCK pulse — never a quiet refusal', async () => {
+		answer = (c) => {
+			if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-54 (0 file(s))\n');
+			if (c.cmd === 'lpstat') return ok('SomStar-80mm-Series-54  x  5  now\n');
+			if (c.cmd === 'cancel') return { status: 1, stdout: '', stderr: 'cancel: Unable to cancel' };
+			return undefined;
+		};
+		await expect(sendLocalNow(SOMSTAR, bytes, 300)).rejects.toThrow(
+			/DRAWER PULSE SomStar-80mm-Series-54 COULD NOT BE CANCELLED/
+		);
+		expect(calls.filter((c) => c.cmd === 'cancel')).toHaveLength(3);
+	});
+
+	it('a printer named with a leading dash never enters a list — it would be read as an option', () => {
+		expect(
+			parseLpstat(
+				'printer -Till is idle.  enabled since now\nprinter Ok is idle.  enabled since now\n'
+			)
+		).toEqual([{ name: 'Ok', state: 'idle' }]);
+		expect(parseGetPrinter('-Front\tNormal\r\nBack\tNormal\r\n')).toEqual([
+			{ name: 'Back', state: 'idle' }
+		]);
+	});
+
 	it('THE DRAWER RULE: a job still waiting at the timeout is CANCELLED and the send fails', async () => {
 		answer = (c) => {
 			if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-52 (0 file(s))\n');
@@ -256,6 +282,15 @@ describe('the Windows spooler helpers', () => {
 		expect(calls[0]!.opts.env).toEqual({ MATCAMI_PRINTER: 'POS-80', MATCAMI_WAIT_MS: '0' });
 		await expect(sendLocalNow(printer, DRAWER_PULSE, 3000)).rejects.toThrow(/cancelled/);
 		expect(calls[1]!.opts.env).toEqual({ MATCAMI_PRINTER: 'POS-80', MATCAMI_WAIT_MS: '3000' });
+		// A removal the spooler refused (exit 4) is the stuck pulse, said loudly.
+		answer = (c) =>
+			c.cmd === 'powershell' ? { status: 4, stdout: 'stuck 14\r\n', stderr: '' } : undefined;
+		await expect(sendLocalNow(printer, DRAWER_PULSE, 3000)).rejects.toThrow(
+			/DRAWER PULSE 14 COULD NOT BE CANCELLED/
+		);
+		expect(PS_SEND).toContain(
+			'Remove-PrintJob -PrinterName $env:MATCAMI_PRINTER -ID $job -ErrorAction Stop'
+		);
 	});
 });
 
@@ -313,6 +348,59 @@ describe('a receipt printer on this PC, through the queue and the drawer', () =>
 			queued: 1
 		});
 		expect(status.printers.receipt).not.toHaveProperty('host');
+	});
+
+	it("a width change is REFUSED while the PC's print service still holds receipts for the old width (decision 2)", async () => {
+		answer = (c) => {
+			if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-80 (0 file(s))\n');
+			if (c.cmd === 'lpstat' && c.args[0] === '-p') return ok(LPSTAT_P);
+			if (c.cmd === 'lpstat' && c.args[0] === '-o')
+				return ok('SomStar-80mm-Series-80  x  5  now\n');
+			return undefined;
+		};
+		const dir = tmp();
+		const configPath = join(dir, 'config.json');
+		const config = createConfig({
+			origin: 'https://pos.example.com',
+			dataDir: join(dir, 'data'),
+			printers: { receipt: SOMSTAR, kitchen: null }
+		});
+		saveConfig(configPath, config);
+		const runtime = createRuntime({
+			configPath,
+			config,
+			queue: { retry: { baseMs: 40, maxMs: 160 } }
+		});
+		try {
+			// The agent's own queue is empty (lp took the page at once); the service holds one.
+			expect(
+				await runtime.deps.submitJob({
+					id: 'w1',
+					printer: 'receipt',
+					lines: [{ text: 'x' }],
+					cut: true
+				})
+			).toBe('queued');
+			await until(() => calls.some((c) => c.cmd === 'lp'), 'the lp call');
+			await new Promise((r) => setTimeout(r, 100));
+			expect(
+				await runtime.deps.setPrinters({ receipt: { ...SOMSTAR, width: 32 }, kitchen: null })
+			).toEqual({
+				ok: false,
+				error: 'jobs_waiting',
+				target: 'receipt',
+				queued: 1
+			});
+			// Another printer at the SAME width is fine: nothing is laid out wrong.
+			expect(
+				await runtime.deps.setPrinters({
+					receipt: { name: 'Office-Laser', width: 48 },
+					kitchen: null
+				})
+			).toEqual({ ok: true });
+		} finally {
+			await runtime.close();
+		}
 	});
 
 	it('a job that carries the logo is bound to the named printer on disk, by its label', async () => {

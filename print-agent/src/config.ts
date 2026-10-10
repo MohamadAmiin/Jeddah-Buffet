@@ -162,6 +162,7 @@ export function parsePrinter(value: unknown, field: string): PrinterConfig {
 		if (
 			typeof name !== 'string' ||
 			name.trim().length === 0 ||
+			name.trim().startsWith('-') ||
 			name.length > LOCAL_PRINTER_NAME_MAX ||
 			/[\x00-\x1f\x7f]/.test(name)
 		) {
