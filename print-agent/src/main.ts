@@ -37,6 +37,7 @@ import { claimPairing, openPairing, pairingState } from './pairing.ts';
 import { bakedBuild, defaultPaths, isPackaged } from './paths.ts';
 import { createRuntime } from './runtime.ts';
 import { createAgentServer, listen } from './server.ts';
+import { SETUP_CSS, SETUP_HTML, SETUP_JS } from './setup-page.ts';
 import { createSetupHandler } from './setup.ts';
 
 const USAGE = `matcami print agent
@@ -180,13 +181,6 @@ export function runInit(flags: Flags): { path: string; config: AgentConfig } {
 	return { path, config };
 }
 
-/** Until the setup page lands (T-06): a page that only names itself. */
-const SETUP_PAGE_PLACEHOLDER = {
-	html: '<!doctype html><title>matcami print agent</title>',
-	js: '',
-	css: ''
-};
-
 async function runServer(configPath: string, config: AgentConfig): Promise<void> {
 	// The runtime builds the queue and the drawer once a receipt printer is set,
 	// and rebuilds them when the printers change (runtime.ts).
@@ -201,7 +195,7 @@ async function runServer(configPath: string, config: AgentConfig): Promise<void>
 			openPairing(dataDir());
 		},
 		quit: () => shutdown(),
-		page: SETUP_PAGE_PLACEHOLDER
+		page: { html: SETUP_HTML, js: SETUP_JS, css: SETUP_CSS }
 	});
 	const server = createAgentServer(runtime.config, {
 		...runtime.deps,
