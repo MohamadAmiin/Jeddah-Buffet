@@ -325,9 +325,9 @@ describe('the setup API routes', () => {
 		expect(setupTestLines(32).map((l) => l.text)).toContain('Paper: 58 mm (32)');
 	});
 
-	it('/setup/quit answers, then quits once', async () => {
+	it('/setup/quit answers with its process id, then quits once', async () => {
 		const { api, quits } = await agent();
-		expect((await api('/setup/quit')).json).toEqual({ quitting: true });
+		expect((await api('/setup/quit')).json).toEqual({ quitting: true, pid: process.pid });
 		await new Promise((r) => setTimeout(r, 20));
 		expect(quits()).toBe(1);
 	});

@@ -255,8 +255,9 @@ export function createSetupHandler(deps: SetupDeps): NonNullable<AgentDeps['setu
 			return;
 		}
 		if (path === '/setup/quit') {
-			json(200, { quitting: true });
-			// After the answer is on its way: the caller (the installer) waits for the port to close.
+			// The installer waits until THIS process is gone, not only its port: the
+			// port closes first, and the binary stays in use until the process ends.
+			json(200, { quitting: true, pid: process.pid });
 			setImmediate(() => deps.quit());
 			return;
 		}

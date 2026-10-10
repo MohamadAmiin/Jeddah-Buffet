@@ -13,7 +13,7 @@
 // queued receipt, and nothing runs as root.
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { chmodSync, copyFileSync, mkdirSync, rmSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { request } from 'node:http';
 import { connect } from 'node:net';
 import { join, resolve } from 'node:path';
@@ -124,8 +124,12 @@ export function portAnswers(port: number): Promise<boolean> {
 	});
 }
 
-/** POST to the agent's own setup API, as its setup page would. Resolves the status, 0 on no answer. */
-function setupPost(port: number, path: string, secret: string): Promise<number> {
+/** POST to the agent's own setup API, as its setup page would. Status 0 = no answer. */
+function setupPost(
+	port: number,
+	path: string,
+	secret: string
+): Promise<{ status: number; body: unknown }> {
 	return new Promise((done) => {
 		const req = request(
 			{
@@ -142,14 +146,33 @@ function setupPost(port: number, path: string, secret: string): Promise<number> 
 				}
 			},
 			(res) => {
-				res.resume();
-				res.on('end', () => done(res.statusCode ?? 0));
+				const chunks: Buffer[] = [];
+				res.on('data', (c: Buffer) => chunks.push(c));
+				res.on('end', () => {
+					let body: unknown = null;
+					try {
+						body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+					} catch {
+						body = null;
+					}
+					done({ status: res.statusCode ?? 0, body });
+				});
 			}
 		);
 		req.on('timeout', () => req.destroy());
-		req.on('error', () => done(0));
+		req.on('error', () => done({ status: 0, body: null }));
 		req.end('{}');
 	});
+}
+
+/** True once no process has this id (signal 0 only asks; EPERM means it exists under another user). */
+function processGone(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return false;
+	} catch (error) {
+		return (error as { code?: unknown }).code === 'ESRCH';
+	}
 }
 
 async function until(check: () => Promise<boolean>, ms: number): Promise<boolean> {
@@ -167,53 +190,79 @@ async function stopAgent(platform: string, config: AgentConfig | null): Promise<
 	if (platform !== 'win32') stopAutostart(platform);
 	const port = config?.port ?? DEFAULT_AGENT_PORT;
 	// Never `taskkill /F`: a forced kill between "sent" and "recorded" prints that receipt twice.
+	let pid: number | null = null;
 	if (config?.setupSecret && (await portAnswers(port))) {
-		await setupPost(port, '/setup/quit', config.setupSecret);
+		const answer = await setupPost(port, '/setup/quit', config.setupSecret);
+		const named = (answer.body as { pid?: unknown } | null)?.pid;
+		if (typeof named === 'number' && Number.isInteger(named) && named > 0) pid = named;
 	}
-	return until(async () => !(await portAnswers(port)), 10_000);
+	// The port closes before the process ends; its binary stays in use until it
+	// ends, so wait for both before anything replaces that binary.
+	return until(
+		async () => !(await portAnswers(port)) && (pid === null || processGone(pid)),
+		10_000
+	);
 }
 
-function openInBrowser(platform: string, url: string): boolean {
+/**
+ * Open the URL in the default browser. Resolves true only once the opener has
+ * actually started: a missing opener (no xdg-open on a bare Linux) fails AFTER
+ * spawn() returns, with an 'error' event, and the caller then prints the URL.
+ */
+function openInBrowser(platform: string, url: string): Promise<boolean> {
 	const [cmd, args] =
 		platform === 'win32'
 			? ['rundll32', ['url.dll,FileProtocolHandler', url]]
 			: platform === 'darwin'
 				? ['open', [url]]
 				: ['xdg-open', [url]];
-	try {
-		const child = spawn(cmd as string, args as string[], {
-			detached: true,
-			stdio: 'ignore',
-			windowsHide: true
-		});
-		child.on('error', () => {});
-		child.unref();
-		return true;
-	} catch {
-		return false;
-	}
+	return new Promise((done) => {
+		try {
+			const child = spawn(cmd as string, args as string[], {
+				detached: true,
+				stdio: 'ignore',
+				windowsHide: true
+			});
+			child.once('spawn', () => {
+				child.unref();
+				done(true);
+			});
+			child.once('error', () => done(false));
+		} catch {
+			done(false);
+		}
+	});
 }
 
-function copyWithRetry(from: string, to: string, platform: string): Promise<void> {
-	return (async () => {
-		mkdirSync(join(to, '..'), { recursive: true });
-		const start = Date.now();
-		for (;;) {
-			try {
-				copyFileSync(from, to);
-				break;
-			} catch (error) {
-				const code = (error as { code?: unknown }).code;
-				// A Windows binary that is still closing, or a scanner holding it.
-				if ((code === 'EBUSY' || code === 'EPERM') && Date.now() - start < 10_000) {
-					await sleep(500);
-					continue;
-				}
-				throw error;
+/**
+ * Put the new binary in place. Linux and macOS: copy beside the old one and
+ * RENAME over it — a rename replaces a binary that is still executing (that
+ * process keeps the old file), where an in-place copy fails with ETXTBSY.
+ * Windows cannot replace a running .exe at all, so the agent was stopped first
+ * and the copy is retried while the file is still closing or a scanner holds it.
+ */
+async function installBinary(from: string, to: string, platform: string): Promise<void> {
+	mkdirSync(join(to, '..'), { recursive: true });
+	const target = platform === 'win32' ? to : `${to}.new-${process.pid}`;
+	const start = Date.now();
+	for (;;) {
+		try {
+			copyFileSync(from, target);
+			break;
+		} catch (error) {
+			const code = (error as { code?: unknown }).code;
+			const busy = code === 'EBUSY' || code === 'EPERM' || code === 'ETXTBSY';
+			if (busy && Date.now() - start < 10_000) {
+				await sleep(500);
+				continue;
 			}
+			throw error;
 		}
-		if (platform !== 'win32') chmodSync(to, 0o755);
-	})();
+	}
+	if (platform !== 'win32') {
+		chmodSync(target, 0o755);
+		renameSync(target, to);
+	}
 }
 
 function readConfigState(path: string): 'missing' | 'corrupt' | AgentConfig {
@@ -278,6 +327,24 @@ export async function runInstall(): Promise<number> {
 			code = 1;
 			break;
 		}
+		try {
+			if (!(await runStep(step))) {
+				code = 1;
+				break;
+			}
+		} catch (error) {
+			// Said in words, never a raw stack: a failed step stops the install.
+			say(`✕ ${error instanceof Error ? error.message : String(error)}`);
+			code = 1;
+			break;
+		}
+	}
+	if (code === 0) say('\nNext: on the till, sign in as the owner → Printer → Pair this till.');
+	await holdWindow(platform);
+	return code;
+
+	/** One step; false = it failed and said why. */
+	async function runStep(step: Step): Promise<boolean> {
 		if (step.kind === 'create-config' && baked) {
 			config = createConfig({ origin: baked.origin, dataDir: join(installDir(), 'data') });
 			saveConfig(configPath, config);
@@ -295,12 +362,11 @@ export async function runInstall(): Promise<number> {
 		} else if (step.kind === 'stop-agent') {
 			if (!(await stopAgent(platform, config))) {
 				say('✕ The running print agent did not stop — restart the PC and run this again.');
-				code = 1;
-				break;
+				return false;
 			}
 			say('● Stopped the print agent that was running (waiting receipts are kept)');
 		} else if (step.kind === 'copy-exe') {
-			await copyWithRetry(process.execPath, exePath, platform);
+			await installBinary(process.execPath, exePath, platform);
 			say(`● Installed ${exePath}`);
 		} else if (step.kind === 'register-autostart') {
 			const started = reportAutostart(
@@ -318,27 +384,25 @@ export async function runInstall(): Promise<number> {
 				child.unref();
 			}
 		} else if (step.kind === 'wait-ready' && config) {
-			const secret = config.setupSecret ?? '';
+			const live = config;
+			const secret = live.setupSecret ?? '';
 			const ready = await until(
-				async () => (await setupPost(config!.port, '/setup/state', secret)) === 200,
+				async () => (await setupPost(live.port, '/setup/state', secret)).status === 200,
 				10_000
 			);
 			if (!ready) {
-				say(`✕ The print agent did not start — see ${join(config.dataDir, 'agent.log')}`);
-				code = 1;
-				break;
+				say(`✕ The print agent did not start — see ${join(live.dataDir, 'agent.log')}`);
+				return false;
 			}
-			say(`● Running on http://127.0.0.1:${config.port}`);
+			say(`● Running on http://127.0.0.1:${live.port}`);
 		} else if (step.kind === 'open-setup' && config) {
 			const url = `http://127.0.0.1:${config.port}/setup#s=${config.setupSecret ?? ''}`;
 			// The key is printed only here, to the person installing — never to a log.
-			if (!openInBrowser(platform, url)) say(`Open this in the browser: ${url}`);
+			if (!(await openInBrowser(platform, url))) say(`Open this in the browser: ${url}`);
 			else say('● Opened the setup page in the browser');
 		}
+		return true;
 	}
-	if (code === 0) say('\nNext: on the till, sign in as the owner → Printer → Pair this till.');
-	await holdWindow(platform);
-	return code;
 }
 
 /** `setup` — open the setup page again, starting the agent first if it is not running. */
@@ -373,7 +437,7 @@ export async function runSetup(configPath: string): Promise<number> {
 	const secret = config.setupSecret;
 	if (
 		!(await until(
-			async () => (await setupPost(config.port, '/setup/state', secret)) === 200,
+			async () => (await setupPost(config.port, '/setup/state', secret)).status === 200,
 			10_000
 		))
 	) {
@@ -381,7 +445,7 @@ export async function runSetup(configPath: string): Promise<number> {
 		return 1;
 	}
 	const url = `http://127.0.0.1:${config.port}/setup#s=${secret}`;
-	if (!openInBrowser(platform, url)) say(`Open this in the browser: ${url}`);
+	if (!(await openInBrowser(platform, url))) say(`Open this in the browser: ${url}`);
 	return 0;
 }
 
