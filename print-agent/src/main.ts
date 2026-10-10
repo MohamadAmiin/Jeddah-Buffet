@@ -29,6 +29,7 @@ import { randomBytes } from 'node:crypto';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { nextDelay } from './autostart.ts';
+import { runInstall, runSetup, runUninstall } from './install.ts';
 import {
 	DEFAULT_AGENT_PORT,
 	initConfig,
@@ -55,6 +56,10 @@ Usage:
   node print-agent/src/main.ts run [--config <path>]
   node print-agent/src/main.ts --version
   node print-agent/src/main.ts --help
+
+The downloaded installer (matcami-print-agent) runs with no command to install
+itself for this user; its other commands are "setup" (open the setup page
+again) and "uninstall" (keeps the settings and the waiting receipts).
 
 init   writes the agent's config.json (or --config) with a fresh pairing secret and
        opens pairing. It refuses to overwrite an existing file without --force.
@@ -313,9 +318,26 @@ function main(argv: string[]): number {
 		process.stdout.write(versionLine() + '\n');
 		return 0;
 	}
+	// The downloaded file, double-clicked: install (install.ts).
+	if ((command === null && isPackaged() && flags.help !== true) || command === 'install') {
+		void runInstall().then((code) => process.exit(code));
+		return 0;
+	}
 	if (command === null || flags.help === true) {
 		process.stdout.write(USAGE);
 		return command === null && flags.help !== true ? 1 : 0;
+	}
+	if (command === 'setup') {
+		void runSetup(text(flags, 'config') ?? defaultPaths().configPath).then((code) =>
+			process.exit(code)
+		);
+		return 0;
+	}
+	if (command === 'uninstall') {
+		void runUninstall(text(flags, 'config') ?? defaultPaths().configPath).then((code) =>
+			process.exit(code)
+		);
+		return 0;
 	}
 	if (command === 'init') {
 		const { path, config } = runInit(flags);
