@@ -220,6 +220,26 @@ describe('setPrinters re-wires the queue and the drawer', () => {
 		await until(() => b.jobs.length === 1, 4000, 'the print on B');
 		expect(a.jobs).toHaveLength(0);
 	});
+
+	// What serialising buys: unserialised, both rebuilds close the same old queue
+	// and each builds its own new one, and both new queues resume the waiting
+	// job from disk — two queues on one data/, the receipt printed twice.
+	it('two rebuilds at once leave ONE queue: a waiting job prints exactly once', async () => {
+		const a = await downPrinter(48);
+		const { runtime } = setUp({ receipt: a, kitchen: null });
+		expect(await runtime.deps.submitJob(job('once', 'Exactly once'))).toBe('queued');
+		await settle();
+		const b = await startFake();
+		const [first, second] = await Promise.all([
+			runtime.deps.setPrinters({ receipt: b.cfg, kitchen: null }),
+			runtime.deps.setPrinters({ receipt: b.cfg, kitchen: null })
+		]);
+		expect(first).toEqual({ ok: true });
+		expect(second).toEqual({ ok: true });
+		await until(() => b.jobs.length >= 1, 5000, 'the waiting job on B');
+		await settle(600);
+		expect(b.jobs).toHaveLength(1);
+	});
 });
 
 describe('setOrigin', () => {
