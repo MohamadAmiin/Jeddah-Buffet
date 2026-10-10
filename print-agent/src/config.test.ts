@@ -227,6 +227,7 @@ describe('a printer on this PC in the config (feat/local-printers)', () => {
 			'   ',
 			'-Till',
 			' -Till',
+			'SomStar/draft',
 			'x'.repeat(121),
 			'a\nb',
 			'a\x7fb',

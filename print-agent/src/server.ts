@@ -85,7 +85,9 @@ export type DrawerOutcome =
 /** A paper-width change is refused while that printer has jobs encoded for the old width. */
 export type SetPrintersOutcome =
 	| { ok: true }
-	| { ok: false; error: 'jobs_waiting'; target: 'receipt' | 'kitchen'; queued: number };
+	| { ok: false; error: 'jobs_waiting'; target: 'receipt' | 'kitchen'; queued: number }
+	/** A width change on a printer on this PC whose print service could not say what it holds. */
+	| { ok: false; error: 'print_service_unavailable'; target: 'receipt' | 'kitchen' };
 
 export type AgentDeps = {
 	submitJob: (job: Job) => SubmitOutcome | Promise<SubmitOutcome>;
@@ -479,7 +481,12 @@ export function createAgentServer(getConfig: () => AgentConfig, deps: AgentDeps)
 			}
 			const outcome = await deps.setPrinters(printers);
 			if (!outcome.ok) {
-				send(409, { error: 'jobs_waiting', target: outcome.target, queued: outcome.queued });
+				send(
+					409,
+					outcome.error === 'jobs_waiting'
+						? { error: 'jobs_waiting', target: outcome.target, queued: outcome.queued }
+						: { error: outcome.error, target: outcome.target }
+				);
 				return;
 			}
 			send(200, { printers: (await deps.status()).printers });

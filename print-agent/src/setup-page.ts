@@ -489,6 +489,8 @@ export const SETUP_JS = String.raw`(function () {
 			return;
 		}
 		if (answer.status === 200) say('printersResult', '● Saved. Press Test print.');
+		else if (answer.status === 409 && answer.data && answer.data.error === 'print_service_unavailable')
+			say('printersResult', '◆ The PC’s print service did not answer — try again in a moment');
 		else if (answer.status === 409 && answer.data)
 			say(
 				'printersResult',

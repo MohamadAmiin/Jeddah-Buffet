@@ -195,7 +195,9 @@ The till shows one chip for printing, always with a glyph so colour never carrie
   for the old width. Let them print, or reconnect the printer, then change it.
 - A USB printer's waiting receipts sit in the PC's own print queue (the agent counts them in
   `waiting`), and print when the printer is back. The drawer is different: a pulse the PC's print
-  service has not printed within a few seconds is taken back, so the drawer never opens late.
+  service has not printed within 15 seconds of the sale (behind that sale's receipt and ticket) is
+  taken back, so the drawer never opens late. If it cannot be taken back, `agent.log` says
+  `DRAWER PULSE … COULD NOT BE CANCELLED`: remove that job from the PC's print queue.
 - A receipt that was waiting when the receipt printer's address changed prints on the new printer
   in full, but without the logo: the logo is checked on one printer (section 10), and the new one
   has not been checked yet.

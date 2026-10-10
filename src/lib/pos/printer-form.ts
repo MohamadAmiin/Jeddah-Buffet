@@ -133,6 +133,8 @@ export function messageFor(result: SavePrintersResult, url: string): string {
 						: 'receipts are';
 			return `◆ ${queued} ${what} waiting for the old printer. Let them print, or reconnect it, before changing the paper width.`;
 		}
+		case 'print_service_unavailable':
+			return '◆ The PC’s print service did not answer — try again in a moment';
 		case 'bad_printers':
 			return /\.name$/.test((result as { field: string }).field)
 				? '✕ Pick the printer from the list'

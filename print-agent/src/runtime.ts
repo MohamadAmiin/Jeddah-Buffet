@@ -29,7 +29,7 @@ import {
 	type AgentConfig,
 	type PrinterConfig
 } from './config.ts';
-import { listLocalPrinters, localQueued } from './local-printer.ts';
+import { listLocalPrinters, localHeld } from './local-printer.ts';
 import { createDrawer, createQueue, type Drawer, type Queue, type QueueOptions } from './queue.ts';
 import {
 	AGENT_FEATURES,
@@ -67,10 +67,10 @@ function printerFor(
 	return target === 'kitchen' ? (printers.kitchen ?? printers.receipt) : printers.receipt;
 }
 
-/** Jobs the PC's print service still holds for a printer on this PC; none for a network one. */
-async function serviceHeld(printer: PrinterConfig | null): Promise<number> {
+/** Jobs the PC's print service still holds for a printer on this PC; none for a network one; null = it did not say. */
+async function serviceHeld(printer: PrinterConfig | null): Promise<number | null> {
 	if (!printer || !isLocalPrinter(printer)) return 0;
-	return localQueued(printer).catch(() => 0);
+	return localHeld(printer).catch(() => null);
 }
 
 export function createRuntime(args: {
@@ -166,6 +166,10 @@ export function createRuntime(args: {
 								// A printer on this PC drains into the PC's print service at once, and
 								// receipts waiting THERE are laid out for the old width too (decision 2).
 								const held = await serviceHeld(printerFor(config.printers, target));
+								// No answer is not "nothing held": refuse rather than guess (decision 2).
+								if (held === null) {
+									return { ok: false, error: 'print_service_unavailable', target };
+								}
 								if (waiting[target] + held > 0) {
 									return {
 										ok: false,

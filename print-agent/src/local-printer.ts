@@ -61,7 +61,8 @@ function realExec(cmd: string, args: string[], opts: ExecOpts): Promise<ExecOutc
 		}, opts.timeoutMs);
 		child.stdout?.on('data', (c: Buffer) => (stdout += c.toString('utf8')));
 		child.stderr?.on('data', (c: Buffer) => (stderr += c.toString('utf8')));
-		child.on('error', (error) => finish(-1, error.message));
+		// Could not start at all (the tool is missing): nothing was spooled.
+		child.on('error', (error) => finish(-2, error.message));
 		child.on('close', (code) => finish(code ?? -1));
 		if (opts.stdin) {
 			child.stdin?.on('error', () => {});
@@ -159,8 +160,10 @@ if ($wait -gt 0) {
   try {
     Remove-PrintJob -PrinterName $env:MATCAMI_PRINTER -ID $job -ErrorAction Stop
   } catch {
-    # Gone already = cancelled; anything else leaves the pulse in the spooler: say so, loudly.
-    if ($_.CategoryInfo.Category -ne 'ObjectNotFound') { Write-Output "stuck $job"; exit 4 }
+    # Gone already = it printed at the deadline's edge; anything else leaves the
+    # pulse in the spooler: say so, loudly.
+    if ($_.CategoryInfo.Category -eq 'ObjectNotFound') { Write-Output "printed $job"; exit 0 }
+    Write-Output "stuck $job"; exit 4
   }
   Write-Output "cancelled $job"
   exit 3
@@ -224,14 +227,15 @@ export function parseGetPrinter(output: string): LocalPrinterInfo[] {
 const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 /**
- * The job number of one `lpstat -o` line for this printer, or null. The line
- * starts with `<dest>-<n>`, dest in the CANONICAL case; `lp` echoes the name as
- * typed. CUPS treats the two as one destination, so the compare ignores case.
+ * The job number of one `lpstat -o <dest>` line, or null. The line starts with
+ * `<dest>-<n>`; the destination is NOT compared — lpstat prints it in its own
+ * case and spelling (an instance `Name/draft` prints as `Name`), the listing is
+ * already scoped to the one destination asked for, and CUPS job numbers are
+ * unique on a server.
  */
-export function jobOf(line: string, printerName: string): number | null {
-	const head = /^(\S+)-(\d+)(?:\s|$)/.exec(line);
-	if (!head || !head[1] || !head[2]) return null;
-	return sameName(head[1], printerName) ? Number.parseInt(head[2], 10) : null;
+export function jobOf(line: string): number | null {
+	const head = /^\S+-(\d+)(?:\s|$)/.exec(line);
+	return head && head[1] ? Number.parseInt(head[1], 10) : null;
 }
 
 /** The job id `lp` names: "request id is NAME-47 (1 file(s))". */
@@ -274,17 +278,26 @@ export async function localReachable(printer: LocalPrinter): Promise<boolean> {
 
 /** Jobs the SERVICE still holds for this printer — what a receipt waits in when the printer is off. */
 export async function localQueued(printer: LocalPrinter): Promise<number> {
+	return (await localHeld(printer)) ?? 0;
+}
+
+/**
+ * The same count, or null when the service did not answer — for a decision
+ * that must not read "no answer" as "nothing held" (a paper-width change).
+ */
+export async function localHeld(printer: LocalPrinter): Promise<number | null> {
 	if (isWindows()) {
 		const out = await localIo.exec('powershell', powershellArgs(PS_STATUS), {
 			timeoutMs: 15_000,
 			env: helperEnv(printer)
 		});
+		if (out.status !== 0) return null;
 		const count = Number.parseInt(out.stdout.split('\t')[1] ?? '', 10);
-		return Number.isFinite(count) ? count : 0;
+		return Number.isFinite(count) ? count : null;
 	}
 	const out = await localIo.exec('lpstat', ['-o', printer.name], { timeoutMs: 5000 });
-	if (out.status !== 0) return 0;
-	return out.stdout.split('\n').filter((line) => jobOf(line, printer.name) !== null).length;
+	if (out.status !== 0) return null;
+	return out.stdout.split('\n').filter((line) => jobOf(line) !== null).length;
 }
 
 /**
@@ -342,6 +355,7 @@ export async function sendLocalNow(
 		if (out.status === 4)
 			throw new Error(stuckMessage(printer, /stuck (\S+)/.exec(out.stdout)?.[1] ?? '?'));
 		// Killed at the deadline: the removal is not known to have run. Say stuck.
+		// (-2 = PowerShell could not start: nothing was spooled, a plain refusal.)
 		if (out.status === -1) throw new Error(stuckMessage(printer, '?'));
 		throw new Error(
 			out.status === 3
@@ -361,17 +375,16 @@ export async function sendLocalNow(
 		throw new Error(`printer ${printer.name}: lp refused the job: ${spooled.stderr.trim()}`);
 	}
 	const number = Number.parseInt(/-(\d+)$/.exec(job)?.[1] ?? '', 10);
-	const deadline = Date.now() + timeoutMs;
+	// An id with no number cannot be watched: take it back at once.
+	const deadline = Number.isFinite(number) ? Date.now() + timeoutMs : 0;
+	const gone = (listing: string) => !listing.split('\n').some((line) => jobOf(line) === number);
 	while (Date.now() < deadline) {
 		const out = await localIo.exec('lpstat', ['-o', printer.name], { timeoutMs: 5000 });
 		// A failed or hung lpstat says NOTHING about the job — an empty answer is
 		// not "gone". Only a successful listing without the job means printed;
 		// anything else keeps waiting, and the deadline takes the job back. The
 		// job is matched by its NUMBER: lpstat prints the name in its own case.
-		if (out.status === 0) {
-			const waiting = out.stdout.split('\n').some((line) => jobOf(line, printer.name) === number);
-			if (!waiting) return;
-		}
+		if (out.status === 0 && gone(out.stdout)) return;
 		await sleep(150);
 	}
 	// The cancel must be KNOWN to have worked: a pulse left in the service would
@@ -386,6 +399,10 @@ export async function sendLocalNow(
 		}
 		await sleep(200);
 	}
+	// A cancel can fail because the job printed at the deadline's edge ("already
+	// completed"): one more look, and a listing without it means it printed.
+	const last = await localIo.exec('lpstat', ['-o', printer.name], { timeoutMs: 5000 });
+	if (last.status === 0 && gone(last.stdout)) return;
 	throw new Error(stuckMessage(printer, job));
 }
 

@@ -10,6 +10,7 @@ import {
 	jobOf,
 	listLocalPrinters,
 	localIo,
+	localHeld,
 	localQueued,
 	localReachable,
 	parseGetPrinter,
@@ -213,10 +214,50 @@ describe('sending through the service (CUPS)', () => {
 		expect(calls.find((c) => c.cmd === 'cancel')?.args).toEqual(['somstar-80mm-series-55']);
 		expect(await localQueued(typed)).toBe(1);
 		expect(await localReachable(typed)).toBe(true);
-		expect(jobOf('SomStar-80mm-Series-55  x  5  now', 'somstar-80mm-series')).toBe(55);
-		expect(jobOf('POS-80-12  x  5  now', 'POS-80')).toBe(12);
-		expect(jobOf('Other-55  x  5  now', 'SomStar-80mm-Series')).toBeNull();
-		expect(jobOf('', 'SomStar-80mm-Series')).toBeNull();
+		// The number alone: lpstat -o <dest> is scoped already, and a name ending
+		// in -<digits> still yields the job number after its last dash.
+		expect(jobOf('SomStar-80mm-Series-55  x  5  now')).toBe(55);
+		expect(jobOf('POS-80-12  x  5  now')).toBe(12);
+		expect(jobOf('SomStar-80mm-Series-55')).toBe(55);
+		expect(jobOf('')).toBeNull();
+		expect(jobOf('no job here')).toBeNull();
+	});
+
+	it('an id lp gives without a job number cannot be watched: it is cancelled at once, never read as printed', async () => {
+		answer = (c) => {
+			if (c.cmd === 'lp') return ok('request id is SomStar (0 file(s))\n');
+			if (c.cmd === 'lpstat') return ok('SomStar-80mm-Series-56  x  5  now\n');
+			if (c.cmd === 'cancel') return ok();
+			return undefined;
+		};
+		await expect(sendLocalNow(SOMSTAR, bytes, 3000)).rejects.toThrow(/cancelled/);
+		expect(calls.some((c) => c.cmd === 'lpstat')).toBe(false);
+	});
+
+	it("a cancel refused because the pulse printed at the deadline's edge is PRINTED, not stuck", async () => {
+		let cancels = 0;
+		answer = (c) => {
+			if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-57 (0 file(s))\n');
+			if (c.cmd === 'lpstat') return ok(cancels > 0 ? '' : 'SomStar-80mm-Series-57  x  5  now\n');
+			if (c.cmd === 'cancel') {
+				cancels += 1;
+				return { status: 1, stdout: '', stderr: 'cancel-job failed: Job #57 is already completed' };
+			}
+			return undefined;
+		};
+		await expect(sendLocalNow(SOMSTAR, bytes, 300)).resolves.toBeUndefined();
+	});
+
+	it('lp that could not start (status -2) is a plain refusal: nothing was spooled', async () => {
+		answer = (c) =>
+			c.cmd === 'lp' ? { status: -2, stdout: '', stderr: 'spawn lp ENOENT' } : undefined;
+		await expect(sendLocalNow(SOMSTAR, bytes, 300)).rejects.toThrow(/lp refused the job/);
+	});
+
+	it('a failed count is UNKNOWN for a decision, zero only for the chip', async () => {
+		answer = () => ({ status: 1, stdout: '', stderr: 'lpstat: Bad file descriptor' });
+		expect(await localHeld(SOMSTAR)).toBeNull();
+		expect(await localQueued(SOMSTAR)).toBe(0);
 	});
 
 	it('an lp killed at the deadline may already have spooled the pulse: reported STUCK, not refused', async () => {
@@ -419,7 +460,12 @@ describe('a receipt printer on this PC, through the queue and the drawer', () =>
 				})
 			).toBe('queued');
 			await until(() => calls.some((c) => c.cmd === 'lp'), 'the lp call');
-			await new Promise((r) => setTimeout(r, 100));
+			// Only the SERVICE holds it now: the agent's own queue folder is empty.
+			await until(
+				() =>
+					readdirSync(join(dir, 'data', 'queue')).filter((n) => n.endsWith('.json')).length === 0,
+				"the agent's own queue to drain"
+			);
 			expect(
 				await runtime.deps.setPrinters({ receipt: { ...SOMSTAR, width: 32 }, kitchen: null })
 			).toEqual({
@@ -450,7 +496,7 @@ describe('a receipt printer on this PC, through the queue and the drawer', () =>
 		const dir = tmp();
 		const q = createQueue({ dataDir: dir, printers: { receipt: SOMSTAR, kitchen: null } });
 		queues.push(q);
-		const drawer = createDrawer({ receipt: SOMSTAR, seen: q.seen, log: q.log, sendTimeoutMs: 300 });
+		const drawer = createDrawer({ receipt: SOMSTAR, seen: q.seen, log: q.log, spoolWindowMs: 300 });
 		expect(await drawer.pulse({ id: 'd3', completedAt: new Date().toISOString() })).toBe(
 			'printer_unreachable'
 		);
@@ -458,6 +504,117 @@ describe('a receipt printer on this PC, through the queue and the drawer', () =>
 		expect(log).toContain('drawer d3 refused:');
 		expect(log).toContain('DRAWER PULSE SomStar-80mm-Series-71 COULD NOT BE CANCELLED');
 		expect(q.seen.has('d3')).toBe(false);
+	});
+
+	it("a spooled pulse gets the sale's own window: at most 15 s, never past the 30 s the sale allows", async () => {
+		const seenWindows: number[] = [];
+		answer = (c) => {
+			if (c.cmd === 'lp') return ok('request id is SomStar-80mm-Series-90 (0 file(s))\n');
+			if (c.cmd === 'lpstat') return ok('');
+			return undefined;
+		};
+		const realNow = Date.now();
+		const q = createQueue({ dataDir: tmp(), printers: { receipt: SOMSTAR, kitchen: null } });
+		queues.push(q);
+		const drawer = createDrawer({ receipt: SOMSTAR, seen: q.seen, log: q.log, now: () => realNow });
+		const wrapped = localIo.exec;
+		localIo.exec = async (cmd, args, opts) => {
+			if (cmd === 'lp') seenWindows.push(opts.timeoutMs);
+			return wrapped(cmd, args, opts);
+		};
+		expect(await drawer.pulse({ id: 'w1', completedAt: new Date(realNow).toISOString() })).toBe(
+			'opened'
+		);
+		expect(
+			await drawer.pulse({ id: 'w2', completedAt: new Date(realNow - 25_000).toISOString() })
+		).toBe('opened');
+		// lp is given the window: 15 s for a fresh sale, the 5 s left for a 25 s old one.
+		expect(seenWindows).toEqual([15_000, 5_000]);
+	});
+
+	it('a submit while the print service is being counted waits for the rebuild — never encoded for the old width', async () => {
+		// Every count waits until released (the kitchen rides the receipt printer,
+		// so the service is asked once per target); after that, they answer at once.
+		const pending: Array<(out: ExecOutcome) => void> = [];
+		let released = false;
+		const release = () => {
+			released = true;
+			for (const r of pending.splice(0)) r(ok(''));
+		};
+		answer = (c) => {
+			if (c.cmd === 'lpstat' && c.args[0] === '-p') return ok(LPSTAT_P);
+			return undefined;
+		};
+		const wrapped = localIo.exec;
+		localIo.exec = (cmd, args, opts) =>
+			cmd === 'lpstat' && args[0] === '-o'
+				? released
+					? Promise.resolve(ok(''))
+					: new Promise<ExecOutcome>((r) => pending.push(r))
+				: wrapped(cmd, args, opts);
+		const dir = tmp();
+		const configPath = join(dir, 'config.json');
+		const config = createConfig({
+			origin: 'https://pos.example.com',
+			dataDir: join(dir, 'data'),
+			printers: { receipt: SOMSTAR, kitchen: null }
+		});
+		saveConfig(configPath, config);
+		const runtime = createRuntime({
+			configPath,
+			config,
+			queue: { retry: { baseMs: 5000, maxMs: 5000 } }
+		});
+		try {
+			const change = runtime.deps.setPrinters({
+				receipt: { ...SOMSTAR, width: 32 },
+				kitchen: null
+			});
+			await new Promise((r) => setImmediate(r));
+			let settled = false;
+			const submit = Promise.resolve(
+				runtime.deps.submitJob({ id: 's1', printer: 'receipt', lines: [{ text: 'x' }], cut: true })
+			).then((outcome) => ((settled = true), outcome));
+			await new Promise((r) => setTimeout(r, 50));
+			expect(settled).toBe(false);
+			release();
+			expect(await change).toEqual({ ok: true });
+			expect(await submit).toBe('queued');
+			// It went to the REBUILT queue: the printer is now 32 columns.
+			expect(runtime.config().printers.receipt).toEqual({ ...SOMSTAR, width: 32 });
+		} finally {
+			localIo.exec = wrapped;
+			await runtime.close();
+		}
+	});
+
+	it('a width change is REFUSED when the print service cannot say what it holds', async () => {
+		answer = (c) => {
+			if (c.cmd === 'lpstat' && c.args[0] === '-o')
+				return { status: 1, stdout: '', stderr: 'down' };
+			if (c.cmd === 'lpstat') return ok(LPSTAT_P);
+			return undefined;
+		};
+		const dir = tmp();
+		const configPath = join(dir, 'config.json');
+		const config = createConfig({
+			origin: 'https://pos.example.com',
+			dataDir: join(dir, 'data'),
+			printers: { receipt: SOMSTAR, kitchen: null }
+		});
+		saveConfig(configPath, config);
+		const runtime = createRuntime({ configPath, config });
+		try {
+			expect(
+				await runtime.deps.setPrinters({ receipt: { ...SOMSTAR, width: 32 }, kitchen: null })
+			).toEqual({
+				ok: false,
+				error: 'print_service_unavailable',
+				target: 'receipt'
+			});
+		} finally {
+			await runtime.close();
+		}
 	});
 
 	it('a job that carries the logo is bound to the named printer on disk, by its label', async () => {
@@ -496,7 +653,7 @@ describe('a receipt printer on this PC, through the queue and the drawer', () =>
 		};
 		const q = createQueue({ dataDir: tmp(), printers: { receipt: SOMSTAR, kitchen: null } });
 		queues.push(q);
-		const drawer = createDrawer({ receipt: SOMSTAR, seen: q.seen, log: q.log, sendTimeoutMs: 300 });
+		const drawer = createDrawer({ receipt: SOMSTAR, seen: q.seen, log: q.log, spoolWindowMs: 300 });
 		const now = () => new Date().toISOString();
 		expect(await drawer.pulse({ id: 'd1', completedAt: now() })).toBe('opened');
 		expect(Buffer.from(calls.find((c) => c.cmd === 'lp')!.opts.stdin!)).toEqual(

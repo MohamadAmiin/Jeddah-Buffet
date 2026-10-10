@@ -237,6 +237,12 @@ describe('a printer plugged into the till PC (feat/local-printers)', () => {
 		expect(localNameOf(null)).toBe('');
 	});
 
+	it('a print service that did not answer says to try again', () => {
+		expect(messageFor({ error: 'print_service_unavailable', target: 'receipt' }, URL)).toBe(
+			'◆ The PC’s print service did not answer — try again in a moment'
+		);
+	});
+
 	it('a refused name says to pick from the list; a refused address says to check it', () => {
 		expect(messageFor({ error: 'bad_printers', field: 'receipt.name' }, URL)).toBe(
 			'✕ Pick the printer from the list'

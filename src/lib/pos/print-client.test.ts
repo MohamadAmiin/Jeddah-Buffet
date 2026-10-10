@@ -402,6 +402,30 @@ describe('submitJob and pulseDrawer', () => {
 			vi.useRealTimers();
 		}
 	});
+
+	it('the drawer waits 20 s, not 5: the agent may hold a pulse up to 15 s for a printer on the till PC', async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		const { fetchFn, calls } = stubFetch([{ hang: true }]);
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+		try {
+			const pending = pulseDrawer(
+				{ id: 'o1:drawer', completedAt: new Date().toISOString() },
+				fetchFn,
+				unknown
+			);
+			for (let i = 0; i < 200 && calls.length === 0; i += 1) {
+				await new Promise((r) => setImmediate(r));
+			}
+			expect(calls).toHaveLength(1);
+			await vi.advanceTimersByTimeAsync(19_999);
+			expect(calls[0]!.init.signal!.aborted).toBe(false);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(calls[0]!.init.signal!.aborted).toBe(true);
+			expect(await pending).toEqual({ error: 'unreachable' });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });
 
 describe('localNetworkPermission', () => {

@@ -143,6 +143,13 @@ export type LocalNetworkPermission = 'granted' | 'denied' | 'prompt' | 'unknown'
 
 const STATUS_TIMEOUT_MS = 3000;
 const JOB_TIMEOUT_MS = 5000;
+/**
+ * The drawer answer can take longer than a job: for a printer on the till PC
+ * the agent waits up to 15 s (print-agent SPOOL_WINDOW_MS) for the pulse to
+ * print behind the receipt and ticket just spooled, then answers. Waiting less
+ * would read a drawer that is about to open as one that did not.
+ */
+const DRAWER_TIMEOUT_MS = 20_000;
 const TOKEN_RE = /^[0-9a-f]{64}$/;
 const URL_RE = /^http:\/\/(?:127\.0\.0\.1|localhost):(\d{4,5})$/;
 
@@ -419,6 +426,7 @@ function stateOf(body: Record<string, unknown>): AgentState {
 export type SavePrintersResult =
 	| 'saved'
 	| { error: 'jobs_waiting'; target: 'receipt' | 'kitchen'; queued: number }
+	| { error: 'print_service_unavailable'; target: 'receipt' | 'kitchen' }
 	| { error: 'bad_printers'; field: string }
 	| { error: 'unsupported' | 'unauthorized' | 'blocked' | 'unreachable' | 'not_set_up' }
 	| { error: string };
@@ -513,6 +521,12 @@ export async function savePrinters(
 	}
 	const body = await bodyOf(response);
 	if (response.status === 200) return 'saved';
+	if (response.status === 409 && body.error === 'print_service_unavailable') {
+		return {
+			error: 'print_service_unavailable',
+			target: body.target === 'kitchen' ? 'kitchen' : 'receipt'
+		};
+	}
 	if (response.status === 409 && body.error === 'jobs_waiting') {
 		return {
 			error: 'jobs_waiting',
@@ -567,7 +581,7 @@ export async function pulseDrawer(
 			settings,
 			'/drawer',
 			{ method: 'POST', body: args },
-			JOB_TIMEOUT_MS,
+			DRAWER_TIMEOUT_MS,
 			fetchFn
 		);
 	} catch {
