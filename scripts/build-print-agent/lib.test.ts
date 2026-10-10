@@ -15,6 +15,7 @@ import {
 	RCODESIGN,
 	TARGETS,
 	verifyAdHocSignature,
+	WINDOWS_VERIFIED,
 	writeZip
 } from './lib';
 
@@ -141,8 +142,9 @@ describe('verifyAdHocSignature — what macOS checks before running an ad-hoc bi
 });
 
 describe('the manifest and the pinned signer', () => {
-	it('marks both macOS files unverified until a Mac run is recorded; the rest verified', () => {
+	it('marks the macOS and Windows files unverified until a run on each is recorded; Linux verified', () => {
 		expect(MACOS_VERIFIED).toBe(false);
+		expect(WINDOWS_VERIFIED).toBe(false);
 		const manifest = buildManifest({
 			origin: 'https://pos.example.com',
 			builtAt: '2026-10-10T09:30:00.000Z',
@@ -154,7 +156,7 @@ describe('the manifest and the pinned signer', () => {
 		expect(manifest.nodeVersion).toBe(NODE_VERSION);
 		expect(manifest.files.map((f) => [f.name, f.verified])).toEqual([
 			['matcami-print-agent-linux-x64.zip', true],
-			['matcami-print-agent-windows-x64.exe', true],
+			['matcami-print-agent-windows-x64.exe', false],
 			['matcami-print-agent-macos-arm64.zip', false],
 			['matcami-print-agent-macos-x64.zip', false]
 		]);
@@ -196,7 +198,8 @@ describe('buildKey', () => {
 		bundleSha: 'a'.repeat(64),
 		origin: 'https://pos.example.com',
 		nodeVersion: NODE_VERSION,
-		scriptVersion: BUILD_SCRIPT_VERSION
+		scriptVersion: BUILD_SCRIPT_VERSION,
+		verified: { macos: false, windows: false }
 	};
 
 	it('is stable for the same inputs', () => {
@@ -204,11 +207,15 @@ describe('buildKey', () => {
 		expect(buildKey(base)).toMatch(/^[0-9a-f]{64}$/);
 	});
 
+	// A flag flipped after a real-machine run must rebuild the manifest on the
+	// next deploy, which never passes --force.
 	it.each([
 		['bundleSha', { bundleSha: 'b'.repeat(64) }],
 		['origin', { origin: 'https://other.example.com' }],
 		['nodeVersion', { nodeVersion: 'v24.22.0' }],
-		['scriptVersion', { scriptVersion: BUILD_SCRIPT_VERSION + 1 }]
+		['scriptVersion', { scriptVersion: BUILD_SCRIPT_VERSION + 1 }],
+		['the macOS flag', { verified: { macos: true, windows: false } }],
+		['the Windows flag', { verified: { macos: false, windows: true } }]
 	])('changes when %s changes', (_name, over) => {
 		expect(buildKey({ ...base, ...over })).not.toBe(buildKey(base));
 	});

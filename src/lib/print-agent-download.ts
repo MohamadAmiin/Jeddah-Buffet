@@ -40,6 +40,16 @@ export function firstRunSteps(os: AgentOs): string[] {
 	];
 }
 
+/**
+ * The mark beside an installer that has not yet been run on its own kind of PC
+ * (the manifest's `verified: false`; T-18 records the runs).
+ */
+export function notCheckedLabel(os: AgentOs): string {
+	if (os === 'macos') return 'Not yet checked on a Mac';
+	if (os === 'windows') return 'Not yet checked on Windows';
+	return 'Not yet checked on Linux';
+}
+
 /** A download's size in whole megabytes (bytes, not money). */
 export function sizeLabel(bytes: number): string {
 	return `${Math.max(1, Math.round(bytes / 1_048_576))} MB`;

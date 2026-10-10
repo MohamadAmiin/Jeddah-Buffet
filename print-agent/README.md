@@ -29,7 +29,9 @@ opens late: a pulse the agent could not send is refused, not retried.
 
 1. On the till PC, open the matcami dashboard → **POS device** → **Print agent** (or, on the till,
    signed in as the owner: **Printer**) and download the file for this PC. The page shows each
-   file's SHA-256, in case you want to compare it.
+   file's SHA-256, in case you want to compare it. A file marked `◆ Not yet checked on …` has not
+   yet been tried on that kind of PC: it installs the same way, and if it does not start, say so
+   to whoever runs your matcami server.
 2. Run it. The files are not signed yet, so the first run asks you to confirm it:
    - **Windows:** If Windows says it protected your PC, choose More info → Run anyway.
    - **Mac:** Double-click the zip, then double-click matcami-print-agent. If the Mac blocks it,

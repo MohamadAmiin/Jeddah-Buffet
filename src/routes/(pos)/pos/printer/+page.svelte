@@ -62,6 +62,7 @@
 		firstRunSteps,
 		guessPlatform,
 		isDownloadFile,
+		notCheckedLabel,
 		recommend,
 		shortOsLabel,
 		sizeLabel,
@@ -671,7 +672,7 @@
 					>
 					<p class="text-ink-2">
 						{sizeLabel(file.bytes)}{#if !file.verified}
-							· <span aria-hidden="true" class="font-mono">◆</span> Not yet checked on a Mac{/if}
+							· <span aria-hidden="true" class="font-mono">◆</span> {notCheckedLabel(file.os)}{/if}
 					</p>
 					<p class="text-ink-2 font-mono break-all">SHA-256 {file.sha256}</p>
 				</div>

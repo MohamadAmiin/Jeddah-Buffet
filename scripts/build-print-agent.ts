@@ -43,6 +43,7 @@ import {
 	BUILD_SCRIPT_VERSION,
 	buildKey,
 	buildManifest,
+	MACOS_VERIFIED,
 	NODE_VERSION,
 	RCODESIGN,
 	SEA_FUSE,
@@ -50,6 +51,7 @@ import {
 	sha256,
 	writeZip,
 	verifyAdHocSignature,
+	WINDOWS_VERIFIED,
 	type Manifest,
 	type Target
 } from './build-print-agent/lib';
@@ -419,7 +421,8 @@ async function main(): Promise<void> {
 			bundleSha,
 			origin,
 			nodeVersion: NODE_VERSION,
-			scriptVersion: BUILD_SCRIPT_VERSION
+			scriptVersion: BUILD_SCRIPT_VERSION,
+			verified: { macos: MACOS_VERIFIED, windows: WINDOWS_VERIFIED }
 		});
 		say('● Bundled the agent and made the SEA blob');
 		// The usual deploy changes neither the agent nor ORIGIN: nothing to download or build.

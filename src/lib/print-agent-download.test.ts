@@ -4,6 +4,7 @@ import {
 	firstRunSteps,
 	guessPlatform,
 	isDownloadFile,
+	notCheckedLabel,
 	osLabel,
 	recommend,
 	shortOsLabel,
@@ -17,7 +18,7 @@ const FILE = (name: string, os: DownloadFile['os'], arch: DownloadFile['arch']):
 	arch,
 	bytes: 1,
 	sha256: 'a'.repeat(64),
-	verified: os !== 'macos',
+	verified: os === 'linux',
 	url: `/downloads/print-agent/${name}`
 });
 const FILES = [
@@ -94,6 +95,12 @@ describe('the words beside the print agent downloads (print-agent-installer T-13
 		for (const os of ['windows', 'macos', 'linux'] as const) {
 			expect(firstRunSteps(os).at(-1)).toMatch(/Printer → Pair this till/);
 		}
+	});
+
+	it('marks an installer not yet run on its own kind of PC, per OS', () => {
+		expect(notCheckedLabel('macos')).toBe('Not yet checked on a Mac');
+		expect(notCheckedLabel('windows')).toBe('Not yet checked on Windows');
+		expect(notCheckedLabel('linux')).toBe('Not yet checked on Linux');
 	});
 
 	it('rounds a size to whole megabytes', () => {

@@ -275,7 +275,8 @@ describe('the /device page — the print agent installers', () => {
 				arch,
 				bytes: data.length,
 				sha256: createHash('sha256').update(data).digest('hex'),
-				verified: os !== 'macos'
+				// As the build writes it today: only Linux has been run on its own OS.
+				verified: os === 'linux'
 			};
 		});
 		writeFileSync(
@@ -312,8 +313,8 @@ describe('the /device page — the print agent installers', () => {
 		expect(result.printAgent?.files.map((f) => f.url)).toEqual(
 			NAMES.map(([name]) => `/downloads/print-agent/${name}`)
 		);
-		// The two Mac builds stay "not yet checked on a Mac" until T-18 records a run.
-		expect(result.printAgent?.files.map((f) => f.verified)).toEqual([true, true, false, false]);
+		// The Windows and the two Mac builds stay "not yet checked" until T-18 records a run.
+		expect(result.printAgent?.files.map((f) => f.verified)).toEqual([true, false, false, false]);
 	});
 
 	it('before any build there is no card data — printAgent is null', async () => {

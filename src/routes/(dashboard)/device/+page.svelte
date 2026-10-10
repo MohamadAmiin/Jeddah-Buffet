@@ -17,7 +17,7 @@
 		StatusMark,
 		Table
 	} from '$lib/components/ui';
-	import { firstRunSteps, osLabel, sizeLabel } from '$lib/print-agent-download';
+	import { firstRunSteps, notCheckedLabel, osLabel, sizeLabel } from '$lib/print-agent-download';
 
 	let { data, form } = $props();
 	let saving = $state(false);
@@ -244,7 +244,8 @@
 								<span class="text-ink-2 text-sm">{sizeLabel(file.bytes)}</span>
 								{#if !file.verified}
 									<span class="text-ink-2 text-sm"
-										><span aria-hidden="true" class="font-mono">◆</span> Not yet checked on a Mac</span
+										><span aria-hidden="true" class="font-mono">◆</span>
+										{notCheckedLabel(file.os)}</span
 									>
 								{/if}
 							</div>

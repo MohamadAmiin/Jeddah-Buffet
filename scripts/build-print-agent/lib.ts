@@ -34,6 +34,14 @@ export const RCODESIGN = {
  */
 export const MACOS_VERIFIED = false;
 
+/**
+ * False until one run of the Windows installer on a real Windows 10/11 PC is
+ * recorded (T-18). The user chose this at the final verification of
+ * tasks/print-agent-installer, 2026-10-10 ("Yes, mark Windows too"): no
+ * Windows row had run, so the Windows download is marked like the Mac ones.
+ */
+export const WINDOWS_VERIFIED = false;
+
 /** The Node.js the installer carries. The SEA blob must be made by this exact version. */
 export const NODE_VERSION = 'v24.21.0';
 
@@ -114,9 +122,23 @@ export function buildKey(parts: {
 	origin: string;
 	nodeVersion: string;
 	scriptVersion: number;
+	/**
+	 * The "checked on its own OS" flags the manifest carries. In the key so that
+	 * flipping one after a real-machine run reaches the manifest on the next
+	 * deploy — deploy.sh never passes --force, and the skip rule would keep the
+	 * old manifest.
+	 */
+	verified: { macos: boolean; windows: boolean };
 }): string {
 	return sha256(
-		[parts.bundleSha, parts.origin, parts.nodeVersion, String(parts.scriptVersion)].join('\n')
+		[
+			parts.bundleSha,
+			parts.origin,
+			parts.nodeVersion,
+			String(parts.scriptVersion),
+			`macos=${parts.verified.macos}`,
+			`windows=${parts.verified.windows}`
+		].join('\n')
 	);
 }
 
@@ -276,7 +298,7 @@ export type ManifestFile = {
 	arch: Target['arch'];
 	bytes: number;
 	sha256: string;
-	/** Run on its own OS and recorded (T-18). The macOS files stay false until then. */
+	/** Run on its own OS and recorded (T-18). The macOS and Windows files stay false until then. */
 	verified: boolean;
 };
 
@@ -312,7 +334,8 @@ export function buildManifest(args: {
 			arch: target.arch,
 			bytes,
 			sha256: hash,
-			verified: target.os === 'macos' ? MACOS_VERIFIED : true
+			verified:
+				target.os === 'macos' ? MACOS_VERIFIED : target.os === 'windows' ? WINDOWS_VERIFIED : true
 		}))
 	};
 }
