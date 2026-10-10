@@ -5,6 +5,7 @@
 //   node print-agent/src/main.ts pair [--config <path>]
 //   node print-agent/src/main.ts link [--config <path>]
 //   node print-agent/src/main.ts run [--config <path>]
+//   node print-agent/src/main.ts --version
 //   node print-agent/src/main.ts --help
 //
 // NOBODY TYPES THE PAIRING SECRET. `init` and `pair` open pairing (pairing.ts);
@@ -18,7 +19,11 @@
 // run directly by Node 24's type stripping (only erasable syntax — no enum, no
 // namespace, no parameter properties; tsconfig's erasableSyntaxOnly refuses them
 // first). `run` wires the disk queue, the drawer and the server together.
-import { resolve } from 'node:path';
+//
+// The same file is the entry point of the one-file installer (a Node 24 single
+// executable application; tasks/print-agent-installer): paths.ts decides where
+// config.json and data/ live in each mode, and the entry guard at the bottom runs
+// main() both when Node starts this file and when the installer starts.
 import {
 	DEFAULT_AGENT_PORT,
 	initConfig,
@@ -27,12 +32,9 @@ import {
 	type AgentConfig
 } from './config.ts';
 import { claimPairing, openPairing } from './pairing.ts';
+import { bakedBuild, defaultPaths, isPackaged } from './paths.ts';
 import { createDrawer, createQueue } from './queue.ts';
 import { createAgentServer, listen } from './server.ts';
-
-const HERE = import.meta.dirname;
-export const DEFAULT_CONFIG_PATH = resolve(HERE, '..', 'config.json');
-export const DEFAULT_DATA_DIR = resolve(HERE, '..', 'data');
 
 const USAGE = `matcami print agent
 
@@ -43,15 +45,17 @@ Usage:
   node print-agent/src/main.ts pair [--config <path>]
   node print-agent/src/main.ts link [--config <path>]
   node print-agent/src/main.ts run [--config <path>]
+  node print-agent/src/main.ts --version
   node print-agent/src/main.ts --help
 
-init   writes ${DEFAULT_CONFIG_PATH} (or --config) with a fresh pairing secret and
+init   writes the agent's config.json (or --config) with a fresh pairing secret and
        opens pairing. It refuses to overwrite an existing file without --force.
 pair   opens pairing: on the till, Printer → "Pair this till". It stays open
        until one till pairs — the first to ask — and then closes.
 link   prints a pairing link instead — pairs a till without opening pairing.
        The link carries the secret.
 run    starts the agent on 127.0.0.1:<port> (default ${DEFAULT_AGENT_PORT}).
+--version  prints the agent's version and, for an installer, the app address it answers.
 
 --origin        the app's https address exactly as the till opens it, e.g. https://pos.example.com
 --receipt       the receipt printer, host[:port]; the port defaults to 9100 (raw TCP)
@@ -59,8 +63,8 @@ run    starts the agent on 127.0.0.1:<port> (default ${DEFAULT_AGENT_PORT}).
 --kitchen       the kitchen printer, host[:port]; without one, kitchen tickets print on the receipt printer
 --kitchen-width the kitchen printer's columns: 32 or 48 (defaults to --width)
 --port          the agent's loopback port, 1024-65535 (default ${DEFAULT_AGENT_PORT})
---config        the config file to write or read
---force         replace an existing config (the till must be paired again)
+--config        the config file to write or read (default: the agent's config.json)
+--force        replace an existing config (the till must be paired again)
 `;
 
 type Flags = Record<string, string | true>;
@@ -149,7 +153,7 @@ export function runInit(flags: Flags): { path: string; config: AgentConfig } {
 	const receiptWidth = width(flags, 'width');
 	const kitchenAddress = text(flags, 'kitchen');
 	const portText = text(flags, 'port');
-	const path = text(flags, 'config') ?? DEFAULT_CONFIG_PATH;
+	const path = text(flags, 'config') ?? defaultPaths().configPath;
 	const config = initConfig(path, {
 		origin,
 		receipt: parsePrinterAddress(receiptAddress, receiptWidth),
@@ -157,7 +161,7 @@ export function runInit(flags: Flags): { path: string; config: AgentConfig } {
 			? parsePrinterAddress(kitchenAddress, width(flags, 'kitchen-width', receiptWidth))
 			: null,
 		port: portText === undefined ? undefined : Number.parseInt(portText, 10),
-		dataDir: DEFAULT_DATA_DIR,
+		dataDir: defaultPaths().dataDir,
 		force: flags.force === true
 	});
 	return { path, config };
@@ -188,8 +192,20 @@ async function runServer(config: AgentConfig): Promise<void> {
 	process.once('SIGTERM', shutdown);
 }
 
+/** `--version`: the protocol version, and for an installer when it was built and which app it answers. */
+export function versionLine(): string {
+	const build = bakedBuild();
+	return build
+		? `matcami print agent ${build.agentVersion} (built ${build.builtAt}) for ${build.origin}`
+		: 'matcami print agent 2 (source)';
+}
+
 function main(argv: string[]): number {
 	const { command, flags } = parseFlags(argv);
+	if (flags.version === true) {
+		process.stdout.write(versionLine() + '\n');
+		return 0;
+	}
 	if (command === null || flags.help === true) {
 		process.stdout.write(USAGE);
 		return command === null && flags.help !== true ? 1 : 0;
@@ -200,19 +216,19 @@ function main(argv: string[]): number {
 		return 0;
 	}
 	if (command === 'pair') {
-		const config = loadConfig(text(flags, 'config') ?? DEFAULT_CONFIG_PATH);
+		const config = loadConfig(text(flags, 'config') ?? defaultPaths().configPath);
 		process.stdout.write(openPairingLines(config).join('\n'));
 		return 0;
 	}
 	if (command === 'link') {
-		const config = loadConfig(text(flags, 'config') ?? DEFAULT_CONFIG_PATH);
+		const config = loadConfig(text(flags, 'config') ?? defaultPaths().configPath);
 		process.stdout.write(linkLines(config).join('\n'));
 		return 0;
 	}
 	if (command === 'run') {
 		// Loaded first so a broken file fails here, with the field named, not at
 		// the first print job.
-		const config = loadConfig(text(flags, 'config') ?? DEFAULT_CONFIG_PATH);
+		const config = loadConfig(text(flags, 'config') ?? defaultPaths().configPath);
 		void runServer(config);
 		return 0;
 	}
@@ -220,8 +236,11 @@ function main(argv: string[]): number {
 	return 1;
 }
 
-// Only when executed directly — main.test.ts imports runInit and parseFlags.
-if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename)) {
+// Only when executed — main.test.ts imports runInit and parseFlags. Node sets
+// import.meta.main on the module it started (`node print-agent/src/main.ts`);
+// inside the installer the bundle defines it away and isPackaged() is the signal.
+// A packaged process.argv is [execPath, execPath, ...args], so slice(2) holds.
+if (isPackaged() || import.meta.main) {
 	try {
 		process.exitCode = main(process.argv.slice(2));
 	} catch (error) {

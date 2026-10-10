@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig } from './config.ts';
-import { DEFAULT_CONFIG_PATH, DEFAULT_DATA_DIR, pairingLink, parseFlags, runInit } from './main.ts';
+import { pairingLink, parseFlags, runInit, versionLine } from './main.ts';
+import { defaultPaths } from './paths.ts';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -72,7 +73,7 @@ describe('runInit', () => {
 				receipt: { host: '192.168.10.50', port: 9100, width: 48 },
 				kitchen: { host: '192.168.10.51', port: 9100, width: 32 }
 			},
-			dataDir: DEFAULT_DATA_DIR
+			dataDir: defaultPaths().dataDir
 		});
 		expect(config.token).toMatch(/^[0-9a-f]{64}$/);
 		expect(loadConfig(path)).toEqual(config);
@@ -123,8 +124,14 @@ describe('runInit', () => {
 	});
 
 	it('the default paths sit beside src/, inside print-agent/', () => {
-		expect(DEFAULT_CONFIG_PATH).toMatch(/print-agent[\\/]config\.json$/);
-		expect(DEFAULT_DATA_DIR).toMatch(/print-agent[\\/]data$/);
+		expect(defaultPaths().configPath).toMatch(/print-agent[\\/]config\.json$/);
+		expect(defaultPaths().dataDir).toMatch(/print-agent[\\/]data$/);
+	});
+});
+
+describe('versionLine', () => {
+	it('says "source" when not running as the installer', () => {
+		expect(versionLine()).toBe('matcami print agent 2 (source)');
 	});
 });
 
