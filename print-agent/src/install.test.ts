@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { createConfig, type AgentConfig } from './config.ts';
-import { installedExePath, planInstall, type InstallInput, type Step } from './install.ts';
+import {
+	closingLine,
+	installedExePath,
+	planInstall,
+	type InstallInput,
+	type Step
+} from './install.ts';
 import type { BuildInfo } from './paths.ts';
 
 const BAKED: BuildInfo = {
@@ -90,6 +96,19 @@ describe('planInstall — what running the downloaded file does', () => {
 
 	it('run from the installed copy: nothing to copy', () => {
 		expect(kinds(plan({ config: installed(), exeIsInstalled: true }))).not.toContain('copy-exe');
+	});
+
+	// Found running the real Linux installer twice (T-18): an update said
+	// "Pair this till" although the till stayed paired.
+	it('asks for "Pair this till" only when the run opened pairing', () => {
+		const pair = 'Next: on the till, sign in as the owner → Printer → Pair this till.';
+		expect(closingLine(plan({ config: 'missing' }))).toBe(pair);
+		expect(closingLine(plan({ config: installed({ origin: 'https://old.example.com' }) }))).toBe(
+			pair
+		);
+		expect(closingLine(plan({ config: installed(), agentAnswering: true }))).toBe(
+			'The till stays paired: nothing to do there.'
+		);
 	});
 });
 

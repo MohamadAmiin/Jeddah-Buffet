@@ -293,9 +293,21 @@ function reportAutostart(result: AutostartResult, say: (line: string) => void): 
 		say('◆ It will not start by itself at sign-in until these are run in a terminal:');
 		for (const line of result.manual) say(`    ${line}`);
 	} else {
-		say(`◆ Could not set it to start at sign-in (${result.step}): ${result.stderr}`);
+		const why = result.stderr.trim();
+		say(`◆ Could not set it to start at sign-in (${result.step})${why ? `: ${why}` : ''}`);
 	}
 	return false;
+}
+
+/**
+ * The installer's last line. "Pair this till" only when this run opened
+ * pairing (a first install, or a new app address): an update keeps the
+ * pairing, and pressing the key then would only answer "Pairing is closed".
+ */
+export function closingLine(steps: readonly Step[]): string {
+	return steps.some((step) => step.kind === 'open-pairing')
+		? 'Next: on the till, sign in as the owner → Printer → Pair this till.'
+		: 'The till stays paired: nothing to do there.';
 }
 
 /** `install` — what running the downloaded file does. Resolves the exit code. */
@@ -339,7 +351,7 @@ export async function runInstall(): Promise<number> {
 			break;
 		}
 	}
-	if (code === 0) say('\nNext: on the till, sign in as the owner → Printer → Pair this till.');
+	if (code === 0) say(`\n${closingLine(steps)}`);
 	await holdWindow(platform);
 	return code;
 
