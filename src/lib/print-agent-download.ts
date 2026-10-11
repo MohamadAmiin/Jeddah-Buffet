@@ -21,12 +21,22 @@ export function osLabel(os: AgentOs, arch: AgentArch): string {
 	return arch === 'arm64' ? 'Mac with Apple silicon (M1 or later)' : 'Mac with Intel';
 }
 
-/** What to do the first time the file runs on that PC. */
-export function firstRunSteps(os: AgentOs): string[] {
+/**
+ * What to do the first time the file runs on that PC. `signed` is the Windows
+ * file's trusted signature: without one, Windows 11's Smart App Control blocks
+ * it outright, and the owner has to be told the two ways through.
+ */
+export function firstRunSteps(os: AgentOs, opts: { signed?: boolean } = {}): string[] {
 	const then =
 		'The agent starts when this PC signs in. Then, on the till, sign in as the owner → Printer → Pair this till.';
 	if (os === 'windows') {
-		return ['If Windows says it protected your PC, choose More info → Run anyway.', then];
+		const smartScreen = 'If Windows says it protected your PC, choose More info → Run anyway.';
+		if (opts.signed) return [smartScreen, then];
+		return [
+			smartScreen,
+			'If it says Smart App Control blocked it: this file is not signed yet, and Windows 11 with Smart App Control on runs only signed programs — there is no button to allow it. Ask whoever runs your matcami server for the signed version, or, on a PC used only as a till, turn Smart App Control off in Windows Security → App & browser control (on some Windows versions it cannot be turned back on without reinstalling Windows).',
+			then
+		];
 	}
 	if (os === 'macos') {
 		return [
@@ -38,6 +48,13 @@ export function firstRunSteps(os: AgentOs): string[] {
 		'Unzip it, then run matcami-print-agent (or right-click → Properties → allow executing, then double-click).',
 		then
 	];
+}
+
+/** The mark beside a Windows installer without a trusted signature, or null. */
+export function unsignedLabel(file: { os: AgentOs; signed?: boolean }): string | null {
+	return file.os === 'windows' && !file.signed
+		? 'Not signed yet — Smart App Control blocks it'
+		: null;
 }
 
 /**
@@ -65,6 +82,8 @@ export type DownloadFile = {
 	bytes: number;
 	sha256: string;
 	verified: boolean;
+	/** Signed with a trusted certificate (the Windows file only); absent from an older build's manifest. */
+	signed?: boolean;
 	url: string;
 };
 
@@ -90,6 +109,7 @@ export function isDownloadFile(value: unknown): value is DownloadFile {
 		typeof f.sha256 === 'string' &&
 		/^[0-9a-f]{64}$/.test(f.sha256) &&
 		typeof f.verified === 'boolean' &&
+		(f.signed === undefined || typeof f.signed === 'boolean') &&
 		typeof f.url === 'string' &&
 		f.url === `/downloads/print-agent/${f.name}`
 	);

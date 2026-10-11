@@ -7,7 +7,9 @@
 // compromised mirror would serve alongside its own binary. The values below were
 // read from https://nodejs.org/dist/v24.21.0/SHASUMS256.txt on 2026-10-10
 // (tasks/print-agent-installer/RESEARCH.md).
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { crc32, deflateRawSync } from 'node:zlib';
 
 /**
@@ -129,6 +131,12 @@ export function buildKey(parts: {
 	 * old manifest.
 	 */
 	verified: { macos: boolean; windows: boolean };
+	/**
+	 * Whether the Windows installer is signed with a trusted certificate (a
+	 * signing command is configured). In the key so that configuring signing
+	 * rebuilds an installer that was published unsigned.
+	 */
+	signedWindows: boolean;
 }): string {
 	return sha256(
 		[
@@ -137,9 +145,94 @@ export function buildKey(parts: {
 			parts.nodeVersion,
 			String(parts.scriptVersion),
 			`macos=${parts.verified.macos}`,
-			`windows=${parts.verified.windows}`
+			`windows=${parts.verified.windows}`,
+			`signed-windows=${parts.signedWindows}`
 		].join('\n')
 	);
+}
+
+// ── Windows: the Authenticode signature table ───────────────────────────────
+//
+// node.exe comes signed by the Node.js project. Injecting the agent changes the
+// file, so that signature no longer matches — and postject leaves the PE
+// header's Security directory pointing at a table that is no longer there. A
+// file that CLAIMS a signature it does not carry is worse than an unsigned one:
+// Windows treats it as tampered. So the signature is removed before injection
+// (what the Node docs do with `signtool remove /s`), leaving a cleanly unsigned
+// .exe — which is also the only state a trusted certificate can sign.
+//
+// Smart App Control (Windows 11) blocks unknown, unsigned programs outright,
+// with no "run anyway": only a signature from a certificate authority in
+// Microsoft's Trusted Root Program lets the installer run on such a PC. The
+// build signs it when PRINT_AGENT_SIGN_WINDOWS names a signing command.
+
+/** Where the PE header keeps its checksum and its Security (Authenticode) directory entry. */
+function peLayout(pe: Buffer): { checksumAt: number; securityAt: number } | null {
+	if (pe.length < 0x40 || pe.readUInt16LE(0) !== 0x5a4d) return null; // 'MZ'
+	const header = pe.readUInt32LE(0x3c);
+	if (header + 24 > pe.length || pe.readUInt32LE(header) !== 0x00004550) return null; // 'PE\0\0'
+	const optional = header + 24;
+	if (optional + 2 > pe.length) return null;
+	const magic = pe.readUInt16LE(optional);
+	const pe32plus = magic === 0x20b;
+	if (!pe32plus && magic !== 0x10b) return null;
+	const countAt = optional + (pe32plus ? 108 : 92);
+	const directories = optional + (pe32plus ? 112 : 96);
+	if (directories + 5 * 8 > pe.length || pe.readUInt32LE(countAt) < 5) return null;
+	return { checksumAt: optional + 64, securityAt: directories + 4 * 8 };
+}
+
+/**
+ * What a Windows binary says about its Authenticode signature, by structure
+ * only (the certificate chain is Windows' to check): `unsigned` — no table;
+ * `signed` — a WIN_CERTIFICATE of type PKCS_SIGNED_DATA inside the file;
+ * `corrupt` — a table entry pointing at anything else; `not-pe` otherwise.
+ */
+export function authenticodeState(pe: Buffer): 'unsigned' | 'signed' | 'corrupt' | 'not-pe' {
+	const layout = peLayout(pe);
+	if (!layout) return 'not-pe';
+	const offset = pe.readUInt32LE(layout.securityAt);
+	const size = pe.readUInt32LE(layout.securityAt + 4);
+	if (offset === 0 && size === 0) return 'unsigned';
+	if (size < 8 || offset + size > pe.length) return 'corrupt';
+	const length = pe.readUInt32LE(offset);
+	const revision = pe.readUInt16LE(offset + 4);
+	const type = pe.readUInt16LE(offset + 6);
+	return length >= 8 && length <= size && revision === 0x0200 && type === 0x0002
+		? 'signed'
+		: 'corrupt';
+}
+
+/** The PE checksum (imagehlp's CheckSumMappedFile): 16-bit one's-complement sum, plus the length. */
+export function peChecksum(pe: Buffer, checksumAt: number): number {
+	let sum = 0;
+	for (let i = 0; i < pe.length; i += 2) {
+		if (i === checksumAt || i === checksumAt + 2) continue;
+		sum += i + 1 < pe.length ? pe.readUInt16LE(i) : (pe[i] as number);
+		sum = (sum & 0xffff) + (sum >>> 16);
+	}
+	sum = (sum & 0xffff) + (sum >>> 16);
+	return (sum + pe.length) >>> 0;
+}
+
+/**
+ * A copy of the binary with its Authenticode table removed: the directory
+ * entry zeroed, the table cut off the end of the file where it lives, and the
+ * checksum recomputed. An unsigned binary comes back unchanged.
+ */
+export function stripAuthenticode(pe: Buffer): Buffer {
+	const layout = peLayout(pe);
+	if (!layout) throw new Error('not a Windows PE file');
+	const offset = pe.readUInt32LE(layout.securityAt);
+	const size = pe.readUInt32LE(layout.securityAt + 4);
+	if (offset === 0 && size === 0) return Buffer.from(pe);
+	// The table is the last thing in a signed file; anything else is left in place.
+	const out = Buffer.from(offset > 0 && offset + size === pe.length ? pe.subarray(0, offset) : pe);
+	out.writeUInt32LE(0, layout.securityAt);
+	out.writeUInt32LE(0, layout.securityAt + 4);
+	if (layout.checksumAt % 2 === 0)
+		out.writeUInt32LE(peChecksum(out, layout.checksumAt), layout.checksumAt);
+	return out;
 }
 
 // ── The ZIP the Linux and macOS installers ship in ─────────────────────────
@@ -290,6 +383,56 @@ export function verifyAdHocSignature(binary: Buffer): SignatureCheck {
 	}
 }
 
+/**
+ * The operator's signing command for the Windows installer (.env
+ * PRINT_AGENT_SIGN_WINDOWS), with `{file}` where the .exe goes — whatever the
+ * certificate provider documents for signing on Linux (osslsigncode, jsign, a
+ * cloud signing tool). Null when none is configured; an error when it cannot
+ * say where the file goes.
+ */
+export function windowsSigningCommand(env: Record<string, string | undefined>): string | null {
+	const command = (env.PRINT_AGENT_SIGN_WINDOWS ?? '').trim();
+	if (!command) return null;
+	if (!command.includes('{file}')) {
+		throw new Error('PRINT_AGENT_SIGN_WINDOWS must contain {file} where the .exe to sign goes');
+	}
+	return command;
+}
+
+/** The command line with `{file}` replaced by the path, single-quoted for sh. */
+export function signingCommandLine(command: string, file: string): string {
+	return command.split('{file}').join(`'${file.replace(/'/g, `'\\''`)}'`);
+}
+
+export type ShellRun = (line: string) => { status: number | null; output: string };
+
+const shellRun: ShellRun = (line) => {
+	const result = spawnSync('sh', ['-c', line], { encoding: 'utf8', stdio: 'pipe' });
+	return { status: result.status, output: `${result.stderr ?? ''}${result.stdout ?? ''}`.trim() };
+};
+
+/**
+ * Sign the installer with the operator's command, then check it is signed.
+ * Smart App Control lets only trusted-signed programs run, so a command that
+ * fails, or leaves the file unsigned, is an error: the build stops and the
+ * previous installers stay published.
+ */
+export function signWindowsInstaller(
+	file: string,
+	command: string,
+	run: ShellRun = shellRun
+): void {
+	const result = run(signingCommandLine(command, file));
+	if (result.status !== 0) {
+		throw new Error(
+			`signing the Windows installer failed: ${result.output || `exit ${result.status}`}`
+		);
+	}
+	const state = authenticodeState(readFileSync(file));
+	if (state !== 'signed')
+		throw new Error(`the Windows installer is ${state} after the signing command`);
+}
+
 // ── The manifest the app's download routes serve ────────────────────────────
 
 export type ManifestFile = {
@@ -300,6 +443,11 @@ export type ManifestFile = {
 	sha256: string;
 	/** Run on its own OS and recorded (T-18). The macOS and Windows files stay false until then. */
 	verified: boolean;
+	/**
+	 * Signed with a trusted certificate. Only the Windows file can be: Smart App
+	 * Control blocks it otherwise. (The macOS ad-hoc signature is not a trusted one.)
+	 */
+	signed: boolean;
 };
 
 export type Manifest = {
@@ -319,6 +467,8 @@ export function buildManifest(args: {
 	sourceSha: string;
 	buildKey: string;
 	files: Array<{ target: Target; bytes: number; sha256: string }>;
+	/** The Windows installer was signed by the configured signing command. */
+	signedWindows?: boolean;
 }): Manifest {
 	return {
 		schema: 1,
@@ -335,7 +485,8 @@ export function buildManifest(args: {
 			bytes,
 			sha256: hash,
 			verified:
-				target.os === 'macos' ? MACOS_VERIFIED : target.os === 'windows' ? WINDOWS_VERIFIED : true
+				target.os === 'macos' ? MACOS_VERIFIED : target.os === 'windows' ? WINDOWS_VERIFIED : true,
+			signed: target.os === 'windows' && args.signedWindows === true
 		}))
 	};
 }

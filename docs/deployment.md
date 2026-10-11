@@ -175,6 +175,49 @@ A failed installer build never stops the deploy: the previous set keeps being se
 The build downloads the official Node 24.21.0 binaries from nodejs.org once (cached in
 `.cache/print-agent`) and keeps the current and previous sets, about 0.5 GB together.
 
+### Signing the Windows installer (needed for Smart App Control)
+
+Windows 11 with **Smart App Control** on runs only programs Microsoft already knows or
+programs **signed with a certificate from a certificate authority in Microsoft's Trusted
+Root Program**. It blocks an unsigned installer outright: there is no "Run anyway", and
+the user cannot add an exception. An unsigned Windows installer is therefore published
+with the mark `◆ Not signed yet — Smart App Control blocks it`, and its first-run steps
+say so. SmartScreen's "Windows protected your PC" may still appear for a newly signed
+file until it builds reputation; that one has "More info → Run anyway".
+
+To sign it:
+
+1. **Get an Authenticode code-signing certificate** (OV is enough) from a certificate
+   authority in Microsoft's Trusted Root Program. Since 2023 the private key lives in a
+   hardware token or a cloud signing service, never in a file you download. Pick a
+   provider whose signing works on **Linux**, because the build runs on this server — for
+   example a cloud service usable through [jsign](https://ebourg.github.io/jsign/)
+   (Azure Artifact Signing, DigiCert KeyLocker, SSL.com eSigner, a PKCS#11 token and
+   others). Azure Artifact Signing is the cheapest, but it is offered only to
+   organisations in certain countries and to individuals in the US and Canada.
+2. **Put the signing command in `.env`** as `PRINT_AGENT_SIGN_WINDOWS`, with `{file}`
+   where the `.exe` goes. The build runs it on the freshly built installer, then checks
+   the file carries a signature; if the command fails, or leaves the file unsigned, the
+   build stops and the previous installers stay published. Use SHA-256 and a timestamp
+   server, so the signature stays valid after the certificate expires. For example, with
+   jsign and a certificate in a PKCS#12 file:
+
+   ```bash
+   PRINT_AGENT_SIGN_WINDOWS="java -jar /opt/jsign/jsign.jar --storetype PKCS12 --keystore /root/codesign.p12 --storepass '…' --alias matcami --alg SHA-256 --tsaurl http://timestamp.digicert.com {file}"
+   ```
+
+   For a cloud service, use the `--storetype` and options jsign documents for it.
+3. **Deploy.** Whether signing is configured is part of the build key, so the next
+   deploy rebuilds the installers and publishes the signed one; the `/device` card
+   drops the "not signed" mark. On Windows, the file's **Properties → Digital
+   Signatures** tab shows the signer.
+
+The Node.js binary the installer is built from comes signed by the Node.js project;
+injecting the agent would break that signature, so the build removes it first
+(`stripAuthenticode` in `scripts/build-print-agent/lib.ts`, the Node docs' `signtool
+remove /s`). Without a signing command the installer is cleanly unsigned — never a
+file whose signature is broken, which Windows treats as tampered.
+
 Receipts, kitchen tickets and the cash drawer are handled by the **print agent**
 (`print-agent/`, spec 11). It is **not** part of the server deployment: it is not in
 the Docker image and Nginx never proxies to it. It runs on **each till PC**, beside
@@ -231,6 +274,7 @@ The printing rules the code enforces, for whoever operates the till:
 | `BODY_SIZE_LIMIT` | optional | adapter-node's request body cap, default `512K`. Menu photos are capped at 400 KB (`src/lib/menu-images.ts`); do not set it lower. |
 | `LOGIN_THROTTLE_CAPACITY` | e2e only | Leave unset. Raises the per-address login throttle for the local Playwright journey; the app refuses to start with it on a non-localhost `ORIGIN`. |
 | `PRINT_AGENT_DIST` | optional | Where the download routes read the installers; default dist/print-agent/current under the app's working directory. |
+| `PRINT_AGENT_SIGN_WINDOWS` | optional | The command that signs the Windows installer, with `{file}` for the `.exe` (section 7, "Signing the Windows installer"). Unset: the installer is published unsigned, and Smart App Control blocks it. |
 
 **One open question, recorded rather than decided.** `env.ts` currently *requires*
 `MIGRATE_DATABASE_URL` at application startup, which puts the **owner** credential
