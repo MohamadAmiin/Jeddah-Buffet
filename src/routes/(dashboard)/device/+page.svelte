@@ -17,7 +17,13 @@
 		StatusMark,
 		Table
 	} from '$lib/components/ui';
-	import { firstRunSteps, notCheckedLabel, osLabel, sizeLabel } from '$lib/print-agent-download';
+	import {
+		firstRunSteps,
+		notCheckedLabel,
+		osLabel,
+		sizeLabel,
+		unsignedLabel
+	} from '$lib/print-agent-download';
 
 	let { data, form } = $props();
 	let saving = $state(false);
@@ -242,7 +248,12 @@
 									>{`Download for ${osLabel(file.os, file.arch)}`}</Button
 								>
 								<span class="text-ink-2 text-sm">{sizeLabel(file.bytes)}</span>
-								{#if !file.verified}
+								{#if unsignedLabel(file)}
+									<span class="text-ink-2 text-sm"
+										><span aria-hidden="true" class="font-mono">◆</span>
+										{unsignedLabel(file)}</span
+									>
+								{:else if !file.verified}
 									<span class="text-ink-2 text-sm"
 										><span aria-hidden="true" class="font-mono">◆</span>
 										{notCheckedLabel(file.os)}</span
@@ -262,7 +273,7 @@
 						{#each [{ os: 'windows', name: 'Windows' }, { os: 'macos', name: 'Mac' }, { os: 'linux', name: 'Linux' }] as const as entry (entry.os)}
 							<div>
 								<dt class="text-ink font-medium">{entry.name}</dt>
-								{#each firstRunSteps(entry.os) as step, i (i)}
+								{#each firstRunSteps( entry.os, { signed: data.printAgent.files.some((f) => f.os === 'windows' && f.signed) } ) as step, i (i)}
 									<dd>{step}</dd>
 								{/each}
 							</div>
