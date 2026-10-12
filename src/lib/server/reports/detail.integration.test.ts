@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { closeTestDb } from '../db/test/db';
 import {
@@ -10,11 +10,12 @@ import {
 	seedSalesRestaurant,
 	type SalesFixture
 } from '../db/test/sales';
+import { orderLineModifiers, orderLines, payments } from '../db/schema/orders';
 import { postEntry } from '../accounting/journal';
 import { cogsLines, countSurplusLines, wasteLines } from '../accounting/posting-rules';
 import { minor } from '../../money';
 import { salesReportRange } from './sales';
-import { byBusinessDate, sumDays } from './detail';
+import { byBusinessDate, countLines, countOrders, lineRows, orderRows, sumDays } from './detail';
 
 // tasks/sales-report-export T-04..T-06 — the detail queries. Zone
 // Africa/Mogadishu (UTC+3), exclusive 10% (the fixture's defaults).
@@ -220,5 +221,142 @@ describe('byBusinessDate and sumDays (T-04)', () => {
 		expect(sumDays(rows)).toEqual(
 			expect.objectContaining({ orderCount: 0, grossSales: 0n, waste: 999n })
 		);
+	});
+});
+
+describe('orderRows and lineRows (T-05)', () => {
+	it('lists paid orders with invoice numbers and local times, in sequence order', async () => {
+		await seedDays(fx);
+		const asc = await orderRows(db, fx.restaurantId, '2026-09-28', '2026-09-29', { order: 'asc' });
+		expect(asc.map((r) => r.invoiceNumber)).toEqual([
+			`${fx.deviceCode}-000001`,
+			`${fx.deviceCode}-000002`,
+			`${fx.deviceCode}-000003`
+		]);
+		// The 22:30Z card sale: 01:30 local on the 29th, business date the 28th.
+		expect(asc[1]).toEqual(
+			expect.objectContaining({
+				businessDate: '2026-09-28',
+				paidAt: '2026-09-29 01:30:00',
+				orderType: 'takeaway',
+				tableLabel: null,
+				taxMode: 'exclusive',
+				lineCount: 1,
+				subtotal: 400n,
+				tax: 40n,
+				total: 440n,
+				payments: [{ kind: 'card', name: fx.paymentMethods.card.name, amount: 440n }],
+				flagReason: null
+			})
+		);
+		expect(asc[0].tableLabel).toBe('T4');
+		const desc = await orderRows(db, fx.restaurantId, '2026-09-28', '2026-09-29', {
+			order: 'desc',
+			limit: 2
+		});
+		expect(desc.map((r) => r.invoiceSeq)).toEqual([3, 2]);
+		expect(await countOrders(db, fx.restaurantId, '2026-09-28', '2026-09-29')).toBe(3);
+		expect(await countOrders(db, fx.restaurantId, '2026-09-29', '2026-09-29')).toBe(1);
+	});
+
+	it('a second payment row never duplicates the order or its line count', async () => {
+		await seedDays(fx);
+		const [first] = await orderRows(db, fx.restaurantId, '2026-09-28', '2026-09-28', {
+			order: 'asc'
+		});
+		// An INSERT, never an update: payments are append-only (0012; invariant 2).
+		await db.insert(payments).values({
+			restaurantId: fx.restaurantId,
+			orderId: first.orderId,
+			method: 'card',
+			amountMinor: 0n,
+			tenderedMinor: null,
+			changeMinor: null,
+			paidAt: new Date('2026-09-28T17:05:00Z')
+		});
+		const rows = await orderRows(db, fx.restaurantId, '2026-09-28', '2026-09-28', {
+			order: 'asc'
+		});
+		expect(rows).toHaveLength(2);
+		expect(rows[0].payments.map((p) => p.kind)).toEqual(['cash', 'card']);
+		expect(rows[0].lineCount).toBe(1);
+	});
+
+	it('lists every line with its stored numbers, modifiers ordered by name', async () => {
+		const sid = randomUUID();
+		await openSessionAt(db, fx, {
+			posSessionId: sid,
+			openedAt: new Date('2026-09-28T05:00:00Z'),
+			openingCashMinor: 0n
+		});
+		const sale = await recordSaleAt(db, fx, {
+			posSessionId: sid,
+			occurredAt: new Date('2026-09-28T06:00:00Z'),
+			invoiceSeq: 1,
+			method: 'cash',
+			orderType: 'dine_in',
+			tableLabel: null,
+			lines: [
+				{
+					...burger(fx, 2),
+					modifiers: [
+						{
+							modifierId: fx.modifiers.extraCheese,
+							modifierName: 'Extra cheese',
+							priceDeltaMinor: 50n
+						}
+					]
+				},
+				tea(fx)
+			]
+		});
+		// A second modifier row inserted AFTER the first, named to sort before it.
+		const [line1] = await db
+			.select({ id: orderLines.id })
+			.from(orderLines)
+			.where(and(eq(orderLines.orderId, sale.orderId), eq(orderLines.lineNo, 1)));
+		await db.insert(orderLineModifiers).values({
+			restaurantId: fx.restaurantId,
+			orderLineId: line1.id,
+			modifierId: fx.modifiers.extraCheese,
+			modifierName: 'Aioli',
+			priceDeltaMinor: -25n
+		});
+
+		const lines = await lineRows(db, fx.restaurantId, '2026-09-28', '2026-09-28');
+		expect(lines).toHaveLength(2);
+		expect(lines[0]).toEqual(
+			expect.objectContaining({
+				invoiceNumber: `${fx.deviceCode}-000001`,
+				paidAt: '2026-09-28 09:00:00',
+				lineNo: 1,
+				itemName: 'Burger',
+				quantity: 2,
+				unitPrice: 800n,
+				modifiers: [
+					{ name: 'Aioli', delta: -25n },
+					{ name: 'Extra cheese', delta: 50n }
+				],
+				modifierTotal: 25n,
+				taxRateName: fx.defaultTaxRate.name,
+				taxRateBp: fx.taxRateBp,
+				discount: 0n,
+				lineAmount: 1650n
+			})
+		);
+		expect(lines[1]).toEqual(
+			expect.objectContaining({ lineNo: 2, itemName: 'Tea', modifiers: [], lineAmount: 200n })
+		);
+		expect(await countLines(db, fx.restaurantId, '2026-09-28', '2026-09-28')).toBe(2);
+	});
+
+	it('never lists another restaurant’s orders or lines', async () => {
+		await seedDays(fx);
+		const other = await seedSalesRestaurant(db);
+		expect(
+			await orderRows(db, other.restaurantId, '2026-09-28', '2026-09-29', { order: 'asc' })
+		).toEqual([]);
+		expect(await lineRows(db, other.restaurantId, '2026-09-28', '2026-09-29')).toEqual([]);
+		expect(await countLines(db, other.restaurantId, '2026-09-28', '2026-09-29')).toBe(0);
 	});
 });
