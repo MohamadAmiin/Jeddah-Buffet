@@ -33,6 +33,7 @@ export const SUPPORTED_CURRENCIES: Record<string, MoneyFormat> = {
 const DECIMAL_POINT = '.';
 const GROUP_SEPARATOR = ',';
 const MINUS_SIGN = '−'; // U+2212 MINUS SIGN, never the U+002D hyphen
+const ASCII_MINUS = '-'; // U+002D, for formatAmountPlain's machine form only
 const NO_BREAK_SPACE = ' ';
 
 /** The recorded format for `code`; an unknown code is a RangeError, never a fallback. */
@@ -40,6 +41,26 @@ export function moneyFormatFor(code: string): MoneyFormat {
 	const format = Object.hasOwn(SUPPORTED_CURRENCIES, code) ? SUPPORTED_CURRENCIES[code] : null;
 	if (!format) throw new RangeError(`unsupported currency: ${code}`);
 	return format;
+}
+
+// The digit surgery, written once for both forms below, so the screen form and
+// the machine form can never disagree on a digit.
+function digits(amount: Minor, format: MoneyFormat, group: string, minus: string): string {
+	const { exponent } = format;
+	if (!Number.isSafeInteger(exponent) || exponent < 0) {
+		throw new RangeError(`a minor-unit exponent is a whole number, not ${String(exponent)}`);
+	}
+	const negative = amount < 0n;
+	const magnitude: bigint = negative ? -amount : amount;
+	const scale = 10n ** BigInt(exponent);
+
+	const whole = (magnitude / scale).toString();
+	const major = group === '' ? whole : whole.replace(/\B(?=(\d{3})+(?!\d))/g, group);
+	const body =
+		exponent === 0
+			? major
+			: major + DECIMAL_POINT + (magnitude % scale).toString().padStart(exponent, '0');
+	return negative ? minus + body : body;
 }
 
 /**
@@ -51,20 +72,18 @@ export function moneyFormatFor(code: string): MoneyFormat {
  * would leak a stray sign into the output.
  */
 export function formatAmount(amount: Minor, format: MoneyFormat): string {
-	const { exponent } = format;
-	if (!Number.isSafeInteger(exponent) || exponent < 0) {
-		throw new RangeError(`a minor-unit exponent is a whole number, not ${String(exponent)}`);
-	}
-	const negative = amount < 0n;
-	const magnitude: bigint = negative ? -amount : amount;
-	const scale = 10n ** BigInt(exponent);
+	return digits(amount, format, GROUP_SEPARATOR, MINUS_SIGN);
+}
 
-	const major = (magnitude / scale).toString().replace(/\B(?=(\d{3})+(?!\d))/g, GROUP_SEPARATOR);
-	const body =
-		exponent === 0
-			? major
-			: major + DECIMAL_POINT + (magnitude % scale).toString().padStart(exponent, '0');
-	return negative ? MINUS_SIGN + body : body;
+/**
+ * "1234.56" and "-8.50" — THE MACHINE FORM, for a CSV cell a spreadsheet must read
+ * as a number (tasks/sales-report-export T-01). No group separator, and the ASCII
+ * U+002D HYPHEN-MINUS, because Excel, Numbers and Google Sheets parse neither a
+ * U+2212 minus nor a thousands comma inside an unquoted cell. Same digits as
+ * formatAmount, from the same helper; never a screen string.
+ */
+export function formatAmountPlain(amount: Minor, format: MoneyFormat): string {
+	return digits(amount, format, '', ASCII_MINUS);
 }
 
 /**

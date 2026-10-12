@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { minor } from './index';
-import { formatAmount, formatMoney, moneyFormatFor, SUPPORTED_CURRENCIES } from './format';
+import {
+	formatAmount,
+	formatAmountPlain,
+	formatMoney,
+	moneyFormatFor,
+	SUPPORTED_CURRENCIES
+} from './format';
 
 // Not MANDATORY (spec 29): rendering a bigint as a string is none of spec 29's six
 // areas, because this module does no arithmetic and no rounding. The tests are
@@ -80,5 +86,36 @@ describe('the currency table', () => {
 	it('refuses a code it cannot render, rather than falling back', () => {
 		expect(() => moneyFormatFor('ZZZ')).toThrow(RangeError);
 		expect(() => moneyFormatFor('toString')).toThrow(RangeError);
+	});
+});
+
+// MANDATORY (spec 29 — money arithmetic and rounding): the CSV form of an amount
+// (tasks/sales-report-export T-01). A spreadsheet reads it as a number, so the
+// digits must be exactly the bigint's and the sign an ASCII hyphen-minus.
+describe('formatAmountPlain', () => {
+	it('renders without grouping and with an ASCII minus', () => {
+		expect(formatAmountPlain(minor(0n), usd)).toBe('0.00');
+		expect(formatAmountPlain(minor(5n), usd)).toBe('0.05');
+		expect(formatAmountPlain(minor(-5n), usd)).toBe('-0.05');
+		expect(formatAmountPlain(minor(850n), usd)).toBe('8.50');
+		expect(formatAmountPlain(minor(-850n), usd)).toBe('-8.50');
+		expect(formatAmountPlain(minor(123456789n), usd)).toBe('1234567.89');
+	});
+
+	it('drops the decimal point for a zero exponent', () => {
+		expect(formatAmountPlain(minor(-1234n), { code: 'XYZ', exponent: 0 })).toBe('-1234');
+	});
+
+	it('round-trips generated amounts and agrees digit for digit with formatAmount', () => {
+		const next = generator(20261012n);
+		for (let i = 0; i < 600; i += 1) {
+			const raw = next() * next();
+			const value = minor(i % 2 === 0 ? raw : -raw);
+			const plain = formatAmountPlain(value, usd);
+			expect(plain).not.toContain(',');
+			expect(plain).not.toContain(MINUS);
+			expect(BigInt(plain.replace('.', ''))).toBe(value);
+			expect(formatAmount(value, usd).replaceAll(',', '').replace(MINUS, '-')).toBe(plain);
+		}
 	});
 });
