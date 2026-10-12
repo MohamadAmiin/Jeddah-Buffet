@@ -10,12 +10,23 @@ import {
 	seedSalesRestaurant,
 	type SalesFixture
 } from '../db/test/sales';
-import { orderLineModifiers, orderLines, payments } from '../db/schema/orders';
+import { orderLineModifiers, orderLines, orders, payments } from '../db/schema/orders';
 import { postEntry } from '../accounting/journal';
 import { cogsLines, countSurplusLines, wasteLines } from '../accounting/posting-rules';
 import { minor } from '../../money';
+import { restaurantSettings } from '../db/schema/restaurant-settings';
+import { seedTaxRate } from '../db/test/settings';
+import { updateItem } from '../menu';
 import { salesReportRange } from './sales';
-import { byBusinessDate, countLines, countOrders, lineRows, orderRows, sumDays } from './detail';
+import {
+	byBusinessDate,
+	countLines,
+	countOrders,
+	lineRows,
+	orderRows,
+	salesByTaxRate,
+	sumDays
+} from './detail';
 
 // tasks/sales-report-export T-04..T-06 — the detail queries. Zone
 // Africa/Mogadishu (UTC+3), exclusive 10% (the fixture's defaults).
@@ -358,5 +369,131 @@ describe('orderRows and lineRows (T-05)', () => {
 		).toEqual([]);
 		expect(await lineRows(db, other.restaurantId, '2026-09-28', '2026-09-29')).toEqual([]);
 		expect(await countLines(db, other.restaurantId, '2026-09-28', '2026-09-29')).toBe(0);
+	});
+});
+
+/** A second named rate on Tea, and the fixture's menu version after the bump. */
+async function reducedTea(f: SalesFixture): Promise<{ f: SalesFixture; rateId: string }> {
+	const ctx = { actorUserId: f.ownerId, ip: null, userAgent: null };
+	const rateId = await db.transaction((tx) =>
+		seedTaxRate(tx, f.restaurantId, { name: 'Reduced', rateBp: 500 }, ctx)
+	);
+	const changed = await db.transaction((tx) =>
+		updateItem(tx, f.restaurantId, f.items.tea, { taxRateId: rateId }, ctx)
+	);
+	expect('ok' in changed ? changed.ok : true).not.toBe(false);
+	const [row] = await db
+		.select({ menuVersion: restaurantSettings.menuVersion })
+		.from(restaurantSettings)
+		.where(eq(restaurantSettings.restaurantId, f.restaurantId));
+	return { f: { ...f, menuVersion: row.menuVersion }, rateId };
+}
+
+async function twoRateSale(f: SalesFixture, rateId: string) {
+	const sid = randomUUID();
+	await openSessionAt(db, f, {
+		posSessionId: sid,
+		openedAt: new Date('2026-09-28T05:00:00Z'),
+		openingCashMinor: 0n
+	});
+	await recordSaleAt(db, f, {
+		posSessionId: sid,
+		occurredAt: new Date('2026-09-28T06:00:00Z'),
+		invoiceSeq: 1,
+		method: 'cash',
+		orderType: 'takeaway',
+		tableLabel: null,
+		lines: [
+			burger(f, 2),
+			{ ...tea(f, 3), taxRateBp: 500, taxRateId: rateId, taxRateName: 'Reduced' }
+		]
+	});
+}
+
+describe('salesByTaxRate (T-06)', () => {
+	it('MANDATORY (spec 29 — tax in both modes): exclusive, one row per rate with the stored line amounts', async () => {
+		const { f, rateId } = await reducedTea(fx);
+		await twoRateSale(f, rateId);
+		const rows = await salesByTaxRate(db, f.restaurantId, '2026-09-28', '2026-09-28');
+		expect(rows).toEqual([
+			{
+				taxMode: 'exclusive',
+				taxRateName: f.defaultTaxRate.name,
+				taxRateBp: 1000,
+				lineCount: 1,
+				quantity: 2,
+				amount: 1600n
+			},
+			{
+				taxMode: 'exclusive',
+				taxRateName: 'Reduced',
+				taxRateBp: 500,
+				lineCount: 1,
+				quantity: 3,
+				amount: 600n
+			}
+		]);
+		const report = await salesReportRange(db, f.restaurantId, '2026-09-28', '2026-09-28');
+		const byItem = report.byItem.reduce((acc, r) => acc + r.amount, 0n);
+		expect(rows.reduce((acc, r) => acc + r.amount, 0n)).toBe(byItem);
+	});
+
+	it('MANDATORY (spec 29 — tax in both modes): inclusive, the rows carry the inclusive basis', async () => {
+		const inc = await seedSalesRestaurant(db, { taxMode: 'inclusive', taxRateBp: 1000 });
+		const { f, rateId } = await reducedTea(inc);
+		await twoRateSale(f, rateId);
+		const rows = await salesByTaxRate(db, f.restaurantId, '2026-09-28', '2026-09-28');
+		expect(rows.map((r) => [r.taxMode, r.taxRateName, r.amount])).toEqual([
+			['inclusive', f.defaultTaxRate.name, 1600n],
+			['inclusive', 'Reduced', 600n]
+		]);
+	});
+
+	// Lines recorded before named rates (migration 0016) carry no rate id or name and
+	// are never backfilled (invariant 2). Inserted as such: the validator of today
+	// fills the name in whenever the number matches.
+	it('a line recorded without a rate name is its own row', async () => {
+		const sid = randomUUID();
+		await openSessionAt(db, fx, {
+			posSessionId: sid,
+			openedAt: new Date('2026-09-28T05:00:00Z'),
+			openingCashMinor: 0n
+		});
+		const at = new Date('2026-09-28T06:00:00Z');
+		const [order] = await db
+			.insert(orders)
+			.values({
+				restaurantId: fx.restaurantId,
+				posSessionId: sid,
+				deviceId: fx.deviceId,
+				employeeUserId: fx.staffId,
+				orderType: 'takeaway',
+				status: 'paid',
+				taxMode: 'exclusive',
+				currencyCode: 'USD',
+				menuVersion: fx.menuVersion,
+				subtotalMinor: 800n,
+				discountMinor: 0n,
+				taxMinor: 80n,
+				totalMinor: 880n,
+				openedAt: at,
+				paidAt: at
+			})
+			.returning({ id: orders.id });
+		await db.insert(orderLines).values({
+			restaurantId: fx.restaurantId,
+			orderId: order.id,
+			lineNo: 1,
+			menuItemId: fx.items.burger,
+			itemName: 'Burger',
+			quantity: 1,
+			unitPriceMinor: 800n,
+			taxRateBp: 1000,
+			status: 'new'
+		});
+		const rows = await salesByTaxRate(db, fx.restaurantId, '2026-09-28', '2026-09-28');
+		expect(rows).toEqual([
+			expect.objectContaining({ taxRateName: null, taxRateBp: 1000, amount: 800n })
+		]);
 	});
 });

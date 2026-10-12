@@ -471,3 +471,65 @@ export async function countLines(
 	`);
 	return result.rows[0]?.n ?? 0;
 }
+
+// ── By tax rate (T-06) ──────────────────────────────────────────────────────
+
+export type TaxRateRow = {
+	taxMode: 'exclusive' | 'inclusive';
+	/** The rate's name AT THE TIME OF SALE; null on lines recorded before named rates. */
+	taxRateName: string | null;
+	taxRateBp: number;
+	lineCount: number;
+	quantity: number;
+	/** Σ line amount — the TAXABLE amount, net in exclusive mode, tax-inclusive in
+	 * inclusive mode. No per-rate TAX: it is not stored on a sale, and computing it
+	 * here would recompute money (gate decision 2). */
+	amount: Minor;
+};
+
+/** Sales per (stored tax mode, rate name, rate number) over the range. */
+export async function salesByTaxRate(
+	database: Executor,
+	restaurantId: string,
+	from: string,
+	to: string
+): Promise<TaxRateRow[]> {
+	const result = await database.execute<{
+		tax_mode: string;
+		tax_rate_name: string | null;
+		tax_rate_bp: number;
+		line_count: number;
+		quantity: number;
+		amount: string;
+	}>(sql`
+		select o.tax_mode,
+			ol.tax_rate_name,
+			ol.tax_rate_bp,
+			count(*)::int as line_count,
+			sum(ol.quantity)::int as quantity,
+			coalesce(sum((ol.unit_price_minor + coalesce(m.delta, 0)) * ol.quantity
+				- ol.discount_minor), 0)::text as amount
+		from order_lines ol
+		join orders o on o.id = ol.order_id and o.restaurant_id = ${restaurantId}
+		join pos_sessions s on s.id = o.pos_session_id and s.restaurant_id = ${restaurantId}
+		left join lateral (
+			select sum(olm.price_delta_minor) as delta
+			from order_line_modifiers olm
+			where olm.order_line_id = ol.id and olm.restaurant_id = ${restaurantId}
+		) m on true
+		where ol.restaurant_id = ${restaurantId}
+			and ol.status <> 'voided'
+			and o.status = 'paid'
+			and s.business_date between ${from} and ${to}
+		group by o.tax_mode, ol.tax_rate_name, ol.tax_rate_bp
+		order by ol.tax_rate_bp desc, ol.tax_rate_name nulls last, o.tax_mode
+	`);
+	return result.rows.map((r) => ({
+		taxMode: r.tax_mode as TaxRateRow['taxMode'],
+		taxRateName: r.tax_rate_name,
+		taxRateBp: r.tax_rate_bp,
+		lineCount: r.line_count,
+		quantity: r.quantity,
+		amount: big(r.amount)
+	}));
+}
