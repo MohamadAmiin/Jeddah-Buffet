@@ -40,7 +40,7 @@ describe('parseTheme narrows an untrusted cookie value', () => {
 describe('themeAttribute', () => {
 	it('emits nothing at all for an explicit system choice', () => {
 		// The EMPTY STRING is the system state: no attribute on <html>, so the
-		// @media (prefers-color-scheme: dark) block in tokens.css governs.
+		// @media screen and (prefers-color-scheme: dark) block in tokens.css governs.
 		expect(themeAttribute('system')).toBe('');
 	});
 

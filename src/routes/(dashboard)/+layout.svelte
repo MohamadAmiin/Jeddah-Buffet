@@ -20,7 +20,7 @@
 
 <a
 	href="#content"
-	class="focus:rounded-control focus:bg-raise sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2"
+	class="focus:rounded-control focus:bg-raise sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2 print:hidden"
 	>Skip to content</a
 >
 
@@ -28,15 +28,20 @@
      height and a sticky action bar's mt-auto works at every width. The rail has its
      own h-dvh and stays sticky without the old lg:items-start. -->
 <div class="bg-bg flex min-h-dvh flex-col lg:flex-row">
-	<Sidebar
-		variant="rail"
-		restaurantName={data.restaurantName}
-		displayName={data.displayName}
-		role={data.role}
-		pathname={page.url.pathname}
-		collapsed={data.railCollapsed}
-	/>
-	<MobileBar bind:navOpen restaurantName={data.restaurantName} displayName={data.displayName} />
+	<!-- `contents` keeps the rail and the phone bar direct flex children on screen;
+	     print:hidden drops both from paper (/reports → Save as PDF,
+	     tasks/sales-report-export T-11). -->
+	<div class="contents print:hidden">
+		<Sidebar
+			variant="rail"
+			restaurantName={data.restaurantName}
+			displayName={data.displayName}
+			role={data.role}
+			pathname={page.url.pathname}
+			collapsed={data.railCollapsed}
+		/>
+		<MobileBar bind:navOpen restaurantName={data.restaurantName} displayName={data.displayName} />
+	</div>
 	<!-- min-w-0 so a wide child shrinks instead of pushing the page sideways. -->
 	<main id="content" class="flex min-w-0 flex-1 flex-col">
 		{@render children()}

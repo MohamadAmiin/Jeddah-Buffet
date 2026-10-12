@@ -47,7 +47,7 @@ function eventFor(
 	} as unknown as RequestEvent;
 }
 
-async function status(p: Promise<unknown>): Promise<number | undefined> {
+async function status(p: unknown): Promise<number | undefined> {
 	try {
 		await p;
 		return 200;

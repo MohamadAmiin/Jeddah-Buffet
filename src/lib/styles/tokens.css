@@ -11,9 +11,10 @@
  *
  * THEME: light is the default. The viewer has THREE states, not two —
  *   bare :root                          → the COMPLETE light palette
- *   @media (prefers-color-scheme:dark)  → guarded :root:not([data-theme="light"])
+ *   @media screen and (prefers-color-scheme:dark) → guarded :root:not([data-theme="light"])
  *                                         so an explicit light choice beats a dark OS
- *   :root[data-theme="dark"]            → so an explicit dark choice wins the other way
+ *   @media screen { :root[data-theme="dark"] } → so an explicit dark choice wins the other way
+ *   (both dark layers are SCREEN ONLY: print always takes the light palette)
  * Every --c-* MUST be declared in the bare :root. One defined only inside a media
  * or [data-theme] block is invisible in the un-stamped state — the classic
  * unreadable-page bug. Contrast is verified to WCAG AA (4.5:1) at normal text size.
@@ -126,7 +127,7 @@
   --c-scrim: rgb(22 27 32 / 0.55);
 }
 
-@media (prefers-color-scheme: dark) {
+@media screen and (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
     --c-bg:#15181b; --c-bg-2:#1b1f24; --c-raise:#22272e; --c-raise-2:#2b3139;
@@ -160,30 +161,36 @@
     --c-scrim: rgb(0 0 0 / 0.6);
   }
 }
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --c-bg:#15181b; --c-bg-2:#1b1f24; --c-raise:#22272e; --c-raise-2:#2b3139;
-  --c-line:#333b44; --c-line-soft:#272d34;
-  --c-ink:#e6eaec; --c-ink-2:#a8b3bc; --c-ink-3:#97a0a8;
-  --c-accent:#5cb4c9; --c-accent-ink:#0d1416; --c-accent-soft:#16323a;
-  --c-ok:#6eac81;   --c-ok-bg:#1b2a21;
-  --c-warn:#d99a3c; --c-warn-bg:#2c2417;
-  --c-danger:#df877c; --c-danger-bg:#2c1d1b;
-  --c-st-new:#8fd2e3;     --c-st-new-bg:#243745;
-  --c-st-sent:#8fd0a0;    --c-st-sent-bg:#1f3326;
-  --c-st-voided:#e0938a;  --c-st-voided-bg:#3a2523;
-  --c-st-billed:#e8bd6b;  --c-st-billed-bg:#332a14;
-  --c-st-paid:#8fd0a0;    --c-st-paid-bg:#1f3326;
-  --c-st-offline:#e8bd6b; --c-st-offline-bg:#332a14;
-  --c-shadow-flat:     0 1px 0 rgb(255 255 255 / .04), 0 1px 2px -1px rgb(0 0 0 / .6);
-  --c-shadow-raised:   0 1px 0 rgb(255 255 255 / .04), 0 8px 24px -12px rgb(0 0 0 / .8);
-  --c-shadow-floating: 0 1px 0 rgb(255 255 255 / .06), 0 22px 50px -20px rgb(0 0 0 / .9);
-  --c-shadow: var(--c-shadow-raised);
-  --c-danger-ink:#1a0f0d;   /* 7.06 here; white would be 2.66 */
-  --c-disabled-bg:#2b3139; --c-disabled-ink:#a8b3bc;   /* 6.15 */
-  --c-rail:#1b2329; --c-rail-active:#0f6b7e; --c-rail-raise:#252f36;
-  --c-rail-ink:#ffffff; --c-rail-ink-2:#8799a4; --c-rail-line:#697981;
-  --c-scrim: rgb(0 0 0 / 0.6);
+/* SCREEN ONLY, like the media block above: paper is white, so a printed page
+ * (/reports → Save as PDF) always takes the light palette even under an explicit
+ * dark choice — dark ink on white, never light ink on white or a black A4 sheet
+ * (tasks/sales-report-export T-11). */
+@media screen {
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --c-bg:#15181b; --c-bg-2:#1b1f24; --c-raise:#22272e; --c-raise-2:#2b3139;
+    --c-line:#333b44; --c-line-soft:#272d34;
+    --c-ink:#e6eaec; --c-ink-2:#a8b3bc; --c-ink-3:#97a0a8;
+    --c-accent:#5cb4c9; --c-accent-ink:#0d1416; --c-accent-soft:#16323a;
+    --c-ok:#6eac81;   --c-ok-bg:#1b2a21;
+    --c-warn:#d99a3c; --c-warn-bg:#2c2417;
+    --c-danger:#df877c; --c-danger-bg:#2c1d1b;
+    --c-st-new:#8fd2e3;     --c-st-new-bg:#243745;
+    --c-st-sent:#8fd0a0;    --c-st-sent-bg:#1f3326;
+    --c-st-voided:#e0938a;  --c-st-voided-bg:#3a2523;
+    --c-st-billed:#e8bd6b;  --c-st-billed-bg:#332a14;
+    --c-st-paid:#8fd0a0;    --c-st-paid-bg:#1f3326;
+    --c-st-offline:#e8bd6b; --c-st-offline-bg:#332a14;
+    --c-shadow-flat:     0 1px 0 rgb(255 255 255 / .04), 0 1px 2px -1px rgb(0 0 0 / .6);
+    --c-shadow-raised:   0 1px 0 rgb(255 255 255 / .04), 0 8px 24px -12px rgb(0 0 0 / .8);
+    --c-shadow-floating: 0 1px 0 rgb(255 255 255 / .06), 0 22px 50px -20px rgb(0 0 0 / .9);
+    --c-shadow: var(--c-shadow-raised);
+    --c-danger-ink:#1a0f0d;   /* 7.06 here; white would be 2.66 */
+    --c-disabled-bg:#2b3139; --c-disabled-ink:#a8b3bc;   /* 6.15 */
+    --c-rail:#1b2329; --c-rail-active:#0f6b7e; --c-rail-raise:#252f36;
+    --c-rail-ink:#ffffff; --c-rail-ink-2:#8799a4; --c-rail-line:#697981;
+    --c-scrim: rgb(0 0 0 / 0.6);
+  }
 }
 
 /* ── 1b. THE POS DEVICE SURFACE — LIGHT, PINNED IN BOTH THEMES ───────────────

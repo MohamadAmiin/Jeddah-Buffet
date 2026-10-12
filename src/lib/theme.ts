@@ -45,7 +45,7 @@ export function parseTheme(value: string | undefined): Theme | null {
  * The attribute to stamp on <html>, or the EMPTY STRING.
  *
  * The empty string is the "system" state: no attribute at all, so the
- * @media (prefers-color-scheme: dark) block in tokens.css governs.
+ * @media screen and (prefers-color-scheme: dark) block in tokens.css governs.
  *
  * `null` means NO COOKIE — the viewer has never chosen — and that resolves to
  * DEFAULT_THEME, which is light. This is the one line that makes light the product

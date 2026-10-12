@@ -73,7 +73,7 @@ const css = stripComments(source);
 
 const bare = parseTokens(blockOf(css, ':root {'));
 // The media query wraps `:root:not([data-theme="light"])`; take the inner block.
-const mediaOuter = blockOf(css, '@media (prefers-color-scheme: dark)');
+const mediaOuter = blockOf(css, '@media screen and (prefers-color-scheme: dark)');
 const mediaDark = parseTokens(blockAt(mediaOuter, mediaOuter.indexOf(':root:not(')));
 const stampDark = parseTokens(blockOf(css, ':root[data-theme="dark"]'));
 const posScope = parseTokens(blockOf(css, '[data-surface="pos"]'));
@@ -104,7 +104,7 @@ describe('the token contract', () => {
 
 	it('declares every dark-block token in the bare :root as well', () => {
 		for (const [name, block] of [
-			['@media (prefers-color-scheme: dark)', mediaDark],
+			['@media screen and (prefers-color-scheme: dark)', mediaDark],
 			[':root[data-theme="dark"]', stampDark]
 		] as const) {
 			const missing = [...block.keys()].filter((k) => !bare.has(k));
@@ -128,7 +128,7 @@ describe('the token contract', () => {
 		);
 		expect(
 			inStampOnly,
-			`missing from @media (prefers-color-scheme: dark): ${inStampOnly.join(', ')}`
+			`missing from @media screen and (prefers-color-scheme: dark): ${inStampOnly.join(', ')}`
 		).toEqual([]);
 	});
 
@@ -464,5 +464,18 @@ describe('the element base layer', () => {
 			'src/app.css imports base.css BEFORE tokens.css. The tokens base.css references ' +
 				'would be undefined at that point and its declarations silently dropped.'
 		).toBeGreaterThan(tokensAt);
+	});
+});
+
+// tasks/sales-report-export T-11: paper is white, so both dark layers are SCREEN
+// ONLY and a printed page always takes the bare :root's light palette.
+describe('print takes the light palette', () => {
+	it('wraps the explicit dark stamp in @media screen', () => {
+		const screen = blockOf(css, '@media screen {');
+		expect(screen).toContain(':root[data-theme="dark"]');
+	});
+
+	it('has no dark media query that also matches print', () => {
+		expect(stripComments(css)).not.toMatch(/@media\s*\(prefers-color-scheme:\s*dark\)/);
 	});
 });
