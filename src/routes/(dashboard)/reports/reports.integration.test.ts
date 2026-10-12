@@ -18,7 +18,7 @@ import { minor } from '$lib/money';
 import { formatMoney, moneyFormatFor } from '$lib/money/format';
 import { restaurantSettings } from '$lib/server/db/schema/restaurant-settings';
 import { updateSettings } from '$lib/server/restaurants';
-import { load, ORDERS_SHOWN } from './+page.server';
+import { load, _ORDERS_SHOWN } from './+page.server';
 
 afterAll(async () => {
 	await closeTestDb();
@@ -260,7 +260,7 @@ describe('formatting happens in the load', () => {
 });
 
 // tasks/sales-report-export T-10 — the load over a RANGE of business dates.
-type RangeData = ReportData & {
+type RangeData = Omit<ReportData, 'byItem'> & {
 	from: string;
 	to: string;
 	singleDay: boolean;
@@ -355,7 +355,7 @@ describe('the report over a range (T-10)', () => {
 			'lines'
 		]);
 		expect(data.exports[8].query).toBe('from=2026-09-28&to=2026-09-29&section=orders');
-		expect(ORDERS_SHOWN).toBe(200);
+		expect(_ORDERS_SHOWN).toBe(200);
 	});
 
 	it('a one-day range keeps the single-day title and neighbours', async () => {

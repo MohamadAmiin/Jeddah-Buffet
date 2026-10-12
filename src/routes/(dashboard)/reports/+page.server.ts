@@ -47,8 +47,9 @@ const EXPORT_LABELS: Record<ExportSection, string> = {
 	lines: 'Order lines'
 };
 
-/** The page lists the newest orders only; the Orders download has all of them. */
-export const ORDERS_SHOWN = 200;
+/** The page lists the newest orders only; the Orders download has all of them.
+ * Underscored: SvelteKit refuses any other non-standard export from +page.server.ts. */
+export const _ORDERS_SHOWN = 200;
 
 export const load: ServerLoad = async (event) => {
 	requirePermission(event, 'admin.reports');
@@ -68,7 +69,7 @@ export const load: ServerLoad = async (event) => {
 	const profit = sumDays(days);
 	const orders = await orderRows(db, restaurantId, from, to, {
 		order: 'desc',
-		limit: ORDERS_SHOWN
+		limit: _ORDERS_SHOWN
 	});
 	const orderCount = await countOrders(db, restaurantId, from, to);
 	const taxRates = await salesByTaxRate(db, restaurantId, from, to);
