@@ -13,7 +13,7 @@ const one = (cell: ReturnType<typeof text>) => toCsv(['A'], [[cell]], usd).split
 describe('toCsv', () => {
 	it('writes a BOM, a quoted header and CRLF after every row', () => {
 		const csv = toCsv(['Item', 'Qty'], [[text('Tea'), count(3)]], usd);
-		expect(csv).toBe('﻿"Item","Qty"\r\n"Tea",3\r\n');
+		expect(csv).toBe('\uFEFF"Item","Qty"\r\n"Tea",3\r\n');
 	});
 
 	it('guards every text cell that a spreadsheet would run as a formula', () => {
@@ -29,7 +29,7 @@ describe('toCsv', () => {
 	it('quotes commas, quotes and newlines inside one cell', () => {
 		expect(one(text('Burger, large'))).toBe('"Burger, large"');
 		const csv = toCsv(['A'], [[text('two\r\nlines')]], usd);
-		expect(csv).toBe('﻿"A"\r\n"two\r\nlines"\r\n');
+		expect(csv).toBe('\uFEFF"A"\r\n"two\r\nlines"\r\n');
 	});
 
 	it('writes money and counts bare and never guards them', () => {
@@ -41,7 +41,7 @@ describe('toCsv', () => {
 
 	it('writes null as an empty cell', () => {
 		expect(toCsv(['A', 'B', 'C'], [[text(null), money(null), count(null)]], usd)).toBe(
-			'﻿"A","B","C"\r\n,,\r\n'
+			'\uFEFF"A","B","C"\r\n,,\r\n'
 		);
 	});
 

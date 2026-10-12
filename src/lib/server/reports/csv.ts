@@ -55,7 +55,7 @@ export function toCsv(
 	rows: readonly (readonly CsvCell[])[],
 	format: MoneyFormat
 ): string {
-	let out = '﻿' + header.map((h) => encodeText(h)).join(',') + '\r\n';
+	let out = '\uFEFF' + header.map((h) => encodeText(h)).join(',') + '\r\n';
 	rows.forEach((row, index) => {
 		if (row.length !== header.length) {
 			throw new RangeError(

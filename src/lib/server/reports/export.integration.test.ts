@@ -108,7 +108,7 @@ describe('buildExport', () => {
 			await seed(fx);
 			const { filename, csv } = await buildExport(db, fx.restaurantId, RANGE, section);
 			expect(filename).toBe(`matcami-sales-2026-09-28_2026-09-28-${section}.csv`);
-			expect(csv.startsWith('﻿')).toBe(true);
+			expect(csv.startsWith('\uFEFF')).toBe(true);
 			expect(csv.endsWith('\r\n')).toBe(true);
 			expect(lines(csv)[0]).toBe(HEADERS[section]);
 		}
