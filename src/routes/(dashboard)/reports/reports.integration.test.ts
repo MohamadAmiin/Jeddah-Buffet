@@ -16,7 +16,9 @@ import { posSessions } from '$lib/server/db/schema/pos-sessions';
 import type { Principal } from '$lib/server/auth/session';
 import { minor } from '$lib/money';
 import { formatMoney, moneyFormatFor } from '$lib/money/format';
-import { load } from './+page.server';
+import { restaurantSettings } from '$lib/server/db/schema/restaurant-settings';
+import { updateSettings } from '$lib/server/restaurants';
+import { load, ORDERS_SHOWN } from './+page.server';
 
 afterAll(async () => {
 	await closeTestDb();
@@ -206,6 +208,7 @@ describe('formatting happens in the load', () => {
 		expect(data.totals.tax).toBe('0.85 USD');
 		expect(data.byItem[0]).toEqual({
 			menuItemId: f.items.burger,
+			key: `${f.items.burger}:Burger:exclusive`,
 			itemName: 'Burger',
 			quantity: 1,
 			amount: '8.50'
@@ -253,5 +256,182 @@ describe('formatting happens in the load', () => {
 		const data = await asOwner(f, '?date=2026-01-01');
 		expect(data.isEmpty).toBe(true);
 		expect(data.flagged).toEqual({ count: 0, unrecordedCount: 0 });
+	});
+});
+
+// tasks/sales-report-export T-10 — the load over a RANGE of business dates.
+type RangeData = ReportData & {
+	from: string;
+	to: string;
+	singleDay: boolean;
+	title: string;
+	presets: { label: string; query: string; current: boolean }[];
+	days: { businessDate: string; orderCount: number }[];
+	profit: Record<string, { text: string; negative: boolean }>;
+	orders: { invoiceNumber: string; total: string; payment: string; orderType: string }[];
+	orderCount: number;
+	shownOrders: number;
+	taxRates: { name: string; rate: string; basis: string; amount: string }[];
+	exports: { section: string; label: string; query: string }[];
+	byItem: { itemName: string }[];
+};
+
+async function twoDays(f: SalesFixture) {
+	const s1 = randomUUID();
+	await openSessionAt(db, f, {
+		posSessionId: s1,
+		openedAt: new Date('2026-09-28T05:00:00Z'),
+		openingCashMinor: 0n
+	});
+	await burgerSale(f, s1, new Date('2026-09-28T06:00:00Z'));
+	await closeSessionAt(db, f, {
+		posSessionId: s1,
+		closedAt: new Date('2026-09-28T10:00:00Z'),
+		countedCashMinor: 935n
+	});
+	const s2 = randomUUID();
+	await openSessionAt(db, f, {
+		posSessionId: s2,
+		openedAt: new Date('2026-09-29T05:00:00Z'),
+		openingCashMinor: 0n
+	});
+	await recordSaleAt(db, f, {
+		posSessionId: s2,
+		occurredAt: new Date('2026-09-29T06:00:00Z'),
+		invoiceSeq: 2,
+		method: 'cash',
+		orderType: 'takeaway',
+		tableLabel: null,
+		lines: [
+			{
+				menuItemId: f.items.tea,
+				itemName: 'Tea',
+				quantity: 2,
+				unitPriceMinor: 200n,
+				taxRateBp: f.taxRateBp
+			}
+		]
+	});
+}
+
+describe('the report over a range (T-10)', () => {
+	it('titles, days, totals, orders, tax rates and downloads for a two-day range', async () => {
+		const f = await seedSalesRestaurant(db);
+		await twoDays(f);
+		const data = (await asOwner(f, '?from=2026-09-28&to=2026-09-29')) as RangeData;
+		expect(data.title).toBe('Sales · 2026-09-28 to 2026-09-29');
+		expect(data.singleDay).toBe(false);
+		expect(data.days.map((d) => [d.businessDate, d.orderCount])).toEqual([
+			['2026-09-28', 1],
+			['2026-09-29', 1]
+		]);
+		expect(data.totals.takings).toBe(formatMoney(minor(1375n), usd));
+		expect(data.profit.grossProfit).toEqual({
+			text: formatMoney(minor(1250n), usd),
+			negative: false
+		});
+		expect(data.orderCount).toBe(2);
+		expect(data.shownOrders).toBe(2);
+		expect(data.orders.map((o) => o.invoiceNumber)).toEqual([
+			`${f.deviceCode}-000002`,
+			`${f.deviceCode}-000001`
+		]);
+		expect(data.orders[0]).toEqual(
+			expect.objectContaining({ total: '4.40', payment: 'Cash', orderType: 'Takeaway' })
+		);
+		expect(data.taxRates).toEqual([
+			expect.objectContaining({ rate: '10.00%', basis: 'Net', amount: '12.50' })
+		]);
+		expect(data.exports.map((e) => e.section)).toEqual([
+			'summary',
+			'days',
+			'payment-methods',
+			'employees',
+			'items',
+			'categories',
+			'tax-rates',
+			'shifts',
+			'orders',
+			'lines'
+		]);
+		expect(data.exports[8].query).toBe('from=2026-09-28&to=2026-09-29&section=orders');
+		expect(ORDERS_SHOWN).toBe(200);
+	});
+
+	it('a one-day range keeps the single-day title and neighbours', async () => {
+		const f = await seedSalesRestaurant(db);
+		await twoDays(f);
+		const data = (await asOwner(f, '?from=2026-09-28&to=2026-09-28')) as RangeData;
+		expect(data.title).toBe('Sales · 2026-09-28');
+		expect(data.singleDay).toBe(true);
+		expect(data.businessDate).toBe('2026-09-28');
+		expect(data.prevDate).toBe('2026-09-27');
+		expect(data.nextDate).toBe('2026-09-29');
+	});
+
+	it('presets end on the current business date and mark the current one', async () => {
+		const f = await seedSalesRestaurant(db);
+		const { businessDate } = await openSessionAt(db, f, {
+			posSessionId: randomUUID(),
+			openedAt: new Date(Date.now() - 2 * 3_600_000),
+			openingCashMinor: 0n
+		});
+		const data = (await asOwner(f)) as RangeData;
+		expect(data.presets[0]).toEqual({
+			label: 'Today',
+			query: `from=${businessDate}&to=${businessDate}`,
+			current: true
+		});
+		expect(data.presets[1].query.endsWith(`to=${businessDate}`)).toBe(true);
+		expect(data.presets[2].query).toBe(`from=${businessDate.slice(0, 8)}01&to=${businessDate}`);
+	});
+
+	it('a range over 366 days is a 400', async () => {
+		const f = await seedSalesRestaurant(db);
+		expect((await thrown(asOwner(f, '?from=2025-01-01&to=2026-09-28'))).status).toBe(400);
+	});
+
+	it('MANDATORY (spec 29 — tax in both modes): a mode switch inside the range labels the column Amount and each row', async () => {
+		const f = await seedSalesRestaurant(db);
+		const sid = randomUUID();
+		await openSessionAt(db, f, {
+			posSessionId: sid,
+			openedAt: new Date('2026-09-28T05:00:00Z'),
+			openingCashMinor: 0n
+		});
+		await burgerSale(f, sid, new Date('2026-09-28T06:00:00Z'));
+		const ctx = { actorUserId: f.ownerId, ip: null, userAgent: null };
+		await db.transaction((tx) => updateSettings(tx, f.restaurantId, { taxMode: 'inclusive' }, ctx));
+		const [row] = await db
+			.select({ menuVersion: restaurantSettings.menuVersion })
+			.from(restaurantSettings)
+			.where(eq(restaurantSettings.restaurantId, f.restaurantId));
+		await recordSaleAt(
+			db,
+			{ ...f, taxMode: 'inclusive', menuVersion: row.menuVersion },
+			{
+				posSessionId: sid,
+				occurredAt: new Date('2026-09-28T07:00:00Z'),
+				invoiceSeq: 2,
+				method: 'cash',
+				orderType: 'takeaway',
+				tableLabel: null,
+				lines: [
+					{
+						menuItemId: f.items.burger,
+						itemName: 'Burger',
+						quantity: 1,
+						unitPriceMinor: 800n,
+						taxRateBp: f.taxRateBp
+					}
+				]
+			}
+		);
+		const data = (await asOwner(f, '?date=2026-09-28')) as RangeData;
+		expect(data.itemAmountLabel).toBe('Amount');
+		expect(data.byItem.map((r) => r.itemName).sort()).toEqual([
+			'Burger (incl. tax)',
+			'Burger (net)'
+		]);
 	});
 });
