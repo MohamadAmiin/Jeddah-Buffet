@@ -15,7 +15,9 @@ import { seedPaymentMethod } from '../db/test/settings';
 import { orders, payments } from '../db/schema/orders';
 import { archivePaymentMethod, updatePaymentMethod } from '../restaurants';
 import { ORDER_TYPES } from '../../sync-ops';
-import { defaultReportDate, salesReport } from './sales';
+import { restaurantSettings } from '../db/schema/restaurant-settings';
+import { updateSettings } from '../restaurants';
+import { defaultReportDate, salesReport, salesReportRange } from './sales';
 
 afterAll(async () => {
 	await closeTestDb();
@@ -261,6 +263,7 @@ describe('salesReport — totals and business date grouping', () => {
 		expect(teaRow).toEqual({
 			menuItemId: fx.items.tea,
 			itemName: 'Tea',
+			taxMode: 'exclusive',
 			quantity: 3,
 			amount: 600n
 		});
@@ -415,8 +418,14 @@ describe('salesReport — totals and business date grouping', () => {
 			{ userId: fx.staffId, displayName: 'Sam', amount: 3355n, count: 3 }
 		]);
 		expect(report.byItem).toEqual([
-			{ menuItemId: fx.items.burger, itemName: 'Burger', quantity: 3, amount: 2450n },
-			{ menuItemId: fx.items.tea, itemName: 'Tea', quantity: 3, amount: 600n }
+			{
+				menuItemId: fx.items.burger,
+				itemName: 'Burger',
+				taxMode: 'exclusive',
+				quantity: 3,
+				amount: 2450n
+			},
+			{ menuItemId: fx.items.tea, itemName: 'Tea', taxMode: 'exclusive', quantity: 3, amount: 600n }
 		]);
 		const totalUnits = report.byItem.reduce((acc, r) => acc + r.quantity, 0);
 		expect(totalUnits).toBe(6);
@@ -580,7 +589,13 @@ describe('salesReport — tenant isolation and edge cases', () => {
 		expect(otherReport.totals.takings).toBe(999n);
 		expect(otherReport.totals.takings).toBe(otherReport.totals.netSales + otherReport.totals.tax);
 		expect(otherReport.byItem).toEqual([
-			{ menuItemId: other.items.special, itemName: 'Special', quantity: 1, amount: 999n }
+			{
+				menuItemId: other.items.special,
+				itemName: 'Special',
+				taxMode: 'inclusive',
+				quantity: 1,
+				amount: 999n
+			}
 		]);
 		// T-17: every method in its report is one of ITS methods.
 		const otherMethodIds = Object.values(other.paymentMethods).map((m) => m.id);
@@ -636,5 +651,107 @@ describe('MANDATORY (spec 29) — money arithmetic', () => {
 		expect(typeof report.byTender[0].amount).toBe('bigint');
 		expect(typeof report.byPaymentMethod[0].amount).toBe('bigint');
 		expect(() => JSON.stringify(report)).toThrow();
+	});
+});
+
+// tasks/sales-report-export T-03 — every section over a RANGE of business dates.
+describe('salesReportRange', () => {
+	it('a two-day range is the sum of its two single days', async () => {
+		await seedThreeSessions(fx);
+		const d28 = await salesReport(db, fx.restaurantId, '2026-09-28');
+		const d29 = await salesReport(db, fx.restaurantId, '2026-09-29');
+		const range = await salesReportRange(db, fx.restaurantId, '2026-09-28', '2026-09-29');
+		expect(range.from).toBe('2026-09-28');
+		expect(range.to).toBe('2026-09-29');
+		for (const key of ['grossSales', 'discounts', 'netSales', 'tax', 'takings'] as const) {
+			expect(range.totals[key]).toBe(d28.totals[key] + d29.totals[key]);
+		}
+		expect(range.totals.orderCount).toBe(d28.totals.orderCount + d29.totals.orderCount);
+		for (const method of ['cash', 'card', 'mobile'] as const) {
+			const pick = (r: typeof range) => r.byTender.find((t) => t.method === method)!;
+			expect(pick(range).amount).toBe(pick(d28).amount + pick(d29).amount);
+		}
+		expect(range.sessions.map((s) => s.businessDate)).toEqual([
+			'2026-09-28',
+			'2026-09-28',
+			'2026-09-29'
+		]);
+		expect(range.taxModes).toEqual(['exclusive']);
+	});
+
+	it('the 01:30 sale stays on the 28th: present in 28..28, absent from 29..29', async () => {
+		await seedThreeSessions(fx);
+		const tea = (r: Awaited<ReturnType<typeof salesReportRange>>) =>
+			r.byItem.find((row) => row.itemName === 'Tea');
+		expect(tea(await salesReportRange(db, fx.restaurantId, '2026-09-28', '2026-09-28'))).toEqual(
+			expect.objectContaining({ quantity: 3, amount: 600n })
+		);
+		expect(
+			tea(await salesReportRange(db, fx.restaurantId, '2026-09-29', '2026-09-29'))
+		).toBeUndefined();
+	});
+
+	it('MANDATORY (spec 29 — tax in both modes): a mode switch inside the range splits item and category rows by STORED mode', async () => {
+		const s1 = randomUUID();
+		await openSessionAt(db, fx, {
+			posSessionId: s1,
+			openedAt: new Date('2026-09-28T05:00:00Z'),
+			openingCashMinor: 0n
+		});
+		const burger = (unit: bigint) => [
+			{
+				menuItemId: fx.items.burger,
+				itemName: 'Burger',
+				quantity: 1,
+				unitPriceMinor: unit,
+				taxRateBp: fx.taxRateBp
+			}
+		];
+		await recordSaleAt(db, fx, {
+			posSessionId: s1,
+			occurredAt: new Date('2026-09-28T06:00:00Z'),
+			invoiceSeq: 1,
+			method: 'cash',
+			orderType: 'takeaway',
+			tableLabel: null,
+			lines: burger(800n)
+		});
+		const ctx = { actorUserId: fx.ownerId, ip: null, userAgent: null };
+		const switched = await db.transaction((tx) =>
+			updateSettings(tx, fx.restaurantId, { taxMode: 'inclusive' }, ctx)
+		);
+		expect(switched.ok).toBe(true);
+		const [row] = await db
+			.select({ menuVersion: restaurantSettings.menuVersion })
+			.from(restaurantSettings)
+			.where(eq(restaurantSettings.restaurantId, fx.restaurantId));
+		const inclusive: SalesFixture = { ...fx, taxMode: 'inclusive', menuVersion: row.menuVersion };
+		await recordSaleAt(db, inclusive, {
+			posSessionId: s1,
+			occurredAt: new Date('2026-09-28T07:00:00Z'),
+			invoiceSeq: 2,
+			method: 'cash',
+			orderType: 'takeaway',
+			tableLabel: null,
+			lines: burger(800n)
+		});
+
+		const range = await salesReportRange(db, fx.restaurantId, '2026-09-28', '2026-09-28');
+		expect(range.taxModes).toEqual(['exclusive', 'inclusive']);
+		const burgers = range.byItem.filter((r) => r.itemName === 'Burger');
+		expect(burgers.map((r) => [r.taxMode, r.quantity, r.amount]).sort()).toEqual([
+			['exclusive', 1, 800n],
+			['inclusive', 1, 800n]
+		]);
+		expect(range.byCategory.map((r) => r.taxMode).sort()).toEqual(['exclusive', 'inclusive']);
+	});
+
+	it('rejects a bad shape and a reversed range', async () => {
+		await expect(salesReportRange(db, fx.restaurantId, '2026-9-28', '2026-09-29')).rejects.toThrow(
+			RangeError
+		);
+		await expect(salesReportRange(db, fx.restaurantId, '2026-09-29', '2026-09-28')).rejects.toThrow(
+			RangeError
+		);
 	});
 });

@@ -10,7 +10,7 @@
 //
 // Spec 10, 17, 25, 26, 27. Invariants 1, 7, 11.
 
-import { and, eq, isNull, or, sql } from 'drizzle-orm';
+import { and, between, eq, isNull, or, sql } from 'drizzle-orm';
 import type { Executor } from '../auth/session';
 import { restaurantSettings } from '../db/schema/restaurant-settings';
 import { orders, orderLines, orderLineModifiers, payments } from '../db/schema/orders';
@@ -23,8 +23,15 @@ import { menuItems, menuCategories } from '../db/schema/menu';
 import { minor, subtract, type Minor } from '../../money';
 import { ORDER_TYPES, type OrderType } from '../../sync-ops';
 
-export type SalesReport = {
-	businessDate: string;
+export type TaxModeLiteral = 'exclusive' | 'inclusive';
+
+// tasks/sales-report-export T-03: every section covers an inclusive RANGE of
+// business dates. A single day is the range from = to.
+export type SalesRangeReport = {
+	from: string;
+	to: string;
+	/** The DISTINCT stored orders.tax_mode of the range's paid orders, sorted. */
+	taxModes: TaxModeLiteral[];
 	totals: {
 		grossSales: Minor;
 		discounts: Minor;
@@ -44,10 +51,25 @@ export type SalesReport = {
 	}[];
 	byOrderType: { orderType: OrderType; amount: Minor; count: number }[];
 	byEmployee: { userId: string | null; displayName: string; amount: Minor; count: number }[];
-	byItem: { menuItemId: string; itemName: string; quantity: number; amount: Minor }[];
-	byCategory: { categoryId: string | null; name: string; quantity: number; amount: Minor }[];
+	// Split by the order's STORED tax mode: an amount is net in exclusive mode and
+	// tax-inclusive in inclusive mode, so rows of the two are never summed together.
+	byItem: {
+		menuItemId: string;
+		itemName: string;
+		taxMode: TaxModeLiteral;
+		quantity: number;
+		amount: Minor;
+	}[];
+	byCategory: {
+		categoryId: string | null;
+		name: string;
+		taxMode: TaxModeLiteral;
+		quantity: number;
+		amount: Minor;
+	}[];
 	sessions: {
 		id: string;
+		businessDate: string;
 		deviceCode: string;
 		openedAt: Date;
 		closedAt: Date | null;
@@ -59,6 +81,11 @@ export type SalesReport = {
 	}[];
 	flagged: { count: number; unrecordedCount: number };
 };
+
+/** One business date: the range from = to, plus the date itself. */
+export type SalesReport = SalesRangeReport & { businessDate: string };
+
+const DATE_SHAPE = /^\d{4}-\d{2}-\d{2}$/;
 
 // The name of a "by payment method" row that has no method row: card and mobile
 // payments recorded before named methods (tasks/settings-tax-payments-receipt),
@@ -98,23 +125,54 @@ export async function defaultReportDate(
 	return fallback.rows[0].business_date;
 }
 
+/** The report for one business date — the range from = to = businessDate. */
 export async function salesReport(
 	database: Executor,
 	restaurantId: string,
 	businessDate: string
 ): Promise<SalesReport> {
-	if (!/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) {
+	if (!DATE_SHAPE.test(businessDate)) {
 		throw new RangeError(`businessDate must be YYYY-MM-DD, got ${JSON.stringify(businessDate)}`);
 	}
+	const report = await salesReportRange(database, restaurantId, businessDate, businessDate);
+	return { ...report, businessDate };
+}
+
+/** Every section over the inclusive range of business dates [from, to]. */
+export async function salesReportRange(
+	database: Executor,
+	restaurantId: string,
+	from: string,
+	to: string
+): Promise<SalesRangeReport> {
+	for (const [name, value] of [
+		['from', from],
+		['to', to]
+	] as const) {
+		if (!DATE_SHAPE.test(value)) {
+			throw new RangeError(`${name} must be YYYY-MM-DD, got ${JSON.stringify(value)}`);
+		}
+	}
+	// YYYY-MM-DD strings order the same way as the dates they name.
+	if (from > to) throw new RangeError(`from (${from}) is after to (${to})`);
 
 	// Written once here, reused by every section — no query can drift to a
 	// timestamp cast.
 	const salesFilter = and(
 		eq(orders.restaurantId, restaurantId),
 		eq(orders.status, 'paid'),
-		eq(posSessions.businessDate, businessDate),
+		between(posSessions.businessDate, from, to),
 		eq(posSessions.restaurantId, restaurantId)
 	);
+
+	const modeRows = await database
+		.selectDistinct({ taxMode: orders.taxMode })
+		.from(orders)
+		.innerJoin(posSessions, eq(posSessions.id, orders.posSessionId))
+		.where(salesFilter)
+		.orderBy(orders.taxMode);
+	// orders_tax_mode_valid admits exactly these two literals.
+	const taxModes = modeRows.map((r) => r.taxMode as TaxModeLiteral);
 
 	// TOTALS.
 	const totalsRows = await database
@@ -278,6 +336,7 @@ export async function salesReport(
 	const itemRows = await database.execute<{
 		menu_item_id: string;
 		item_name: string;
+		tax_mode: string;
 		quantity: number;
 		amount: string;
 	}>(sql`
@@ -290,6 +349,7 @@ export async function salesReport(
 		select
 			${orderLines.menuItemId} as menu_item_id,
 			${orderLines.itemName} as item_name,
+			${orders.taxMode} as tax_mode,
 			sum(${orderLines.quantity})::int as quantity,
 			coalesce(sum(
 				(${orderLines.unitPriceMinor} + coalesce(m.delta, 0)) * ${orderLines.quantity}
@@ -302,15 +362,16 @@ export async function salesReport(
 		where ${orders.restaurantId} = ${restaurantId}
 			and ${orders.status} = 'paid'
 			and ${posSessions.restaurantId} = ${restaurantId}
-			and ${posSessions.businessDate} = ${businessDate}
+			and ${posSessions.businessDate} between ${from} and ${to}
 			and ${orderLines.restaurantId} = ${restaurantId}
 			and ${orderLines.status} <> 'voided'
-		group by ${orderLines.menuItemId}, ${orderLines.itemName}
-		order by amount desc, ${orderLines.itemName} asc
+		group by ${orderLines.menuItemId}, ${orderLines.itemName}, ${orders.taxMode}
+		order by amount desc, ${orderLines.itemName} asc, ${orders.taxMode} asc
 	`);
 	const byItem: SalesReport['byItem'] = itemRows.rows.map((r) => ({
 		menuItemId: r.menu_item_id,
 		itemName: r.item_name,
+		taxMode: r.tax_mode as TaxModeLiteral,
 		quantity: r.quantity,
 		amount: minor(BigInt(r.amount))
 	}));
@@ -321,6 +382,7 @@ export async function salesReport(
 	const categoryRows = await database.execute<{
 		category_id: string | null;
 		name: string | null;
+		tax_mode: string;
 		quantity: number;
 		amount: string;
 	}>(sql`
@@ -333,6 +395,7 @@ export async function salesReport(
 		select
 			c.id as category_id,
 			c.name as name,
+			${orders.taxMode} as tax_mode,
 			sum(${orderLines.quantity})::int as quantity,
 			coalesce(sum(
 				(${orderLines.unitPriceMinor} + coalesce(m.delta, 0)) * ${orderLines.quantity}
@@ -348,15 +411,16 @@ export async function salesReport(
 		where ${orders.restaurantId} = ${restaurantId}
 			and ${orders.status} = 'paid'
 			and ${posSessions.restaurantId} = ${restaurantId}
-			and ${posSessions.businessDate} = ${businessDate}
+			and ${posSessions.businessDate} between ${from} and ${to}
 			and ${orderLines.restaurantId} = ${restaurantId}
 			and ${orderLines.status} <> 'voided'
-		group by c.id, c.name
-		order by amount desc, coalesce(c.name, '') asc
+		group by c.id, c.name, ${orders.taxMode}
+		order by amount desc, coalesce(c.name, '') asc, ${orders.taxMode} asc
 	`);
 	const byCategory: SalesReport['byCategory'] = categoryRows.rows.map((r) => ({
 		categoryId: r.category_id,
 		name: r.name ?? 'Uncategorised',
+		taxMode: r.tax_mode as TaxModeLiteral,
 		quantity: r.quantity,
 		amount: minor(BigInt(r.amount))
 	}));
@@ -365,6 +429,7 @@ export async function salesReport(
 	const sessionRows = await database
 		.select({
 			id: posSessions.id,
+			businessDate: posSessions.businessDate,
 			deviceCode: posDevices.deviceCode,
 			openedAt: posSessions.openedAt,
 			closedAt: posSessions.closedAt,
@@ -377,11 +442,12 @@ export async function salesReport(
 		.from(posSessions)
 		.innerJoin(posDevices, eq(posDevices.id, posSessions.deviceId))
 		.where(
-			and(eq(posSessions.restaurantId, restaurantId), eq(posSessions.businessDate, businessDate))
+			and(eq(posSessions.restaurantId, restaurantId), between(posSessions.businessDate, from, to))
 		)
-		.orderBy(sql`${posSessions.openedAt} asc`);
+		.orderBy(sql`${posSessions.businessDate} asc`, sql`${posSessions.openedAt} asc`);
 	const sessions: SalesReport['sessions'] = sessionRows.map((s) => ({
 		id: s.id,
+		businessDate: s.businessDate,
 		deviceCode: s.deviceCode,
 		openedAt: s.openedAt,
 		closedAt: s.closedAt,
@@ -403,7 +469,7 @@ export async function salesReport(
 		inner join ${posSessions} on ${posSessions.id} = ${posSyncOps.posSessionId}
 			and ${posSessions.restaurantId} = ${restaurantId}
 		where ${posSyncOps.restaurantId} = ${restaurantId}
-			and ${posSessions.businessDate} = ${businessDate}
+			and ${posSessions.businessDate} between ${from} and ${to}
 			and ${posSyncOps.status} <> 'accepted'
 			and ${posSyncOps.resolvedAt} is null
 	`);
@@ -414,7 +480,9 @@ export async function salesReport(
 	};
 
 	return {
-		businessDate,
+		from,
+		to,
+		taxModes,
 		totals: { grossSales, discounts, netSales, tax, takings, orderCount },
 		byTender,
 		byPaymentMethod,
