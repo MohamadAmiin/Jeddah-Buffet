@@ -117,6 +117,23 @@ export type AuditEvent =
 			event: 'sale.flagged';
 			details: { deviceCode: string; invoiceNumber: string; flags: string[] };
 	  }
+	// tasks/bill-tax-override (T-08): a cashier made the whole bill tax-exempt. The
+	// rate and reason are the TILL's (what the receipt printed); amounts are decimal
+	// strings. Written with clientOpId null, like sale.flagged: sale.recorded owns
+	// the op's one (device_id, client_op_id) row.
+	| {
+			event: 'sale.tax_override';
+			details: {
+				deviceCode: string;
+				invoiceNumber: string;
+				taxRateId: string;
+				taxRateName: string;
+				rateBp: number;
+				reason: string;
+				taxRemovedMinor: string;
+				totalMinor: string;
+			};
+	  }
 	| {
 			event: 'sale.abandoned';
 			details: { deviceCode: string; invoiceNumber: string; reason: 'rejected' | 'cancelled' };
@@ -279,6 +296,7 @@ export const AUDIT_EVENT_NAMES = [
 	'pos.session.closed',
 	'sale.recorded',
 	'sale.flagged',
+	'sale.tax_override',
 	'sale.abandoned',
 	'sync.op_unrecorded',
 	'sync.op_retried',

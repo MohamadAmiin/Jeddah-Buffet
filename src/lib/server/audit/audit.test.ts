@@ -97,6 +97,19 @@ describe('assertNoSecrets', () => {
 			}
 		],
 		[
+			'sale.tax_override',
+			{
+				deviceCode: 'POS1',
+				invoiceNumber: 'POS1-000003',
+				taxRateId: '00000000-0000-0000-0000-000000000001',
+				taxRateName: 'Exempt',
+				rateBp: 0,
+				reason: 'UNICEF',
+				taxRemovedMinor: '85',
+				totalMinor: '850'
+			}
+		],
+		[
 			'sale.abandoned',
 			{
 				deviceCode: 'POS1',
