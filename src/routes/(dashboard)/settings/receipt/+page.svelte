@@ -81,6 +81,11 @@
 		taxBreakdown: 'Print tax per rate when a receipt mixes rates',
 		zeroTax: 'Print the tax line when the tax is zero'
 	};
+	/** A switch's help text, when it needs one. */
+	const SHOW_HINTS: Partial<Record<keyof ReceiptShow, string>> = {
+		zeroTax:
+			'Untick to leave out a tax line of 0.00. A tax-exempt bill still prints why it is exempt and the tax removed. A local accountant may require a 0% tax line — keep this on until you have checked.'
+	};
 	const LINE_SLOTS = Array.from({ length: RECEIPT_LINES_PER_SECTION }, (_, i) => i + 1);
 
 	// THE DRAFT: what the form holds right now, as the writers would store it
@@ -374,8 +379,9 @@
 				</div>
 			</section>
 
-			<!-- The nine switches are the COMPLETE hideable set (gate decision 4,
-			     CLAUDE.md "Settings 4"); the formatter enforces what never hides. -->
+			<!-- The ten switches are the COMPLETE hideable set (gate decision 4,
+			     CLAUDE.md "Settings 4"; zeroTax added by tasks/bill-tax-override); the
+			     formatter enforces what never hides. -->
 			<section aria-labelledby="s-prints" class={SECTION}>
 				<div class="flex flex-col gap-1">
 					<h3 id="s-prints" class="text-section">What prints</h3>
@@ -391,13 +397,15 @@
 								value={key}
 								label={SHOW_LABELS[key]}
 								checked={data.layout.show[key]}
+								hint={SHOW_HINTS[key] ?? ''}
 							/>
 						{/each}
 					</fieldset>
 					<p class="text-ink-2 text-sm md:col-span-2">
 						Always printed: the restaurant's name, the invoice number, the date and time, the items,
-						subtotal, discount, tax and total, the payment, COPY on a reprint, and the tax
-						registration number when one is set.
+						subtotal, discount, tax (unless it is zero and you untick it above) and total, the
+						payment, COPY on a reprint, the tax registration number when one is set, and a
+						tax-exempt bill's reason and the tax it removed.
 					</p>
 				</div>
 			</section>
