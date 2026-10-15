@@ -647,7 +647,7 @@
 								</div>
 								{#if canExempt}
 									<button type="button" class="min-h-touch-min px-4 {KEY}" onclick={openExempt}
-										>Change</button
+										>Change exemption</button
 									>
 								{/if}
 							</div>
