@@ -434,6 +434,69 @@ describe('the menu in IndexedDB', () => {
 		expect(calls).toEqual(['/api/menu/version']);
 	});
 
+	// tasks/bill-tax-override T-13. MANDATORY (spec 29 — offline sync).
+	it('round-trips billTaxRates, and reads a snapshot without the key as none', async () => {
+		const exempt = { id: 'rate-exempt', name: 'Exempt', rateBp: 0 };
+		await replaceMenu(parseSnapshot(payload({ billTaxRates: [exempt] })));
+		expect((await readMenu())!.billTaxRates).toEqual([exempt]);
+
+		expect(parseSnapshot(payload()).billTaxRates).toEqual([]);
+		expect(() => parseSnapshot(payload({ billTaxRates: [null] }))).toThrow(/billTaxRates\[0\]/);
+		expect(() => parseSnapshot(payload({ billTaxRates: 'none' }))).toThrow(SnapshotError);
+		expect(() =>
+			parseSnapshot(payload({ billTaxRates: [{ id: 'x', name: 'Exempt', rateBp: '0' }] }))
+		).toThrow(/billTaxRates\[0\]\.rateBp/);
+	});
+
+	it('replaces a copy written WITHOUT billTaxRates at an EQUAL version; one with [] is kept', async () => {
+		// A format-2 copy at the server's version, written by a build before
+		// bill-tax-override: its header has no billTaxRates key at all.
+		await replaceMenu(parseSnapshot(payload()));
+		await withDb((db) =>
+			inTransaction(db, ['menu'], 'readwrite', (tx) => {
+				const menu = tx.objectStore('menu');
+				menu.put({
+					id: 'snapshot',
+					kind: 'snapshot',
+					data: {
+						format: 2,
+						currency: 'USD',
+						currencyExponent: 2,
+						taxMode: 'exclusive',
+						taxRateBp: 825,
+						defaultTaxRate: { id: 'rate-tax', name: 'Tax', rateBp: 825 }
+					}
+				});
+			})
+		);
+		expect((await readMenu())!.billTaxRates).toEqual([]);
+
+		const exempt = { id: 'rate-exempt', name: 'Exempt', rateBp: 0 };
+		const calls: string[] = [];
+		const server = { version: 7, restaurantId: 'restaurant-A' };
+		const fakeFetch = (async (url: string) => {
+			calls.push(url);
+			const body =
+				url === '/api/menu/version' ? server : payload({ ...server, billTaxRates: [exempt] });
+			return new Response(JSON.stringify(body), { status: 200 });
+		}) as unknown as typeof fetch;
+
+		expect(await syncMenu(fakeFetch)).toBe('replaced');
+		expect(calls).toEqual(['/api/menu/version', '/api/menu']);
+		expect((await readMenu())!.billTaxRates).toEqual([exempt]);
+
+		// The copy now carries the key: the next check at the same version is a no-op,
+		// and so is one whose list is empty.
+		calls.length = 0;
+		expect(await syncMenu(fakeFetch)).toBe('up-to-date');
+		expect(calls).toEqual(['/api/menu/version']);
+
+		await replaceMenu(parseSnapshot(payload({ billTaxRates: [] })));
+		calls.length = 0;
+		expect(await syncMenu(fakeFetch)).toBe('up-to-date');
+		expect(calls).toEqual(['/api/menu/version']);
+	});
+
 	it('drops the menu with everything else when the device changes', async () => {
 		await bindDevice('device-A');
 		await replaceMenu(parseSnapshot(payload()));
