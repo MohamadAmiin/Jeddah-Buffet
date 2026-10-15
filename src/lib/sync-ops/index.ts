@@ -7,7 +7,9 @@
 // is to spell every wire literal in ONE place so the till, the sync endpoint
 // and the database CHECK constraints cannot drift. This module does no
 // arithmetic, no rounding, no I/O and no formatting beyond the invoice-number
-// pair below.
+// pair below and the ONE cleaner of a tax-exemption reason (cleanTaxOverride-
+// Reason), which the till and the server must share so a reason the till
+// accepted can never be refused on sync (invariant 5).
 //
 // EVERY *Minor FIELD ON THE WIRE IS A DECIMAL STRING of the integer minor
 // value: `"850"` is $8.50, `"0"` is zero cents, `"1949"` is $19.49. It is never
@@ -136,6 +138,27 @@ export type SaleLine = {
 	// decimal string
 	discountMinor: string;
 	modifiers: SaleLineModifier[];
+	/** OPTIONAL (tasks/bill-tax-override): the item's OWN resolved rate. New tills
+	 * send it on every line: it equals taxRateBp unless the sale carries a
+	 * taxOverride, when taxRateBp (and taxRateId/taxRateName) are the override's.
+	 * Tills queued before that plan omit it. */
+	menuTaxRateBp?: number;
+};
+
+/** A bill tax override (tasks/bill-tax-override): the whole bill was charged at
+ * one of the 0% rates the owner offered for tax-exempt bills. Every field is
+ * the TILL's copy — the rate as its cached menu held it — so a rate renamed or
+ * re-rated while the till was offline still records what the receipt printed. */
+export type SaleTaxOverride = {
+	taxRateId: string;
+	/** The rate's name as printed, 1–40 characters. */
+	taxRateName: string;
+	/** Always 0 from a till: only a 0% rate may be offered. */
+	rateBp: number;
+	/** Who is exempt and why, already cleaned by cleanTaxOverrideReason. */
+	reason: string;
+	// decimal string: the bill at its lines' own rates minus the bill as charged
+	taxRemovedMinor: string;
 };
 
 /** One payment recorded against a sale. `tenderedMinor` and `changeMinor` are
@@ -181,6 +204,9 @@ export type SaleCompletePayload = {
 	invoiceNumber: string;
 	openedAt: string;
 	lines: SaleLine[];
+	/** OPTIONAL (tasks/bill-tax-override), the `note` precedent: a till queued
+	 * before that plan omits the key; null or a missing key means no override. */
+	taxOverride?: SaleTaxOverride | null;
 	totals: {
 		// decimal string
 		subtotalMinor: string;
@@ -269,4 +295,33 @@ export function parseInvoiceNumber(value: string): { deviceCode: string; seq: nu
 	const seq = Number(match[2]);
 	if (seq < INVOICE_SEQ_MIN) return null;
 	return { deviceCode: match[1], seq };
+}
+
+/** A tax-exemption reason, counted in CODE POINTS (what PostgreSQL's
+ * char_length counts in a UTF-8 database), never UTF-16 units. */
+export const TAX_OVERRIDE_REASON_MIN = 3;
+export const TAX_OVERRIDE_REASON_MAX = 80;
+
+/** Length in code points: an emoji flag is 2, not 4. */
+export function codePointLength(value: string): number {
+	return [...value].length;
+}
+
+/**
+ * THE cleaner of a tax-exemption reason (tasks/bill-tax-override), shared by the
+ * till and the server: C0/C1 control characters and the line and paragraph
+ * separators become spaces (an ESC byte would command the receipt printer),
+ * whitespace runs collapse to one space, the ends are trimmed, and anything past
+ * TAX_OVERRIDE_REASON_MAX code points is cut — on a code-point boundary, so a
+ * surrogate pair is never split. The till refuses a cleaned reason shorter than
+ * TAX_OVERRIDE_REASON_MIN; the server cleans and never refuses a non-empty one.
+ */
+export function cleanTaxOverrideReason(raw: string): string {
+	const cleaned = raw
+		.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ')
+		.replace(/\s+/g, ' ')
+		.trim();
+	const points = [...cleaned];
+	if (points.length <= TAX_OVERRIDE_REASON_MAX) return cleaned;
+	return points.slice(0, TAX_OVERRIDE_REASON_MAX).join('').trim();
 }

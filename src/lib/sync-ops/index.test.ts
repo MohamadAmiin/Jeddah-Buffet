@@ -1,8 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+	cleanTaxOverrideReason,
+	codePointLength,
 	formatInvoiceNumber,
 	parseInvoiceNumber,
+	TAX_OVERRIDE_REASON_MAX,
+	TAX_OVERRIDE_REASON_MIN,
 	OP_KINDS,
 	OP_STATUSES,
 	SOFT_FLAGS,
@@ -280,5 +284,48 @@ describe('source text', () => {
 		expect(stripped).not.toMatch(/\brequire\(/);
 		// The header's promise must stay written down.
 		expect(source).toContain('imports NOTHING');
+	});
+});
+
+describe('the tax-exemption reason (bill-tax-override T-03)', () => {
+	it('collapses whitespace, turns control characters into spaces and trims', () => {
+		expect(cleanTaxOverrideReason('  NGO\n\tcert 12  ')).toBe('NGO cert 12');
+		expect(cleanTaxOverrideReason('a\u2028b\u2029c')).toBe('a b c');
+		expect(cleanTaxOverrideReason('\u001bp0 UNICEF')).toBe('p0 UNICEF');
+		expect(cleanTaxOverrideReason('\u0000\u001b')).toBe('');
+	});
+
+	it('never lets a byte below 0x20 through', () => {
+		const cleaned = cleanTaxOverrideReason('A\u001bp\u0000\u0019\u007f\u0085B');
+		expect([...cleaned].every((ch) => ch.codePointAt(0)! >= 0x20)).toBe(true);
+	});
+
+	it('cuts at 80 code points, never inside a surrogate pair', () => {
+		expect(codePointLength(cleanTaxOverrideReason('x'.repeat(100)))).toBe(80);
+		const flags = '\u{1F1FA}'.repeat(85);
+		const cut = cleanTaxOverrideReason(flags);
+		expect(codePointLength(cut)).toBe(TAX_OVERRIDE_REASON_MAX);
+		expect(cut).toBe('\u{1F1FA}'.repeat(80));
+	});
+
+	it('counts code points, not UTF-16 units', () => {
+		expect(codePointLength('\u{1F1FA}\u{1F1F3}')).toBe(2);
+		expect(TAX_OVERRIDE_REASON_MIN).toBe(3);
+	});
+
+	it('a payload without taxOverride and without menuTaxRateBp is still a SaleCompletePayload', () => {
+		const line: SaleLine = {
+			lineId: 'l',
+			lineNo: 1,
+			menuItemId: 'm',
+			itemName: 'Tea',
+			quantity: 1,
+			unitPriceMinor: '850',
+			taxRateBp: 500,
+			discountMinor: '0',
+			modifiers: []
+		};
+		const payload: Pick<SaleCompletePayload, 'lines' | 'taxOverride'> = { lines: [line] };
+		expect(payload.taxOverride).toBeUndefined();
 	});
 });
