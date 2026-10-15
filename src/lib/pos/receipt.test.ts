@@ -39,6 +39,8 @@ function snapshot(over: {
 	invoiceNumber?: string;
 	/** The stored per-rate rows (T-19); absent = a sale completed before them. */
 	taxBreakdown?: SaleSnapshot['taxBreakdown'];
+	/** A bill tax override (bill-tax-override T-15); absent = none. */
+	taxOverride?: SaleSnapshot['payload']['taxOverride'];
 }): SaleSnapshot {
 	const lines: Line[] = over.lines ?? [
 		{
@@ -67,6 +69,7 @@ function snapshot(over: {
 			invoiceNumber: over.invoiceNumber ?? 'POS1-000231',
 			openedAt: '2026-09-14T16:30:00Z',
 			lines,
+			...(over.taxOverride === undefined ? {} : { taxOverride: over.taxOverride }),
 			totals: over.totals ?? {
 				subtotalMinor: '800',
 				discountMinor: '0',
@@ -1015,5 +1018,195 @@ describe("source tripwire — the formatter cannot recompute or read today's set
 		]) {
 			expect(source.includes(banned), banned).toBe(false);
 		}
+	});
+});
+
+// THE BILL TAX OVERRIDE AND THE ZERO-TAX SWITCH (tasks/bill-tax-override T-15).
+// MANDATORY (spec 29 — receipt.test.ts: rate names and the tax lines on paper,
+// BOTH modes).
+describe('a tax-exempt bill on paper', () => {
+	const exemptLine: Line = {
+		lineId: 'l1',
+		lineNo: 1,
+		menuItemId: 'i1',
+		itemName: 'Burger',
+		quantity: 1,
+		unitPriceMinor: '800',
+		taxRateBp: 0,
+		taxRateId: 'rate-exempt',
+		taxRateName: 'Exempt',
+		menuTaxRateBp: 1000,
+		discountMinor: '0',
+		modifiers: []
+	};
+	const override = (reason = 'UNICEF cert 1234', removed = '80') => ({
+		taxRateId: 'rate-exempt',
+		taxRateName: 'Exempt',
+		rateBp: 0,
+		reason,
+		taxRemovedMinor: removed
+	});
+	const exemptSale = (
+		taxMode: 'exclusive' | 'inclusive',
+		total: string,
+		removed: string,
+		reason?: string
+	) =>
+		snapshot({
+			taxMode,
+			lines: [exemptLine],
+			totals: { subtotalMinor: total, discountMinor: '0', taxMinor: '0', totalMinor: total },
+			payments: [
+				{
+					paymentId: 'p1',
+					method: 'cash',
+					amountMinor: total,
+					tenderedMinor: '1000',
+					changeMinor: String(1000 - Number(total))
+				}
+			],
+			taxOverride: override(reason, removed)
+		});
+
+	for (const width of [32, 48] as const) {
+		it(`exclusive at ${width}: Exempt 0.00% 0.00, the reason, Tax removed, TOTAL as stored`, () => {
+			const lines = renderReceipt(input(exemptSale('exclusive', '800', '80')), { width });
+			const t = text(lines);
+			expect(find(lines, /^Exempt /)).toMatch(/^Exempt 0\.00%\s+0\.00$/);
+			expect(t).toContain('Tax exempt: UNICEF cert 1234');
+			expect(find(lines, /^Tax removed/)).toMatch(/^Tax removed\s+0\.80$/);
+			expect(find(lines, /^TOTAL/)).toMatch(/^TOTAL\s+8\.00$/);
+			for (const l of t) expect(l.length).toBeLessThanOrEqual(width);
+			// The exempt lines sit between the tax line and the TOTAL rule.
+			const exempt = t.findIndex((l) => l.startsWith('Tax exempt'));
+			expect(t[exempt - 1]).toMatch(/^Exempt 0\.00%/);
+			expect(t[exempt + 2]).toBe('='.repeat(width));
+		});
+	}
+
+	it('inclusive: the label is never "Incl. Exempt"; the stored figures print as they are', () => {
+		const lines = renderReceipt(input(exemptSale('inclusive', '727', '73')), { width: 32 });
+		expect(find(lines, /Exempt 0\.00%/)).toMatch(/^Exempt 0\.00%\s+0\.00$/);
+		expect(text(lines).some((l) => l.includes('Incl. Exempt'))).toBe(false);
+		expect(find(lines, /^Tax removed/)).toMatch(/^Tax removed\s+0\.73$/);
+		expect(find(lines, /^TOTAL/)).toMatch(/^TOTAL\s+7\.27$/);
+	});
+
+	it('with zeroTax off, the 0.00 line goes but BOTH exempt lines stay', () => {
+		const lines = renderReceipt(
+			input(exemptSale('exclusive', '800', '80'), {
+				layout: layoutWith({ show: { zeroTax: false } })
+			}),
+			{ width: 32 }
+		);
+		const t = text(lines);
+		expect(t.some((l) => /^Exempt 0\.00%/.test(l))).toBe(false);
+		expect(t).toContain('Tax exempt: UNICEF cert 1234');
+		expect(find(lines, /^Tax removed/)).toMatch(/^Tax removed\s+0\.80$/);
+	});
+
+	it('an 80-character reason wraps inside the width; an ESC byte never reaches the paper', () => {
+		const long = 'x'.repeat(30) + ' ' + 'y'.repeat(30) + ' ' + 'z'.repeat(18);
+		for (const width of [32, 48] as const) {
+			const t = text(renderReceipt(input(exemptSale('exclusive', '800', '80', long)), { width }));
+			for (const l of t) expect(l.length).toBeLessThanOrEqual(width);
+			expect(t.join(' ')).toContain('z'.repeat(18));
+		}
+		const hostile = text(
+			renderReceipt(input(exemptSale('exclusive', '800', '80', 'NGO\u001bp0\u0007')), {
+				width: 32
+			})
+		);
+		for (const l of hostile) {
+			expect([...l].every((ch) => ch.charCodeAt(0) >= 0x20 && ch.charCodeAt(0) < 0x7f)).toBe(true);
+		}
+	});
+});
+
+describe('the zeroTax switch on a bill with no override', () => {
+	const zeroSale = snapshot({
+		lines: [
+			{
+				lineId: 'l1',
+				lineNo: 1,
+				menuItemId: 'i1',
+				itemName: 'Burger',
+				quantity: 1,
+				unitPriceMinor: '800',
+				taxRateBp: 0,
+				discountMinor: '0',
+				modifiers: []
+			}
+		],
+		totals: { subtotalMinor: '800', discountMinor: '0', taxMinor: '0', totalMinor: '800' },
+		payments: [
+			{
+				paymentId: 'p1',
+				method: 'cash',
+				amountMinor: '800',
+				tenderedMinor: '1000',
+				changeMinor: '200'
+			}
+		]
+	});
+
+	it("on (today's receipt): a 0% restaurant still prints Tax 0.00%  0.00", () => {
+		const lines = renderReceipt(input(zeroSale), { width: 32 });
+		expect(find(lines, /^Tax /)).toMatch(/^Tax 0\.00%\s+0\.00$/);
+	});
+
+	it('off: no tax line at all, and nothing else moves', () => {
+		const on = text(renderReceipt(input(zeroSale), { width: 32 }));
+		const off = text(
+			renderReceipt(input(zeroSale, { layout: layoutWith({ show: { zeroTax: false } }) }), {
+				width: 32
+			})
+		);
+		expect(off).toEqual(on.filter((l) => !/^Tax 0\.00%/.test(l)));
+		expect(off.some((l) => /^Tax exempt|^Tax removed/.test(l))).toBe(false);
+	});
+
+	it('off on a non-zero bill changes nothing', () => {
+		const sale = snapshot({});
+		expect(
+			text(
+				renderReceipt(input(sale, { layout: layoutWith({ show: { zeroTax: false } }) }), {
+					width: 32
+				})
+			)
+		).toEqual(text(renderReceipt(input(sale), { width: 32 })));
+	});
+
+	it('off on a mixed bill: the 0% row is skipped, the 10% row prints', () => {
+		const sale = snapshot({
+			lines: [
+				{ ...vatLine, lineId: 'l1', lineNo: 1 },
+				{
+					lineId: 'l2',
+					lineNo: 2,
+					menuItemId: 'i2',
+					itemName: 'Water',
+					quantity: 1,
+					unitPriceMinor: '100',
+					taxRateBp: 0,
+					taxRateName: 'Zero',
+					discountMinor: '0',
+					modifiers: []
+				}
+			],
+			lineAmountsMinor: ['800', '100'],
+			totals: { subtotalMinor: '900', discountMinor: '0', taxMinor: '80', totalMinor: '980' },
+			taxBreakdown: [
+				{ name: 'VAT', rateBp: 1000, taxMinor: '80' },
+				{ name: 'Zero', rateBp: 0, taxMinor: '0' }
+			]
+		});
+		const on = renderReceipt(input(sale), { width: 32 });
+		expect(find(on, /^Zero 0\.00%/)).toMatch(/^Zero 0\.00%\s+0\.00$/);
+		const off = renderReceipt(input(sale, { layout: layoutWith({ show: { zeroTax: false } }) }), {
+			width: 32
+		});
+		expect(find(off, /^Zero/)).toBeUndefined();
+		expect(find(off, /^VAT 10\.00%/)).toMatch(/^VAT 10\.00%\s+0\.80$/);
 	});
 });
