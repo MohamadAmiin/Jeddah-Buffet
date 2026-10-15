@@ -8,7 +8,8 @@
 //      file (printing.test.ts pins that by source text).
 //   2. Every print path asks canPrint first (T-18), so a card or mobile sale
 //      prints NOTHING until the server has accepted it — fail closed
-//      (invariant 5). The auto-printer prints those on the flush's 'done'.
+//      (invariant 5). The auto-printer prints those on the flush's 'done' and
+//      announces the outcome (onAutoPrint) for the Pay screen to show.
 //   3. The drawer pulse is sent once, for a CASH ORIGINAL only, within 30 s of
 //      the sale — never on a reprint, never in a catch-up (invariant 9). The
 //      cash sale's recorded row is the drawer's audit evidence (assumption 6).
@@ -458,24 +459,55 @@ export async function catchUp(opts: PrintOptions = {}): Promise<string[]> {
 	return printed;
 }
 
+/** What the auto-printer did for one confirmed card or mobile sale. */
+export type AutoPrinted = { clientOpId: string; result: OriginalsResult };
+
+const autoPrints = new EventTarget();
+
+/**
+ * Hear what the auto-printer did for each card or mobile sale. The Pay screen
+ * shows it the way it shows a cash print, so a confirmed sale whose receipt did
+ * not print is never silent. Returns the unsubscribe function.
+ */
+export function onAutoPrint(listener: (event: AutoPrinted) => void): () => void {
+	const handler = (e: Event) => listener((e as CustomEvent<AutoPrinted>).detail);
+	autoPrints.addEventListener('printed', handler);
+	return () => autoPrints.removeEventListener('printed', handler);
+}
+
+/** The originals of a confirmed card or mobile sale; null for any other op. */
+async function autoPrint(clientOpId: string, opts: PrintOptions): Promise<OriginalsResult | null> {
+	const entry = await readQueueEntry(clientOpId);
+	const orderId = (entry?.envelope.payload as { orderId?: string } | undefined)?.orderId;
+	if (!orderId) return null;
+	const order = await readOrder(orderId);
+	const method = order?.sale?.payload.payments[0]?.method;
+	if (method !== 'card' && method !== 'mobile') return null;
+	return printOriginals(orderId, { drawer: false, ...opts });
+}
+
 /**
  * Subscribe to the flush: a card or mobile sale prints the moment the server
- * confirms it. Runs the catch-up once. Returns the unsubscribe function.
+ * confirms it, and what happened is announced to onAutoPrint — a failure
+ * included. Runs the catch-up once. Returns the unsubscribe function.
  */
 export function startAutoPrint(opts: PrintOptions = {}): () => void {
 	void catchUp(opts).catch(() => {});
+	const announce = (clientOpId: string, result: OriginalsResult) =>
+		autoPrints.dispatchEvent(new CustomEvent('printed', { detail: { clientOpId, result } }));
 	return onFlushEvent((event) => {
 		if (event.type !== 'done' || event.kind !== 'sale.complete') return;
 		if (!AUTO_PRINT_STATUSES.has(event.status)) return;
-		void (async () => {
-			const entry = await readQueueEntry(event.clientOpId);
-			const orderId = (entry?.envelope.payload as { orderId?: string } | undefined)?.orderId;
-			if (!orderId) return;
-			const order = await readOrder(orderId);
-			const method = order?.sale?.payload.payments[0]?.method;
-			if (method !== 'card' && method !== 'mobile') return;
-			await printOriginals(orderId, { drawer: false, ...opts });
-		})().catch(() => {});
+		const { clientOpId } = event;
+		void autoPrint(clientOpId, opts).then(
+			(result) => {
+				if (result) announce(clientOpId, result);
+			},
+			() => {
+				const error = { error: 'print_failed' };
+				announce(clientOpId, { receipt: error, kitchen: error, drawer: 'not_requested' });
+			}
+		);
 	});
 }
 

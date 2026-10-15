@@ -31,7 +31,12 @@
 	} from '$lib/pos/orders';
 	import { readLocalSession } from '$lib/pos/session';
 	import { flush, onFlushEvent, type FlushEvent } from '$lib/pos/queue';
-	import { printOriginals, type OriginalsResult } from '$lib/pos/printing';
+	import {
+		onAutoPrint,
+		printOriginals,
+		type AutoPrinted,
+		type OriginalsResult
+	} from '$lib/pos/printing';
 	import { readPaymentMethods } from '$lib/pos/settings';
 	import {
 		readBoundDeviceId,
@@ -165,6 +170,13 @@
 		}
 	}
 
+	// A card or mobile sale is printed by the layout's auto-printer once the
+	// server confirms it; its answer is shown here exactly as a cash print's is.
+	function onPrinted(event: AutoPrinted) {
+		if (sale === null || sale.kind === 'cash' || event.clientOpId !== sale.clientOpId) return;
+		describePrint(event.result);
+	}
+
 	onMount(() => {
 		online = navigator.onLine;
 		const up = () => (online = true);
@@ -172,6 +184,7 @@
 		addEventListener('online', up);
 		addEventListener('offline', down);
 		const stopEvents = onFlushEvent(onEvent);
+		const stopPrints = onAutoPrint(onPrinted);
 
 		void (async () => {
 			await restored;
@@ -217,6 +230,7 @@
 			removeEventListener('online', up);
 			removeEventListener('offline', down);
 			stopEvents();
+			stopPrints();
 		};
 	});
 
@@ -273,13 +287,14 @@
 				total: figures.totals.total,
 				tendered: option.kind === 'cash' ? cashTendered : null
 			};
+			print = null;
+			drawerLine = '';
 			void flush().catch(() => {});
 			if (option.kind === 'cash') {
 				// Fire-and-report: the sale is complete on the device; the printer
 				// never holds up ● Paid (invariant 4). Card and mobile print from the
-				// layout's auto-printer once the server confirms (invariant 5).
-				print = null;
-				drawerLine = '';
+				// layout's auto-printer once the server confirms (invariant 5), and
+				// onPrinted shows its answer.
 				void printOriginals(result.orderId, { drawer: true }).then(describePrint, () => {
 					print = { ok: false, text: 'Not printed — reprint it from Sales' };
 				});

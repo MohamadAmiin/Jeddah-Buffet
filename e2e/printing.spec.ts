@@ -448,14 +448,56 @@ test('receipts, kitchen tickets and the drawer: cash prints, a reprint is COPY, 
 	expect(receipt.count(PULSE)).toBe(2);
 	expect(kitchen.count(PULSE)).toBe(0);
 
-	// Four sales on the server, each exactly once; the reprints added nothing.
+	// 11. CARD, ONLINE, the cashier stays on Pay: it prints the moment the server
+	//     confirms, and the Pay screen says so, as it does for cash.
+	await newSale(tillPage);
+	await addBurger(tillPage);
+	await tillPage.getByRole('link', { name: /^Pay\b/ }).click();
+	await expect(tillPage).toHaveURL(/\/pos\/pay$/);
+	await tillPage
+		.getByRole('radiogroup', { name: 'Tender' })
+		.getByRole('radio', { name: /^Card/ })
+		.click();
+	const receiptBeforeOnlineCard = receipt.bytes().length;
+	const kitchenBeforeOnlineCard = kitchen.bytes().length;
+	await tillPage.getByRole('button', { name: /^Pay · Card/ }).click();
+	await expect(tillPage.getByTestId('print-line')).toContainText('● Receipt sent to the printer', {
+		timeout: 15_000
+	});
+	await receipt.waitFor('POS1-000005', { from: receiptBeforeOnlineCard });
+	await receipt.waitFor('CARD', { from: receiptBeforeOnlineCard });
+	await kitchen.waitFor('ORDER 5', { from: kitchenBeforeOnlineCard });
+	expect(receipt.count(PULSE)).toBe(2);
+
+	// 12. CARD, ONLINE, THE AGENT STOPPED: the confirmed sale says it did not
+	//     print — never silent — and nothing reached the printer.
+	await stopAgent(agent);
+	agent = null;
+	await newSale(tillPage);
+	await addBurger(tillPage);
+	await tillPage.getByRole('link', { name: /^Pay\b/ }).click();
+	await expect(tillPage).toHaveURL(/\/pos\/pay$/);
+	await tillPage
+		.getByRole('radiogroup', { name: 'Tender' })
+		.getByRole('radio', { name: /^Card/ })
+		.click();
+	const receiptBeforeDownCard = receipt.bytes().length;
+	await tillPage.getByRole('button', { name: /^Pay · Card/ }).click();
+	await expect(tillPage.getByTestId('print-line')).toContainText(
+		'◆ Not printed — reprint it from Sales',
+		{ timeout: 15_000 }
+	);
+	expect(receipt.bytes().length).toBe(receiptBeforeDownCard);
+	await expect(tillPage.getByText('0 unsynced')).toBeVisible({ timeout: 20_000 });
+
+	// Six sales on the server, each exactly once; the reprints added nothing.
 	expect(
 		await dbRows<{ n: string }>('select count(*)::text as n from orders where status = $1', [
 			'paid'
 		])
-	).toEqual([{ n: '4' }]);
+	).toEqual([{ n: '6' }]);
 	expect(await dbRows<{ n: string }>('select count(*)::text as n from invoices')).toEqual([
-		{ n: '4' }
+		{ n: '6' }
 	]);
 
 	await till.close();

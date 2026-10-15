@@ -20,6 +20,7 @@ import {
 	catchUp,
 	listRecentSales,
 	logoForAgent,
+	onAutoPrint,
 	printOriginals,
 	readOrder,
 	readReceiptHeader,
@@ -132,6 +133,17 @@ function stubAgent(
 	const drawers = () => sent.filter((s) => s.path === '/drawer');
 	const ids = () => sent.map((s) => s.body.id as string);
 	return { fetchFn, sent, jobs, drawers, ids };
+}
+
+/** A sync endpoint that accepts every op, for the real flush. */
+function acceptingServer(): typeof fetch {
+	return (async (_url: string, init?: RequestInit) => {
+		const envelope = JSON.parse(String(init?.body)) as { clientOpId: string };
+		return new Response(JSON.stringify({ clientOpId: envelope.clientOpId, status: 'accepted' }), {
+			status: 200,
+			headers: { 'content-type': 'application/json' }
+		});
+	}) as unknown as typeof fetch;
 }
 
 // ── Orders through the real completeSale ────────────────────────────────────
@@ -763,19 +775,54 @@ describe('startAutoPrint and the catch-up', () => {
 		await new Promise((r) => setTimeout(r, 50));
 		expect(agent.sent).toHaveLength(0);
 
-		const server = (async (_url: string, init?: RequestInit) => {
-			const envelope = JSON.parse(String(init?.body)) as { clientOpId: string };
-			return new Response(JSON.stringify({ clientOpId: envelope.clientOpId, status: 'accepted' }), {
-				status: 200,
-				headers: { 'content-type': 'application/json' }
-			});
-		}) as unknown as typeof fetch;
-		await flush(server, { now: () => NOW_MS });
+		await flush(acceptingServer(), { now: () => NOW_MS });
 		await new Promise((r) => setTimeout(r, 100));
 		expect(agent.ids()).toEqual([`${card.orderId}:receipt:0`, `${card.orderId}:kitchen:0`]);
 		expect(agent.drawers()).toHaveLength(0);
 		expect((await readOrder(cash.orderId))?.printed).toBeUndefined();
 		stop();
+	});
+
+	it('announces what it printed for a card sale, and nothing for a cash sale', async () => {
+		const agent = stubAgent();
+		const cash = await sell('cash');
+		const card = await sell('card');
+		const heard: Array<{ clientOpId: string; result: unknown }> = [];
+		const stopHearing = onAutoPrint((event) => heard.push(event));
+		const stop = startAutoPrint({ fetchFn: agent.fetchFn, now: () => NOW_MS + 60 * 60 * 1000 });
+		await flush(acceptingServer(), { now: () => NOW_MS });
+		await new Promise((r) => setTimeout(r, 100));
+		expect(heard).toEqual([
+			{
+				clientOpId: card.clientOpId,
+				result: { receipt: 'queued', kitchen: 'queued', drawer: 'not_requested' }
+			}
+		]);
+		expect(heard.some((e) => e.clientOpId === cash.clientOpId)).toBe(false);
+		stop();
+		stopHearing();
+	});
+
+	it('a confirmed mobile sale whose print agent is down is announced as not printed — never silent', async () => {
+		const down = (async () => {
+			throw new TypeError('fetch failed');
+		}) as unknown as typeof fetch;
+		const mobile = await sell('mobile');
+		const heard: Array<{ clientOpId: string; result: unknown }> = [];
+		const stopHearing = onAutoPrint((event) => heard.push(event));
+		const stop = startAutoPrint({ fetchFn: down, now: () => NOW_MS + 60 * 60 * 1000 });
+		await flush(acceptingServer(), { now: () => NOW_MS });
+		await new Promise((r) => setTimeout(r, 100));
+		const unreachable = { error: 'unreachable' };
+		expect(heard).toEqual([
+			{
+				clientOpId: mobile.clientOpId,
+				result: { receipt: unreachable, kitchen: unreachable, drawer: unreachable }
+			}
+		]);
+		expect((await readOrder(mobile.orderId))?.printed).toBeUndefined();
+		stop();
+		stopHearing();
 	});
 
 	it('the catch-up prints a 2-minute-old cash sale with no marks — without the drawer — and ignores an 11-minute-old one', async () => {
