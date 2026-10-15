@@ -295,6 +295,13 @@ describe('the tax-exemption reason (bill-tax-override T-03)', () => {
 		expect(cleanTaxOverrideReason('\u0000\u001b')).toBe('');
 	});
 
+	it('turns format characters into spaces too: soft hyphen, zero-width joiner, a bidi mark', () => {
+		expect(cleanTaxOverrideReason('UNI\u00adCEF')).toBe('UNI CEF');
+		expect(cleanTaxOverrideReason('a\u200db\u200ec\ufeff')).toBe('a b c');
+		const cleaned = cleanTaxOverrideReason('x\u00ad\u200b\u200d\u2066y');
+		expect([...cleaned].some((ch) => /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(ch))).toBe(false);
+	});
+
 	it('never lets a byte below 0x20 through', () => {
 		const cleaned = cleanTaxOverrideReason('A\u001bp\u0000\u0019\u007f\u0085B');
 		expect([...cleaned].every((ch) => ch.codePointAt(0)! >= 0x20)).toBe(true);

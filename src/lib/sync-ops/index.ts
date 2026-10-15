@@ -309,8 +309,12 @@ export function codePointLength(value: string): number {
 
 /**
  * THE cleaner of a tax-exemption reason (tasks/bill-tax-override), shared by the
- * till and the server: C0/C1 control characters and the line and paragraph
- * separators become spaces (an ESC byte would command the receipt printer),
+ * till and the server: every control (Cc — C0 and C1), format (Cf — soft hyphen,
+ * zero-width joiner, bidi marks) and line or paragraph separator (Zl, Zp)
+ * character becomes a space — an ESC byte would command the receipt printer, and
+ * the database's CHECK `!~ '[[:cntrl:]]'` counts Cf as a control under an ICU
+ * locale and Zl/Zp under glibc, so stripping all four classes keeps a reason the
+ * till accepted storable under either (invariant 5);
  * whitespace runs collapse to one space, the ends are trimmed, and anything past
  * TAX_OVERRIDE_REASON_MAX code points is cut — on a code-point boundary, so a
  * surrogate pair is never split. The till refuses a cleaned reason shorter than
@@ -318,7 +322,7 @@ export function codePointLength(value: string): number {
  */
 export function cleanTaxOverrideReason(raw: string): string {
 	const cleaned = raw
-		.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ')
+		.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ')
 		.replace(/\s+/g, ' ')
 		.trim();
 	const points = [...cleaned];
