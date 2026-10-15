@@ -65,7 +65,10 @@
 		hasResult && (lastAction === '?/mode' || lastAction === '?/setDefault')
 	);
 	const rateResultId = $derived(
-		hasResult && (lastAction === '?/update' || lastAction === '?/archive') ? lastRateId : ''
+		hasResult &&
+			(lastAction === '?/update' || lastAction === '?/archive' || lastAction === '?/offer')
+			? lastRateId
+			: ''
 	);
 	const liveResult = $derived(
 		rateResultId !== '' && liveRates.some((rate) => rate.id === rateResultId)
@@ -198,6 +201,11 @@
 						{/if}
 					</div>
 					<p class="text-ink-2 text-sm">Chosen by {rate.liveItemCount} menu item(s)</p>
+					{#if rate.offeredForBills}
+						<p class="text-sm">
+							<StatusMark status="done" label="offered for tax-exempt bills" />
+						</p>
+					{/if}
 
 					{#if rateResultId === rate.id}
 						<Alert {tone}>{form?.message}</Alert>
@@ -230,6 +238,30 @@
 							<Button type="submit">Save rate</Button>
 						</div>
 					</form>
+
+					<!-- Tax-exempt bills (tasks/bill-tax-override): only a 0% rate may be
+					     offered, so a non-zero rate shows no button at all. -->
+					{#if rate.zeroRate}
+						<form
+							method="POST"
+							action="?/offer"
+							class="border-line-soft flex flex-col gap-2 border-t pt-4"
+							use:enhance={keepValues}
+						>
+							<input type="hidden" name="taxRateId" value={rate.id} />
+							<input type="hidden" name="name" value={rate.name} />
+							<input type="hidden" name="offered" value={rate.offeredForBills ? 'false' : 'true'} />
+							<p class="text-ink-2 text-sm">
+								A cashier can pick an offered rate on the bill and type who is exempt. The customer
+								then pays no tax.
+							</p>
+							<div>
+								<Button type="submit">
+									{rate.offeredForBills ? 'Stop offering' : 'Offer for tax-exempt bills'}
+								</Button>
+							</div>
+						</form>
+					{/if}
 
 					<div class="border-line-soft border-t pt-4">
 						<form
