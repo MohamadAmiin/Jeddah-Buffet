@@ -35,7 +35,8 @@ const DASHBOARD_ROUTE_IDS = [
 	'/(dashboard)/menu',
 	'/(dashboard)/menu/images/[id]',
 	'/(dashboard)/reports',
-	'/(dashboard)/reports/flagged'
+	'/(dashboard)/reports/flagged',
+	'/(dashboard)/reports/tax-overrides'
 ];
 const NON_PUBLIC_ROUTE_IDS = [...DASHBOARD_ROUTE_IDS, '/logout'];
 

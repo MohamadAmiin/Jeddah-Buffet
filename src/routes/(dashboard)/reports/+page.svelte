@@ -39,6 +39,8 @@
 >
 	{#snippet actions()}
 		<div class="flex flex-wrap items-end gap-2">
+			<!-- tasks/bill-tax-override T-12: the bills a cashier made tax-exempt. -->
+			<Button href={resolve('/reports/tax-overrides')} variant="ghost">Tax-exempt bills</Button>
 			<form method="GET" action={resolve('/reports')}>
 				<input type="hidden" name="date" value={data.prevDate} />
 				<Button type="submit" variant="ghost">
