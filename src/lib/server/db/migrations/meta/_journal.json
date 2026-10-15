@@ -134,6 +134,13 @@
       "when": 1791264585042,
       "tag": "0018_retire_replaced_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792073127935,
+      "tag": "0019_bored_justice",
+      "breakpoints": true
     }
   ]
 }

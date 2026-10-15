@@ -4,6 +4,7 @@ import {
 	uuid,
 	text,
 	integer,
+	boolean,
 	timestamp,
 	index,
 	uniqueIndex,
@@ -61,6 +62,11 @@ export const taxRates = pgTable(
 		name: text('name').notNull(),
 		rateBp: integer('rate_bp').notNull(),
 		sortOrder: integer('sort_order').notNull().default(0),
+		// Offered at the till for tax-exempt bills (tasks/bill-tax-override). A DEFAULT,
+		// unlike payment_methods.enabled: false is the fail-closed value (nothing is
+		// offered until the owner ticks a rate), it answers no open decision, and every
+		// existing row needs a value. Only a 0% rate may be offered (the CHECK below).
+		offeredForBills: boolean('offered_for_bills').notNull().default(false),
 		archivedAt: archivedAt(),
 		createdAt: createdAt(),
 		updatedAt: updatedAt()
@@ -77,6 +83,7 @@ export const taxRates = pgTable(
 			'tax_rates_name_valid',
 			sql`char_length(${t.name}) between 1 and 40 and ${t.name} !~ '[[:cntrl:]]'`
 		),
-		check('tax_rates_rate_bp_range', sql`${t.rateBp} between 0 and 10000`)
+		check('tax_rates_rate_bp_range', sql`${t.rateBp} between 0 and 10000`),
+		check('tax_rates_offered_zero_rate', sql`not ${t.offeredForBills} or ${t.rateBp} = 0`)
 	]
 );
