@@ -19,6 +19,7 @@ import {
 	createTaxRate,
 	getMenuVersion,
 	listTaxRates,
+	setTaxRateOffered,
 	updateItem,
 	updateTaxRate
 } from './index';
@@ -117,6 +118,7 @@ describe('createTaxRate', () => {
 				rateBp: 500,
 				sortOrder: 0,
 				archivedAt: null,
+				offeredForBills: false,
 				isDefault: false,
 				liveItemCount: 0
 			}
@@ -683,5 +685,80 @@ describe('item rates, the default and the locks (T-13)', () => {
 			const [row] = await listTaxRates(db, r.restaurantId);
 			expect(row).toMatchObject({ id: special, archivedAt: null, liveItemCount: 1 });
 		});
+	});
+});
+
+describe('setTaxRateOffered (bill-tax-override T-05)', () => {
+	const offer = (r: R, taxRateId: string, offered: boolean) =>
+		db.transaction((tx) => setTaxRateOffered(tx, r.restaurantId, taxRateId, offered, r.ctx));
+	const updatesOf = async (restaurantId: string) =>
+		(await auditRows('tax_rate.updated')).filter((row) => row.restaurantId === restaurantId);
+
+	it('offers a 0% rate: one bump, one audit row with the diff, listed as offered', async () => {
+		const r = await makeRestaurant();
+		const exempt = await createdId(r, { name: 'Exempt', rateBp: 0 });
+		const before = await version(r.restaurantId);
+
+		expect(await offer(r, exempt, true)).toEqual({ ok: true, changed: true });
+		expect(await version(r.restaurantId)).toBe(before + 1);
+		const audits = await updatesOf(r.restaurantId);
+		expect(audits).toHaveLength(1);
+		expect(audits[0].details).toEqual({
+			changes: { offeredForBills: { old: false, new: true } }
+		});
+		const [row] = await listTaxRates(db, r.restaurantId);
+		expect(row).toMatchObject({ id: exempt, offeredForBills: true });
+	});
+
+	it('re-offering an offered rate is a no-op: no bump, no audit row', async () => {
+		const r = await makeRestaurant();
+		const exempt = await createdId(r, { name: 'Exempt', rateBp: 0 });
+		await offer(r, exempt, true);
+		const before = await version(r.restaurantId);
+		expect(await offer(r, exempt, true)).toEqual({ ok: true, changed: false });
+		expect(await version(r.restaurantId)).toBe(before);
+		expect(await updatesOf(r.restaurantId)).toHaveLength(1);
+	});
+
+	it('stops offering: one more bump and audit row', async () => {
+		const r = await makeRestaurant();
+		const exempt = await createdId(r, { name: 'Exempt', rateBp: 0 });
+		await offer(r, exempt, true);
+		const before = await version(r.restaurantId);
+		expect(await offer(r, exempt, false)).toEqual({ ok: true, changed: true });
+		expect(await version(r.restaurantId)).toBe(before + 1);
+		const [row] = await listTaxRates(db, r.restaurantId);
+		expect(row.offeredForBills).toBe(false);
+	});
+
+	it('refuses a non-zero, archived, foreign or malformed rate, with no bump', async () => {
+		const r = await makeRestaurant();
+		const vat = await createdId(r, { name: 'VAT', rateBp: 825 });
+		const old = await createdId(r, { name: 'Old exempt', rateBp: 0 });
+		await archive(r, old);
+		const other = await makeRestaurant('Cafe Two');
+		const foreign = await createdId(other, { name: 'Exempt', rateBp: 0 });
+		const before = await version(r.restaurantId);
+
+		expect(await offer(r, vat, true)).toEqual({ ok: false, reason: 'not_zero' });
+		expect(await offer(r, old, true)).toEqual({ ok: false, reason: 'archived' });
+		expect(await offer(r, foreign, true)).toEqual({ ok: false, reason: 'not_found' });
+		expect(await offer(r, 'not-a-uuid', true)).toEqual({ ok: false, reason: 'not_found' });
+		expect(await version(r.restaurantId)).toBe(before);
+		expect(await updatesOf(r.restaurantId)).toHaveLength(0);
+	});
+
+	it('updateTaxRate refuses to give an offered rate a non-zero percent; a rename is fine', async () => {
+		const r = await makeRestaurant();
+		const exempt = await createdId(r, { name: 'Exempt', rateBp: 0 });
+		await offer(r, exempt, true);
+		const rerate = await db.transaction((tx) =>
+			updateTaxRate(tx, r.restaurantId, exempt, { rateBp: 500 }, r.ctx)
+		);
+		expect(rerate).toEqual({ ok: false, reason: 'offered_not_zero' });
+		const rename = await db.transaction((tx) =>
+			updateTaxRate(tx, r.restaurantId, exempt, { name: 'Diplomatic', rateBp: 0 }, r.ctx)
+		);
+		expect(rename).toEqual({ ok: true, changed: true });
 	});
 });
