@@ -937,6 +937,22 @@ export async function readMenuSnapshot(database: Executor, restaurantId: string)
 		resolved.map((row) => [row.itemId, { id: row.id, name: row.name, rateBp: row.rateBp }])
 	);
 
+	// The 0% rates a cashier may apply to a whole bill (tasks/bill-tax-override):
+	// live AND offered. THE SAME PREDICATE is written in validateSale
+	// (src/lib/server/orders/validate.ts) — orders/ may not import menu/ — and the
+	// test "validator and snapshot agree on offered rates" pins the two together.
+	const billTaxRates: ResolvedTaxRate[] = await database
+		.select({ id: taxRates.id, name: taxRates.name, rateBp: taxRates.rateBp })
+		.from(taxRates)
+		.where(
+			and(
+				eq(taxRates.restaurantId, restaurantId),
+				isNull(taxRates.archivedAt),
+				eq(taxRates.offeredForBills, true)
+			)
+		)
+		.orderBy(asc(taxRates.sortOrder), asc(taxRates.name), asc(taxRates.id));
+
 	const { version, currencyCode, taxMode } = settings;
 	const menu = await listMenu(database, restaurantId);
 	return {
@@ -944,6 +960,7 @@ export async function readMenuSnapshot(database: Executor, restaurantId: string)
 		currencyCode,
 		taxMode,
 		defaultTaxRate,
+		billTaxRates,
 		...menu,
 		items: menu.items.map((item) => ({ ...item, taxRate: rateByItem.get(item.id) ?? null }))
 	};

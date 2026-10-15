@@ -15,8 +15,14 @@
 // let a till keep selling at yesterday's prices for the length of the window; and
 // `private` keeps it out of every shared proxy.
 
+// THE SHAPE MARKER (`-b`, tasks/bill-tax-override). The snapshot gained
+// `billTaxRates`; a till whose cached copy lacks the key refetches at an EQUAL
+// version, and without a new validator the browser's own HTTP cache would answer
+// that refetch 304 with the body it stored before the key existed. Change the
+// marker whenever the body's shape changes in a way an equal-version till must
+// see.
 export function menuEtag(restaurantId: string, version: number): string {
-	return `W/"menu-${restaurantId}-${version}"`;
+	return `W/"menu-${restaurantId}-${version}-b"`;
 }
 
 export const MENU_CACHE_HEADERS = {
