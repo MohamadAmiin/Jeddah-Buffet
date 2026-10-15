@@ -15,7 +15,7 @@ import {
 // The isomorphic receipt contract (tasks/settings-tax-payments-receipt T-12).
 
 describe('the receipt switches', () => {
-	it('are the nine hideable fields of gate decision 4, in order', () => {
+	it('are the nine hideable fields of gate decision 4, then zeroTax (bill-tax-override), in order', () => {
 		expect([...RECEIPT_SHOW_KEYS]).toEqual([
 			'cashier',
 			'table',
@@ -25,7 +25,8 @@ describe('the receipt switches', () => {
 			'currencyLine',
 			'deviceLine',
 			'paymentNumbers',
-			'taxBreakdown'
+			'taxBreakdown',
+			'zeroTax'
 		]);
 	});
 });

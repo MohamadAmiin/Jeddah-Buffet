@@ -67,7 +67,8 @@
 	const FIELDS =
 		'bg-raise border-line shadow-card rounded-card grid gap-4 border p-6 md:grid-cols-2 lg:col-span-2';
 
-	/** The nine switches, in RECEIPT_SHOW_KEYS order (gate decision 4). */
+	/** The ten switches, in RECEIPT_SHOW_KEYS order (gate decision 4; zeroTax from
+	 * tasks/bill-tax-override). */
 	const SHOW_LABELS: Record<keyof ReceiptShow, string> = {
 		cashier: 'Print the cashier',
 		table: 'Print the table',
@@ -77,7 +78,8 @@
 		currencyLine: 'Print the currency line (All amounts in …)',
 		deviceLine: 'Print the till line (matcami POS and the till code)',
 		paymentNumbers: 'Print the payment numbers',
-		taxBreakdown: 'Print tax per rate when a receipt mixes rates'
+		taxBreakdown: 'Print tax per rate when a receipt mixes rates',
+		zeroTax: 'Print the tax line when the tax is zero'
 	};
 	const LINE_SLOTS = Array.from({ length: RECEIPT_LINES_PER_SECTION }, (_, i) => i + 1);
 

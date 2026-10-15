@@ -373,7 +373,8 @@ describe('receipt settings page', () => {
 			currencyLine: true,
 			deviceLine: true,
 			paymentNumbers: true,
-			taxBreakdown: true
+			taxBreakdown: true,
+			zeroTax: true
 		});
 		expect(data.layout.paymentNumbersHeading).toBe('PAY BY MOBILE MONEY');
 
