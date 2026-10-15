@@ -289,6 +289,12 @@
 				</Card>
 			{/each}
 		</div>
+		<!-- tasks/bill-tax-override T-10: said once for the whole list, so a restaurant
+		     with no 0% rate yet learns that exempt bills exist and what they need. -->
+		<p class="text-ink-2 text-sm">
+			Tax-exempt bills: only a 0% rate can be offered. A cashier picks one on the bill and types who
+			is exempt.
+		</p>
 
 		<Card class="flex flex-col gap-4">
 			<h3 class="text-section">Archived rates</h3>
