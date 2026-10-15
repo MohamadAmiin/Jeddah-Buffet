@@ -522,6 +522,52 @@ test('a tax-exempt cash bill: offered on /settings/tax, applied at the till, on 
 	await expect(totals.getByTestId('check-exempt')).toContainText('UNICEF');
 	await expect(totals).toContainText(/Total\s*8\.00/);
 
+	// 3b. MANDATORY (invariant 5; plan risk R1e): the owner withdraws the rate while
+	// the bill is exempt. After the till's next menu sync the exemption is dropped
+	// when the bill loads — said in words, the bill taxed again — so the sale is
+	// never sent at a menu version that no longer offers its rate (a HARD
+	// price_tamper on a sale the till already took).
+	const resync = async () => {
+		const snapshot = tillPage.waitForResponse(
+			(r) => new URL(r.url()).pathname === '/api/menu' && r.status() === 200
+		);
+		await tillPage.goto('/pos');
+		await snapshot;
+		await pickEmployee(tillPage, 'The Cashier');
+		await enterPin(tillPage, '4321');
+		await expect(tillPage).toHaveURL(/\/pos\/order$/);
+	};
+	await page.getByRole('button', { name: 'Stop offering' }).click();
+	await expect(page.getByRole('alert')).toContainText(
+		'Exempt is no longer offered for tax-exempt bills.'
+	);
+	await resync();
+	await expect(
+		tillPage.getByText('◆ Exempt is no longer offered — this bill is taxed again.')
+	).toBeVisible();
+	await expect(totals).toContainText(/Total\s*8\.80/);
+	await tillPage.getByRole('link', { name: /^Pay\b/ }).click();
+	await expect(tillPage).toHaveURL(/\/pos\/pay$/);
+	await expect(totals).toContainText(/Total\s*8\.80/);
+	await expect(tillPage.getByTestId('tax-exempt')).toHaveCount(0);
+	// Nothing is offered now, so the key is not there at all.
+	await expect(tillPage.getByRole('button', { name: 'Tax exempt…' })).toHaveCount(0);
+
+	// 3c. Offered again: after the next sync the cashier applies it again.
+	await page.getByRole('button', { name: 'Offer for tax-exempt bills' }).click();
+	await expect(page.getByRole('alert')).toContainText('Exempt is offered for tax-exempt bills.');
+	await resync();
+	await tillPage.getByRole('link', { name: /^Pay\b/ }).click();
+	await expect(tillPage).toHaveURL(/\/pos\/pay$/);
+	await tillPage.getByRole('button', { name: 'Tax exempt…' }).click();
+	await expect(sheet).toBeVisible();
+	await sheet.getByRole('radio', { name: /^Exempt 0\.00%/ }).click();
+	await sheet.getByLabel(/Who is exempt and why/).fill('UNICEF');
+	await sheet.getByRole('button', { name: 'Remove the tax' }).click();
+	await expect(sheet).toBeHidden();
+	await expect(exempt).toContainText(/Tax removed\s*0\.80/);
+	await expect(totals).toContainText(/Total\s*8\.00/);
+
 	// 4. Cash, the exact amount: paid, and synced once.
 	await tillPage
 		.getByRole('radiogroup', { name: 'Tender' })
