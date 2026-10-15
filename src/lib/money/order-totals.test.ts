@@ -13,9 +13,11 @@ import {
 } from './index';
 import { TAX_MODES, type TaxMode } from './tax';
 import {
+	allocateLineGross,
 	computeOrderTotals,
 	serializeTotals,
 	taxBreakdown,
+	taxRemoved,
 	totalsEqual,
 	type OrderTotals,
 	type TotalsLine
@@ -649,5 +651,109 @@ describe('order-totals source tripwire', () => {
 		expect(stripped).not.toMatch(/\d\.\d/);
 		const froms = [...stripped.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((m) => m[1]);
 		expect(new Set(froms)).toEqual(new Set(['./index', './tax']));
+	});
+});
+
+describe('bill tax override — includedTaxRateBp, allocateLineGross, taxRemoved (bill-tax-override T-02)', () => {
+	const exempt = (unit: number, menuBp: number, quantity = 1n): TotalsLine => ({
+		...line(unit, 0, { quantity }),
+		includedTaxRateBp: menuBp
+	});
+
+	it('MANDATORY (spec 29 — tax, exclusive): includedTaxRateBp is ignored; 1000 at 0% is 1000', () => {
+		const t = computeOrderTotals({ taxMode: 'exclusive', lines: [exempt(1000, 1000)] }, R);
+		expect(t).toMatchObject({ subtotal: 1000n, discount: 0n, tax: 0n, total: 1000n });
+	});
+
+	it('MANDATORY (spec 29 — tax, inclusive): 1100 with 10% included, exempt → pays 1000, revenue 1000', () => {
+		const t = computeOrderTotals({ taxMode: 'inclusive', lines: [exempt(1100, 1000)] }, R);
+		expect(t).toMatchObject({ subtotal: 1000n, discount: 0n, tax: 0n, total: 1000n, net: 1000n });
+		// The same revenue a taxed sale of that item books (spec 18: tax is not revenue).
+		const taxed = computeOrderTotals({ taxMode: 'inclusive', lines: [line(1100, 1000)] }, R);
+		expect(t.subtotal).toBe(taxed.subtotal);
+	});
+
+	it('inclusive, three 999 lines at 20% exempt → 2498, no phantom discount', () => {
+		const t = computeOrderTotals(
+			{ taxMode: 'inclusive', lines: [exempt(999, 2000), exempt(999, 2000), exempt(999, 2000)] },
+			R
+		);
+		expect(t.total).toBe(2498n);
+		expect(t.tax).toBe(0n);
+		expect(t.discount).toBe(0n);
+		expect(t.subtotal - t.discount + t.tax).toBe(t.total);
+		expect(allocateLineGross(t, R)).toEqual([833n, 832n, 833n]);
+	});
+
+	it('an inclusive discount on an exempt line is the discount net of the included tax', () => {
+		const t = computeOrderTotals(
+			{ taxMode: 'inclusive', lines: [{ ...exempt(1100, 1000), discountMinor: minor(110n) }] },
+			R
+		);
+		expect(t).toMatchObject({ total: 900n, tax: 0n, discount: 100n, subtotal: 1000n });
+	});
+
+	it('MANDATORY property (spec 29): no line discount ⇒ no order discount, with or without an override, in both modes', () => {
+		const next = generator(20261015n);
+		for (let i = 0; i < 1500; i++) {
+			const taxMode: TaxMode = (next() >> 16n) % 2n === 0n ? 'exclusive' : 'inclusive';
+			const n = Number(between(next, 1n, 6n));
+			const lines: TotalsLine[] = [];
+			for (let j = 0; j < n; j++) {
+				const menuBp = Number(between(next, 0n, 10_000n));
+				const overridden = (next() >> 16n) % 2n === 0n;
+				const unit = between(next, 0n, 99_999n);
+				const quantity = between(next, 1n, 9n);
+				lines.push({
+					unitPriceMinor: minor(unit),
+					quantity,
+					modifierDeltasMinor: [],
+					taxRateBp: overridden ? 0 : menuBp,
+					discountMinor: minor(0n),
+					...(overridden ? { includedTaxRateBp: menuBp } : {})
+				});
+			}
+			const t = computeOrderTotals({ taxMode, lines }, R);
+			expect(t.discount).toBe(0n);
+			expect(t.subtotal - t.discount + t.tax).toBe(t.total);
+			const rows = allocateLineGross(t, R);
+			expect(sum(rows)).toBe(t.total);
+			// Only the overridden lines can change the bill, and only downwards.
+			const standard = computeOrderTotals(
+				{
+					taxMode,
+					lines: lines.map((l) => ({
+						...l,
+						taxRateBp: l.includedTaxRateBp ?? l.taxRateBp,
+						includedTaxRateBp: undefined
+					}))
+				},
+				R
+			);
+			expect(taxRemoved(standard, t) >= 0n).toBe(true);
+		}
+	});
+
+	it('allocateLineGross: whole gross lines come back unchanged and sum to the total', () => {
+		const t = computeOrderTotals(
+			{ taxMode: 'inclusive', lines: [line(1100, 1000), line(250, 0, { quantity: 2n })] },
+			R
+		);
+		expect(allocateLineGross(t, R)).toEqual([1100n, 500n]);
+	});
+
+	it('taxRemoved: exclusive 10% on 1000 and inclusive 10% on 1100 both remove 100', () => {
+		const exStd = computeOrderTotals({ taxMode: 'exclusive', lines: [line(1000, 1000)] }, R);
+		const exAct = computeOrderTotals({ taxMode: 'exclusive', lines: [exempt(1000, 1000)] }, R);
+		expect(taxRemoved(exStd, exAct)).toBe(100n);
+		const inStd = computeOrderTotals({ taxMode: 'inclusive', lines: [line(1100, 1000)] }, R);
+		const inAct = computeOrderTotals({ taxMode: 'inclusive', lines: [exempt(1100, 1000)] }, R);
+		expect(taxRemoved(inStd, inAct)).toBe(100n);
+	});
+
+	it('taxRemoved refuses an override that raised the bill', () => {
+		const low = computeOrderTotals({ taxMode: 'exclusive', lines: [line(1000, 0)] }, R);
+		const high = computeOrderTotals({ taxMode: 'exclusive', lines: [line(1000, 1000)] }, R);
+		expect(() => taxRemoved(low, high)).toThrow(RangeError);
 	});
 });

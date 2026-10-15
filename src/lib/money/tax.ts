@@ -83,6 +83,19 @@ export function taxOnLine(amount: Minor, rateBp: number, mode: TaxMode): LineTax
 	return taxOnAmount(exact(amount), rateBp, mode);
 }
 
+/**
+ * A BILL TAX OVERRIDE in inclusive mode (tasks/bill-tax-override): the amount
+ * already contains `includedBp` of tax; strip it, then charge `chargedBp` on the
+ * net that is left. With chargedBp 0 — a tax-exempt bill — the customer pays the
+ * price WITHOUT the tax it contained, and the revenue is the same net a taxed
+ * sale books (spec 18: tax is not revenue). Never rounds. Exclusive mode needs no
+ * such step: its price is already the net.
+ */
+export function retaxIncluded(amount: Exact, includedBp: number, chargedBp: number): LineTax {
+	const { net } = taxOnAmount(amount, includedBp, INCLUSIVE);
+	return taxOnAmount(net, chargedBp, EXCLUSIVE);
+}
+
 /** Basis points to "x.xx%": 825 → "8.25%". A rate is not money. */
 export function formatTaxRate(rateBp: number): string {
 	if (!Number.isInteger(rateBp) || rateBp < 0 || rateBp > 10_000) {
