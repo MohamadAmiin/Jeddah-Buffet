@@ -22,7 +22,10 @@ import {
 	createItem,
 	createModifier,
 	createModifierGroup,
-	linkModifierGroup
+	createTaxRate,
+	getMenuVersion,
+	linkModifierGroup,
+	setTaxRateOffered
 } from '../../menu';
 import { seedStaff } from './seed';
 import { cashMethodId, defaultTaxRateOf, seedPaymentMethod, seedTaxRate } from './settings';
@@ -32,7 +35,7 @@ import { recordSale } from '../../orders/pay';
 import { handleOp } from '../../orders/sync';
 import type { PosDeviceContext } from '../../auth/pos-context';
 import { minor, ROUNDING_RULE } from '../../../money';
-import { computeOrderTotals, serializeTotals } from '../../../money/order-totals';
+import { computeOrderTotals, serializeTotals, taxRemoved } from '../../../money/order-totals';
 import { changeDue } from '../../../money/change';
 import {
 	formatInvoiceNumber,
@@ -329,6 +332,10 @@ export type RecordSaleOptions = {
 	 * four optional keys — the payment's method id and name, each line's rate id and
 	 * name — is written into the payload. */
 	omitIds?: boolean;
+	/** A bill tax override (tasks/bill-tax-override): every line is charged this 0%
+	 * rate, on its price stripped of the tax it includes in inclusive mode, exactly
+	 * as the till's cartTotals does. The rate must be offered (offerExemptRate). */
+	exempt?: { rateId: string; rateName: string; reason: string };
 	lines: RecordSaleLine[];
 };
 
@@ -343,7 +350,28 @@ export function saleEnvelope(
 		discountMinor: minor(0n),
 		modifierDeltasMinor: (l.modifiers ?? []).map((m) => minor(m.priceDeltaMinor))
 	}));
-	const totals = computeOrderTotals({ taxMode: f.taxMode, lines: linesForTotals }, ROUNDING_RULE);
+	const exempt = o.exempt;
+	const totals = computeOrderTotals(
+		{
+			taxMode: f.taxMode,
+			lines: exempt
+				? linesForTotals.map((l) => ({ ...l, taxRateBp: 0, includedTaxRateBp: l.taxRateBp }))
+				: linesForTotals
+		},
+		ROUNDING_RULE
+	);
+	const taxOverride = exempt
+		? {
+				taxRateId: exempt.rateId,
+				taxRateName: exempt.rateName,
+				rateBp: 0,
+				reason: exempt.reason,
+				taxRemovedMinor: taxRemoved(
+					computeOrderTotals({ taxMode: f.taxMode, lines: linesForTotals }, ROUNDING_RULE),
+					totals
+				).toString()
+			}
+		: null;
 	const serialised = serializeTotals(totals);
 	const orderId = randomUUID();
 	const payloadLines = o.lines.map((l, i) => ({
@@ -353,14 +381,16 @@ export function saleEnvelope(
 		itemName: l.itemName,
 		quantity: l.quantity,
 		unitPriceMinor: l.unitPriceMinor.toString(),
-		taxRateBp: l.taxRateBp,
+		taxRateBp: exempt ? 0 : l.taxRateBp,
 		// Spread conditionally, as `note` is: with omitIds the keys are absent.
-		...(o.omitIds
-			? {}
-			: {
-					taxRateId: l.taxRateId ?? f.defaultTaxRate.id,
-					taxRateName: l.taxRateName ?? f.defaultTaxRate.name
-				}),
+		...(exempt
+			? { taxRateId: exempt.rateId, taxRateName: exempt.rateName, menuTaxRateBp: l.taxRateBp }
+			: o.omitIds
+				? {}
+				: {
+						taxRateId: l.taxRateId ?? f.defaultTaxRate.id,
+						taxRateName: l.taxRateName ?? f.defaultTaxRate.name
+					}),
 		discountMinor: '0',
 		modifiers: (l.modifiers ?? []).map((m) => ({
 			modifierId: m.modifierId,
@@ -409,10 +439,33 @@ export function saleEnvelope(
 			invoiceNumber: formatInvoiceNumber(f.deviceCode, o.invoiceSeq),
 			openedAt: openedAt.toISOString(),
 			lines: payloadLines,
+			...(taxOverride ? { taxOverride } : {}),
 			totals: serialised,
 			payments: [payment]
 		}
 	};
+}
+
+/**
+ * A live 0% rate offered for tax-exempt bills (tasks/bill-tax-override). Offering
+ * bumps the menu version, so the fixture's menuVersion is moved to the new one —
+ * every later saleEnvelope sends the version the till would hold.
+ */
+export async function offerExemptRate(
+	database: Db,
+	f: SalesFixture,
+	name = 'Exempt'
+): Promise<{ id: string; name: string }> {
+	const id = await database.transaction(async (tx) => {
+		const ctx = { actorUserId: f.ownerId, ip: null, userAgent: null };
+		const created = await createTaxRate(tx, f.restaurantId, { name, rateBp: 0 }, ctx);
+		if (!created.ok) throw new Error(`offerExemptRate: ${created.reason}`);
+		const offered = await setTaxRateOffered(tx, f.restaurantId, created.id, true, ctx);
+		if (!offered.ok) throw new Error(`offerExemptRate: ${offered.reason}`);
+		return created.id;
+	});
+	f.menuVersion = await getMenuVersion(database, f.restaurantId);
+	return { id, name };
 }
 
 export async function recordSaleAt(
