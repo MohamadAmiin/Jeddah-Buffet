@@ -704,6 +704,8 @@ describe('setTaxRateOffered (bill-tax-override T-05)', () => {
 		const audits = await updatesOf(r.restaurantId);
 		expect(audits).toHaveLength(1);
 		expect(audits[0].details).toEqual({
+			taxRateId: exempt,
+			name: 'Exempt',
 			changes: { offeredForBills: { old: false, new: true } }
 		});
 		const [row] = await listTaxRates(db, r.restaurantId);

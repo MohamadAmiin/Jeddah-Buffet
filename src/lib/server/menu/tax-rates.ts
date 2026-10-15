@@ -335,6 +335,7 @@ export async function setTaxRateOffered(
 	if (!UUID.test(taxRateId)) return { ok: false, reason: 'not_found' };
 	const [current] = await tx
 		.select({
+			name: taxRates.name,
 			rateBp: taxRates.rateBp,
 			archivedAt: taxRates.archivedAt,
 			offeredForBills: taxRates.offeredForBills
@@ -358,7 +359,13 @@ export async function setTaxRateOffered(
 			actorUserId: ctx.actorUserId,
 			subjectUserId: null,
 			event: 'tax_rate.updated',
-			details: { changes: { offeredForBills: { old: current.offeredForBills, new: offered } } },
+			// Which rate, by id and name: a restaurant may offer several 0% rates, and
+			// offering one is what lets any cashier exempt a bill.
+			details: {
+				taxRateId,
+				name: current.name,
+				changes: { offeredForBills: { old: current.offeredForBills, new: offered } }
+			},
 			ip: ctx.ip,
 			userAgent: ctx.userAgent
 		});

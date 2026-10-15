@@ -230,7 +230,13 @@ export type AuditEvent =
 	| { event: 'tax_rate.created'; details: { name: string; rateBp: number } }
 	| {
 			event: 'tax_rate.updated';
-			details: { changes: Record<string, { old: unknown; new: unknown }> };
+			// taxRateId and name: which rate — written by setTaxRateOffered
+			// (tasks/bill-tax-override), whose change is the offered flag alone.
+			details: {
+				taxRateId?: string;
+				name?: string;
+				changes: Record<string, { old: unknown; new: unknown }>;
+			};
 	  }
 	| { event: 'tax_rate.archived'; details: { name: string; rateBp: number } }
 	// tasks/settings-tax-payments-receipt (T-13): an item's named rate changed. A
