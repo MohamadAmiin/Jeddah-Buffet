@@ -239,6 +239,7 @@ describe('the POS store', () => {
 			taxMode: 'exclusive',
 			taxRateBp: 825,
 			defaultTaxRate: null,
+			billTaxRates: [],
 			categories: [],
 			items: [],
 			modifierGroups: []

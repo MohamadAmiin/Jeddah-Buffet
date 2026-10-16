@@ -12,27 +12,41 @@
 	// moment completeSale resolves, online or not. Card and mobile never complete
 	// offline: their keys are disabled with the reason written on them BEFORE the
 	// tap (invariant 5). Change comes from changeDue; this file adds nothing up.
+	//
+	// A TAX-EXEMPT BILL (tasks/bill-tax-override): an employee who may take payment
+	// can pick one of the 0% rates the owner offered (the cached menu's
+	// billTaxRates) and type who is exempt. The cart keeps it; cartTotals charges
+	// it; the bill shows "Tax exempt" and "Tax removed" before Pay. It is checked
+	// again on load and just before Pay (reconcileTaxOverride): a rate the owner
+	// withdrew, or one another employee applied, is dropped and the cashier is told
+	// in words — the sale is never sent with an exemption its menu version no
+	// longer offers.
 	import { getContext, onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { minor, type Minor } from '$lib/money';
 	import { formatAmount, formatMoney, moneyFormatFor, type MoneyFormat } from '$lib/money/format';
 	import { changeDue, quickTenders } from '$lib/money/change';
-	import { TAX_MODES, type TaxMode } from '$lib/money/tax';
-	import { RESTORED_CONTEXT, signedIn } from '$lib/pos/employee.svelte';
+	import { formatTaxRate, TAX_MODES, type TaxMode } from '$lib/money/tax';
+	import { hasPermission, RESTORED_CONTEXT, signedIn } from '$lib/pos/employee.svelte';
 	import {
 		abandonSale,
+		applyTaxOverride,
+		cartTaxRemoved,
 		cartTotals,
+		clearTaxOverride,
 		completeSale,
 		lineAmounts,
 		readCart,
+		reconcileTaxOverride,
+		saveCart,
 		type Cart,
 		type CompleteSaleResult
 	} from '$lib/pos/orders';
 	import { readLocalSession } from '$lib/pos/session';
 	import { flush, onFlushEvent, type FlushEvent } from '$lib/pos/queue';
 	import { printOriginals, type OriginalsResult } from '$lib/pos/printing';
-	import { readPaymentMethods } from '$lib/pos/settings';
+	import { readPaymentMethods, readReceiptLayout } from '$lib/pos/settings';
 	import {
 		readBoundDeviceId,
 		readCachedSetting,
@@ -53,6 +67,7 @@
 	import Closer from '$lib/components/pos/Closer.svelte';
 	import Keypad, { type KeypadKey } from '$lib/components/pos/Keypad.svelte';
 	import TillBanner from '$lib/components/pos/TillBanner.svelte';
+	import TaxExemptSheet from '$lib/components/pos/TaxExemptSheet.svelte';
 	import type { CheckLineView } from '$lib/components/pos/CheckLine.svelte';
 	import { KEY, KEY_CHOSEN } from '$lib/components/pos/keys';
 
@@ -95,6 +110,14 @@
 	let print = $state<{ ok: boolean; text: string } | null>(null);
 	let drawerLine = $state('');
 
+	// The tax exemption (tasks/bill-tax-override).
+	let exemptOpen = $state(false);
+	let exemptError = $state('');
+	let exemptNotice = $state('');
+	// The owner's zeroTax receipt switch, read from the cached layout; the bill
+	// follows the paper. True (today's bill) until the cache read lands.
+	let zeroTaxShown = $state(true);
+
 	const figures = $derived(
 		cart ? { totals: cartTotals(cart, taxMode), amounts: lineAmounts(cart) } : null
 	);
@@ -113,6 +136,70 @@
 	);
 
 	const selected = $derived(options.find((o) => o.key === tender) ?? null);
+
+	// Who may exempt a bill: anyone who may take payment (no new key — the user's
+	// "any cashier"); the server checks pos.payment on the sale itself.
+	const canExempt = $derived(
+		sale === null && menu !== null && menu.billTaxRates.length > 0 && hasPermission('pos.payment')
+	);
+	const removed = $derived(cart ? cartTaxRemoved(cart, taxMode) : null);
+	const exemptRates = $derived(
+		(menu?.billTaxRates ?? []).map((rate) => ({
+			id: rate.id,
+			label: `${rate.name} ${formatTaxRate(rate.rateBp)}`
+		}))
+	);
+
+	/** Drop an exemption that is no longer valid, and say so. True when one was dropped. */
+	async function reconcile(): Promise<boolean> {
+		if (!cart || !menu || !signedIn.current) return false;
+		const name = cart.taxOverride?.rateName ?? '';
+		const result = reconcileTaxOverride(cart, menu.billTaxRates, signedIn.current.id);
+		if (result.dropped === null) return false;
+		cart = result.cart;
+		await saveCart(result.cart);
+		tendered = null;
+		digits = '';
+		exemptNotice =
+			result.dropped === 'not_offered'
+				? `${name} is no longer offered — this bill is taxed again.`
+				: 'The tax exemption was applied by another employee — apply it again.';
+		return true;
+	}
+
+	function openExempt() {
+		exemptError = '';
+		exemptOpen = true;
+	}
+
+	async function applyExempt(rateId: string, reason: string) {
+		if (!cart || !menu || !signedIn.current) return;
+		const rate = menu.billTaxRates.find((r) => r.id === rateId);
+		if (!rate) return;
+		try {
+			const next = applyTaxOverride(cart, rate, reason, signedIn.current.id);
+			await saveCart(next);
+			cart = next;
+			// The total changed: an amount keyed for the old total no longer applies.
+			tendered = null;
+			digits = '';
+			exemptError = '';
+			exemptNotice = '';
+			exemptOpen = false;
+		} catch (err) {
+			exemptError = err instanceof Error ? err.message : 'The exemption could not be applied';
+		}
+	}
+
+	async function removeExempt() {
+		if (!cart) return;
+		const next = clearTaxOverride(cart);
+		await saveCart(next);
+		cart = next;
+		tendered = null;
+		digits = '';
+		exemptOpen = false;
+	}
 
 	// THE offline rule, by KIND (invariant 5): cash never; card and mobile while offline.
 	function reasonFor(o: TenderOption): string | null {
@@ -207,6 +294,9 @@
 				void goto(resolve('/pos/order'));
 				return;
 			}
+			await reconcile().catch(() => {});
+			const layout = await readReceiptLayout().catch(() => null);
+			zeroTaxShown = layout?.show.zeroTax ?? true;
 			options = tenderOptions(await readPaymentMethods().catch(() => []));
 			const code = await readCachedSetting('deviceCode').catch(() => null);
 			deviceCode = typeof code === 'string' ? code : null;
@@ -240,6 +330,10 @@
 		busy = true;
 		failure = '';
 		try {
+			// Just before Pay: an exemption the menu no longer offers (a sync landed
+			// while the bill was open) or another employee's is dropped, and the
+			// cashier sees the new total before paying it.
+			if (await reconcile()) return;
 			// Captured once: every decision below keys on the option's KIND.
 			const option = selected;
 			const result = await completeSale({
@@ -369,7 +463,16 @@
 				figures.totals.discount !== 0n ? formatMoney(figures.totals.discount, format) : null,
 			tax: formatMoney(figures.totals.tax, format),
 			taxMode,
-			total: formatMoney(figures.totals.total, format)
+			total: formatMoney(figures.totals.total, format),
+			hideZeroTax: !zeroTaxShown && figures.totals.tax === 0n,
+			exempt:
+				cart?.taxOverride && removed !== null
+					? {
+							label: `${cart.taxOverride.rateName} ${formatTaxRate(cart.taxOverride.rateBp)}`,
+							reason: cart.taxOverride.reason,
+							removed: formatMoney(removed, format)
+						}
+					: null
 		};
 	});
 	const checkPill = $derived(
@@ -521,6 +624,41 @@
 					</div>
 				{:else}
 					<div class="flex flex-col gap-5">
+						<!-- The tax exemption (tasks/bill-tax-override): here, in the tender
+						     pane, so it is reachable on a phone where the check is hidden. -->
+						{#if exemptNotice}
+							<TillBanner tone="offline" live="status">{exemptNotice}</TillBanner>
+						{/if}
+						{#if cart.taxOverride && removed !== null}
+							<div
+								class="rounded-card border-line bg-raise-2 flex flex-wrap items-center gap-3 border p-4"
+								data-testid="tax-exempt"
+							>
+								<div class="flex min-w-0 flex-1 flex-col gap-1">
+									<p class="font-semibold">
+										<span aria-hidden="true" class="font-mono">◆</span> Tax exempt · {cart
+											.taxOverride.rateName}
+									</p>
+									<p class="text-ink-2 break-words">{cart.taxOverride.reason}</p>
+									<p>
+										Tax removed
+										<span class="font-mono tabular-nums">{formatMoney(removed, money)}</span>
+									</p>
+								</div>
+								{#if canExempt}
+									<button type="button" class="min-h-touch-min px-4 {KEY}" onclick={openExempt}
+										>Change exemption</button
+									>
+								{/if}
+							</div>
+						{:else if canExempt}
+							<button
+								type="button"
+								class="min-h-touch-min self-start px-4 {KEY}"
+								onclick={openExempt}>Tax exempt…</button
+							>
+						{/if}
+
 						<div class="flex flex-col gap-2">
 							<p id="tender-l" class="font-semibold">Tender</p>
 							<div role="radiogroup" aria-labelledby="tender-l" class="grid grid-cols-3 gap-3">
@@ -637,6 +775,18 @@
 				{@render closers('bar')}
 			</div>
 		</section>
+
+		<TaxExemptSheet
+			open={exemptOpen}
+			rates={exemptRates}
+			current={cart.taxOverride
+				? { rateId: cart.taxOverride.rateId, reason: cart.taxOverride.reason }
+				: null}
+			error={exemptError}
+			onapply={applyExempt}
+			onremove={removeExempt}
+			oncancel={() => (exemptOpen = false)}
+		/>
 
 		<Check
 			mode="bill"

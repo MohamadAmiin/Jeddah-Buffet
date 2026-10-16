@@ -2924,6 +2924,8 @@ describe('named tax rates, payment methods and receipt layout (settings-tax-paym
 		const names = [
 			'menu_items_tax_rate_fk',
 			'order_lines_tax_rate_fk',
+			// tasks/bill-tax-override (migration 0019).
+			'orders_tax_override_rate_fk',
 			'payments_payment_method_fk',
 			'restaurant_settings_default_tax_rate_fk'
 		];
@@ -2936,7 +2938,7 @@ describe('named tax rates, payment methods and receipt layout (settings-tax-paym
 			 where conname = any($1) order by conname`,
 			[names]
 		);
-		expect(rows).toHaveLength(4);
+		expect(rows).toHaveLength(5);
 		expect(rows.map((row) => row.conname)).toEqual(names);
 		for (const row of rows) {
 			expect(row.confdeltype).toBe('r');
@@ -3133,4 +3135,217 @@ describe('retired columns (settings-tax-payments-receipt T-33)', () => {
 		);
 		expect(checks.rows).toEqual([{ conname: 'order_lines_tax_rate_bp_range' }]);
 	});
+});
+
+describe('bill tax override (bill-tax-override T-01)', () => {
+	async function makeRate(r: string, name: string, rateBp: number): Promise<string> {
+		const { rows } = await pool.query<{ id: string }>(
+			'insert into tax_rates (restaurant_id, name, rate_bp) values ($1, $2, $3) returning id',
+			[r, name, rateBp]
+		);
+		return rows[0].id;
+	}
+
+	type Override = {
+		rateId: string | null;
+		name: string | null;
+		bp: number | null;
+		reason: string | null;
+		removed: number | null;
+	};
+
+	/** An exempt order: 1000 net, no tax, 1000 total — the five override columns as given. */
+	function insertOrder(r: string, s: string, d: string, o: string, ov: Override) {
+		return pool.query<{ id: string }>(
+			`insert into orders (
+				restaurant_id, pos_session_id, device_id, employee_user_id, order_type, status,
+				tax_mode, currency_code, menu_version, subtotal_minor, discount_minor, tax_minor,
+				total_minor, opened_at, paid_at, tax_override_rate_id, tax_override_rate_name,
+				tax_override_rate_bp, tax_override_reason, tax_removed_minor
+			) values ($1, $2, $3, $4, 'takeaway', 'paid', 'exclusive', 'USD', 1, 1000, 0, 0, 1000,
+				now(), now(), $5, $6, $7, $8, $9)
+			returning id`,
+			[r, s, d, o, ov.rateId, ov.name, ov.bp, ov.reason, ov.removed]
+		);
+	}
+
+	async function fixture(slug: string) {
+		const r = await makeRestaurant(slug);
+		const o = await makeOwner(r, `${slug}@example.com`);
+		const d = await makeDevice(r, o);
+		const s = await makeSession(r, d, o);
+		const exempt = await makeRate(r, 'Exempt', 0);
+		return { r, o, d, s, exempt };
+	}
+
+	it('tax_rates.offered_for_bills lands false; only a 0% rate may be offered', async () => {
+		const r = await makeRestaurant('offered-flag');
+		const vat = await makeRate(r, 'VAT', 500);
+		const exempt = await makeRate(r, 'Exempt', 0);
+		const { rows } = await pool.query<{ offered_for_bills: boolean }>(
+			'select offered_for_bills from tax_rates where id = any($1)',
+			[[vat, exempt]]
+		);
+		expect(rows.map((row) => row.offered_for_bills)).toEqual([false, false]);
+
+		const refused = await expectError(
+			'update tax_rates set offered_for_bills = true where id = $1',
+			[vat]
+		);
+		expect(refused.code).toBe('23514');
+		expect(refused.constraint).toBe('tax_rates_offered_zero_rate');
+
+		const { rowCount } = await pool.query(
+			'update tax_rates set offered_for_bills = true where id = $1',
+			[exempt]
+		);
+		expect(rowCount).toBe(1);
+		const rerate = await expectError('update tax_rates set rate_bp = 500 where id = $1', [exempt]);
+		expect(rerate.constraint).toBe('tax_rates_offered_zero_rate');
+	});
+
+	it('restaurant_settings.receipt_show_zero_tax lands true', async () => {
+		const r = await makeRestaurant('zero-tax-switch');
+		await pool.query(
+			`insert into restaurant_settings (restaurant_id, time_zone) values ($1, 'UTC')`,
+			[r]
+		);
+		const { rows } = await pool.query<{ receipt_show_zero_tax: boolean }>(
+			'select receipt_show_zero_tax from restaurant_settings where restaurant_id = $1',
+			[r]
+		);
+		expect(rows[0].receipt_show_zero_tax).toBe(true);
+	});
+
+	it('orders: the five override columns come all together or not at all', async () => {
+		const { r, o, d, s, exempt } = await fixture('override-all-or-none');
+		const none = await insertOrder(r, s, d, o, {
+			rateId: null,
+			name: null,
+			bp: null,
+			reason: null,
+			removed: null
+		});
+		expect(none.rowCount).toBe(1);
+		const all = await insertOrder(r, s, d, o, {
+			rateId: exempt,
+			name: 'Exempt',
+			bp: 0,
+			reason: 'UNICEF',
+			removed: 100
+		});
+		expect(all.rowCount).toBe(1);
+
+		const partial: Override[] = [
+			{ rateId: exempt, name: null, bp: null, reason: null, removed: null },
+			{ rateId: exempt, name: 'Exempt', bp: 0, reason: 'UNICEF', removed: null },
+			{ rateId: null, name: null, bp: null, reason: 'UNICEF', removed: null }
+		];
+		for (const ov of partial) {
+			const error = await refusal(insertOrder(r, s, d, o, ov));
+			expect(error.code).toBe('23514');
+			expect(error.constraint).toBe('orders_tax_override_all_or_none');
+		}
+	});
+
+	it('orders: the override values are checked; a 2-code-point astral reason is accepted', async () => {
+		const { r, o, d, s, exempt } = await fixture('override-values');
+		const base = { rateId: exempt, name: 'Exempt', bp: 0, reason: 'UNICEF', removed: 100 };
+		const bad: Override[] = [
+			{ ...base, reason: 'NGO\u0001' },
+			{ ...base, reason: '' },
+			{ ...base, reason: 'x'.repeat(81) },
+			{ ...base, removed: -1 },
+			{ ...base, bp: 10001 },
+			{ ...base, name: '' }
+		];
+		for (const ov of bad) {
+			const error = await refusal(insertOrder(r, s, d, o, ov));
+			expect(error.code).toBe('23514');
+			expect(error.constraint).toBe('orders_tax_override_values_valid');
+		}
+		const astral = await insertOrder(r, s, d, o, { ...base, reason: '\u{1F1FA}\u{1F1F3}' });
+		expect(astral.rowCount).toBe(1);
+		const eighty = await insertOrder(r, s, d, o, { ...base, reason: 'x'.repeat(80) });
+		expect(eighty.rowCount).toBe(1);
+	});
+
+	it("orders: another restaurant's rate is refused by orders_tax_override_rate_fk", async () => {
+		const { r, o, d, s } = await fixture('override-foreign');
+		const other = await makeRestaurant('override-foreign-other');
+		const foreign = await makeRate(other, 'Exempt', 0);
+		const error = await refusal(
+			insertOrder(r, s, d, o, {
+				rateId: foreign,
+				name: 'Exempt',
+				bp: 0,
+				reason: 'UNICEF',
+				removed: 100
+			})
+		);
+		expect(error.code).toBe('23503');
+		expect(error.constraint).toBe('orders_tax_override_rate_fk');
+	});
+
+	it('order_lines: menu_tax_rate_bp is 0..10000 and charged_minor is not negative', async () => {
+		const { r, o, d, s } = await fixture('override-lines');
+		const orderId = await makeOrder(r, s, d, o);
+		const menuItemId = await makeMenuItem(r);
+		const insertLine = `insert into order_lines (restaurant_id, order_id, line_no, menu_item_id,
+			 item_name, quantity, unit_price_minor, tax_rate_bp, discount_minor, status,
+			 menu_tax_rate_bp, charged_minor)
+			 values ($1, $2, $3, $4, 'Tea', 1, 1100, 0, 0, 'new', $5, $6)`;
+		const ok = await pool.query(insertLine, [r, orderId, 1, menuItemId, 1000, 1000]);
+		expect(ok.rowCount).toBe(1);
+		const empty = await pool.query(insertLine, [r, orderId, 2, menuItemId, null, null]);
+		expect(empty.rowCount).toBe(1);
+		for (const [lineNo, bp, charged] of [
+			[3, 10001, null],
+			[4, -1, null],
+			[5, 500, -1]
+		] as const) {
+			const error = await expectError(insertLine, [r, orderId, lineNo, menuItemId, bp, charged]);
+			expect(error.code).toBe('23514');
+			expect(error.constraint).toBe('order_lines_override_values_valid');
+		}
+	});
+
+	it('migration 0019 adds only nullable columns to posted tables and changes no row', () => {
+		const dir = new URL('../migrations/', import.meta.url);
+		const files = readdirSync(dir).filter((file) => /^0019_.*\.sql$/.test(file));
+		expect(files).toHaveLength(1);
+		const text = readFileSync(new URL(files[0], dir), 'utf8');
+
+		expect(text).not.toMatch(/^\s*(UPDATE|DELETE|TRUNCATE)\b/im);
+		expect(text).not.toMatch(/\bDROP\b/i);
+
+		const added = [
+			...text.matchAll(
+				/ALTER TABLE "(orders|order_lines|payments|invoices)" ADD COLUMN "([a-z_]+)"[^;]*;/g
+			)
+		];
+		expect(added.map((m) => `${m[1]}.${m[2]}`).sort()).toEqual([
+			'order_lines.charged_minor',
+			'order_lines.menu_tax_rate_bp',
+			'orders.tax_override_rate_bp',
+			'orders.tax_override_rate_id',
+			'orders.tax_override_rate_name',
+			'orders.tax_override_reason',
+			'orders.tax_removed_minor'
+		]);
+		for (const [statement] of added) {
+			expect(statement).not.toMatch(/NOT NULL/);
+			expect(statement).not.toMatch(/DEFAULT/);
+		}
+	});
+
+	/** The PostgreSQL error a pending statement fails with, failing if it succeeded. */
+	async function refusal(statement: Promise<unknown>): Promise<pg.DatabaseError> {
+		try {
+			await statement;
+		} catch (error) {
+			return error as pg.DatabaseError;
+		}
+		throw new Error('Expected this statement to be rejected, but it succeeded');
+	}
 });

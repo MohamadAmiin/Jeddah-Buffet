@@ -10,13 +10,23 @@
 // close) burns nothing (invariant 5, spec 6).
 
 import { withDb, valueOf, signalUnsyncedChange, type LocalOrder } from './store';
-import { computeOrderTotals, taxBreakdown, type OrderTotals } from '../money/order-totals';
+import {
+	computeOrderTotals,
+	taxBreakdown,
+	taxRemoved,
+	type OrderTotals,
+	type TotalsLine
+} from '../money/order-totals';
 import { changeDue } from '../money/change';
 import { add, minor, multiplyByInteger, ROUNDING_RULE, sum, type Minor } from '../money';
 import type { TaxMode } from '../money/tax';
 import type { ResolvedTaxRate } from './menu-view';
+import type { SnapshotTaxRate } from './menu-snapshot';
 import {
+	cleanTaxOverrideReason,
+	codePointLength,
 	PAYMENT_METHODS,
+	TAX_OVERRIDE_REASON_MIN,
 	type OpEnvelope,
 	type OrderType,
 	type SaleAbandonedPayload,
@@ -49,6 +59,23 @@ export type CartLine = {
 	modifiers: CartModifier[];
 };
 
+/**
+ * A bill tax override (tasks/bill-tax-override): the whole bill is charged one of
+ * the 0% rates the owner offered for tax-exempt bills. Every line KEEPS its own
+ * snapshotted rate (invariant 7) — the override is applied when the bill is
+ * totalled and sent, so removing it restores the bill exactly. Tied to the
+ * employee who applied it: a different employee signed in drops it
+ * (reconcileTaxOverride), so the audit trail names who removed the tax.
+ */
+export type CartTaxOverride = {
+	rateId: string;
+	rateName: string;
+	rateBp: number;
+	/** Already cleaned by cleanTaxOverrideReason; 3–80 code points. */
+	reason: string;
+	appliedByEmployeeId: string;
+};
+
 export type Cart = {
 	orderId: string;
 	deviceId: string;
@@ -58,6 +85,9 @@ export type Cart = {
 	/** An optional kitchen note, at most 140 characters (menu-and-printing T-22).
 	 * Optional in the type: carts stored before this field have none. */
 	note?: string | null;
+	/** Optional in the type: a cart saved by a build before bill-tax-override has
+	 * no key, so every reader writes `cart.taxOverride ?? null`. */
+	taxOverride?: CartTaxOverride | null;
 	lines: CartLine[];
 	openedAt: string;
 };
@@ -277,18 +307,108 @@ export function clearCart(deviceId: string): Promise<void> {
 	);
 }
 
-function toTotalsLine(l: CartLine) {
+/**
+ * One line as the money module totals it. With a bill tax override the line is
+ * CHARGED the override's rate on its price, stripped of the line's own rate in
+ * inclusive mode (includedTaxRateBp — the money module ignores it in exclusive
+ * mode); without one, exactly as before.
+ */
+function toTotalsLine(l: CartLine, override: CartTaxOverride | null): TotalsLine {
 	return {
 		unitPriceMinor: minor(l.unitPriceMinor),
 		quantity: BigInt(l.quantity),
 		modifierDeltasMinor: l.modifiers.map((m) => minor(m.priceDeltaMinor)),
-		taxRateBp: l.taxRateBp,
-		discountMinor: minor(0n) as Minor
+		taxRateBp: override === null ? l.taxRateBp : override.rateBp,
+		discountMinor: minor(0n) as Minor,
+		...(override === null ? {} : { includedTaxRateBp: l.taxRateBp })
 	};
 }
 
+/** The bill as it will be charged: the tax override applied, when there is one. */
 export function cartTotals(cart: Cart, taxMode: TaxMode): OrderTotals {
-	return computeOrderTotals({ taxMode, lines: cart.lines.map(toTotalsLine) }, ROUNDING_RULE);
+	const override = cart.taxOverride ?? null;
+	return computeOrderTotals(
+		{ taxMode, lines: cart.lines.map((l) => toTotalsLine(l, override)) },
+		ROUNDING_RULE
+	);
+}
+
+/** The bill at its lines' OWN rates, ignoring any tax override. */
+export function cartStandardTotals(cart: Cart, taxMode: TaxMode): OrderTotals {
+	return computeOrderTotals(
+		{ taxMode, lines: cart.lines.map((l) => toTotalsLine(l, null)) },
+		ROUNDING_RULE
+	);
+}
+
+/** What the tax override takes off the bill, or null without one. */
+export function cartTaxRemoved(cart: Cart, taxMode: TaxMode): Minor | null {
+	if ((cart.taxOverride ?? null) === null) return null;
+	return taxRemoved(cartStandardTotals(cart, taxMode), cartTotals(cart, taxMode));
+}
+
+/**
+ * Make the whole bill tax-exempt with an OFFERED rate (tasks/bill-tax-override).
+ * The reason is cleaned by the ONE rule the server also applies
+ * (cleanTaxOverrideReason), so a reason accepted here is never refused on sync;
+ * fewer than TAX_OVERRIDE_REASON_MIN code points after cleaning is refused with a
+ * sentence the screen shows. Only a 0% rate can be offered. Lines are untouched.
+ */
+export function applyTaxOverride(
+	cart: Cart,
+	rate: SnapshotTaxRate,
+	reasonRaw: string,
+	employeeId: string
+): Cart {
+	if (rate.rateBp !== 0) throw new Error('Only a 0% rate can make a bill tax-exempt.');
+	const reason = cleanTaxOverrideReason(reasonRaw);
+	if (codePointLength(reason) < TAX_OVERRIDE_REASON_MIN) {
+		throw new Error(`Type who is exempt and why — at least ${TAX_OVERRIDE_REASON_MIN} characters.`);
+	}
+	return {
+		...cart,
+		taxOverride: {
+			rateId: rate.id,
+			rateName: rate.name,
+			rateBp: rate.rateBp,
+			reason,
+			appliedByEmployeeId: employeeId
+		}
+	};
+}
+
+/** The bill taxed again at its lines' own rates. */
+export function clearTaxOverride(cart: Cart): Cart {
+	return { ...cart, taxOverride: null };
+}
+
+/**
+ * Keep a tax override only while it is still one the server will accept, and
+ * still the signed-in employee's: dropped when the cached menu no longer offers a
+ * rate with the same id, name AND number (the owner withdrew, renamed or archived
+ * it; a menu sync brought the change), or when another employee applied it.
+ * Called when the order and pay screens load and again before Pay, so a sale is
+ * never sent at a newer menu version with an override that version no longer
+ * offers (that would be a HARD price_tamper on a sale the till already took).
+ */
+export function reconcileTaxOverride(
+	cart: Cart,
+	billTaxRates: readonly SnapshotTaxRate[],
+	employeeId: string
+): { cart: Cart; dropped: null | 'not_offered' | 'other_employee' } {
+	const override = cart.taxOverride ?? null;
+	if (override === null) return { cart, dropped: null };
+	const offered = billTaxRates.some(
+		(rate) =>
+			rate.id === override.rateId &&
+			rate.name === override.rateName &&
+			rate.rateBp === override.rateBp
+	);
+	if (!offered) return { cart: clearTaxOverride(cart), dropped: 'not_offered' };
+	if (override.appliedByEmployeeId !== employeeId) {
+		return { cart: clearTaxOverride(cart), dropped: 'other_employee' };
+	}
+	return { cart, dropped: null };
 }
 
 /**
@@ -380,6 +500,12 @@ function validateBeforeTx(args: CompleteSaleArgs): void {
 	if (!(PAYMENT_METHODS as readonly string[]).includes(payment.method)) {
 		throw new Error(`payment.method invalid`);
 	}
+	// A tax exemption is the act of the employee who applied it: anyone else must
+	// apply it again, so the sale (and its audit row) names who removed the tax.
+	const override = cart.taxOverride ?? null;
+	if (override !== null && override.appliedByEmployeeId !== args.employeeId) {
+		throw new Error('The tax exemption was applied by someone else — apply it again.');
+	}
 	if (payment.method === 'cash') {
 		if (typeof payment.tenderedMinor !== 'bigint') {
 			throw new Error('cash payment needs tenderedMinor bigint');
@@ -394,15 +520,23 @@ export async function completeSale(
 	abortForTest = false
 ): Promise<CompleteSaleResult> {
 	validateBeforeTx(args);
+	const override = args.cart.taxOverride ?? null;
+	// The bill as charged — with a tax override applied (tasks/bill-tax-override).
 	const totals = cartTotals(args.cart, args.taxMode);
+	const removed = cartTaxRemoved(args.cart, args.taxMode);
 	// The per-rate split of totals.tax, for the receipt — from the SAME lines in
 	// the SAME order (taxBreakdown pairs lineRates[i] with totals.lines[i]); its
 	// rows sum to totals.tax by construction (invariant 7: one rounding rule, in
 	// the money module). Computed BEFORE the transaction opens, like every other
 	// figure here. A line saved by the previous build has no name key.
+	// Under a tax override every line is charged the override's rate.
 	const breakdown = taxBreakdown(
 		totals,
-		args.cart.lines.map((l) => ({ rateBp: l.taxRateBp, name: l.taxRateName ?? null })),
+		args.cart.lines.map((l) =>
+			override === null
+				? { rateBp: l.taxRateBp, name: l.taxRateName ?? null }
+				: { rateBp: override.rateBp, name: override.rateName }
+		),
 		ROUNDING_RULE
 	);
 	const changeMinor =
@@ -436,12 +570,16 @@ export async function completeSale(
 			itemName: l.itemName,
 			quantity: l.quantity,
 			unitPriceMinor: l.unitPriceMinor.toString(),
-			taxRateBp: l.taxRateBp,
+			// The rate the line is CHARGED: the override's under a bill tax override
+			// (tasks/bill-tax-override), else its own.
+			taxRateBp: override === null ? l.taxRateBp : override.rateBp,
 			// settings-tax-payments-receipt T-19: the named rate, optional on the
 			// wire (T-14). This till always sends both keys — null when the rate
 			// came from a format-1 copy or the cart was saved by the previous build.
-			taxRateId: l.taxRateId ?? null,
-			taxRateName: l.taxRateName ?? null,
+			taxRateId: override === null ? (l.taxRateId ?? null) : override.rateId,
+			taxRateName: override === null ? (l.taxRateName ?? null) : override.rateName,
+			// The item's OWN rate, on every line (tasks/bill-tax-override).
+			menuTaxRateBp: l.taxRateBp,
 			discountMinor: '0',
 			modifiers: l.modifiers.map((m) => ({
 				modifierId: m.modifierId,
@@ -449,6 +587,16 @@ export async function completeSale(
 				priceDeltaMinor: m.priceDeltaMinor.toString()
 			}))
 		})),
+		taxOverride:
+			override === null || removed === null
+				? null
+				: {
+						taxRateId: override.rateId,
+						taxRateName: override.rateName,
+						rateBp: override.rateBp,
+						reason: override.reason,
+						taxRemovedMinor: removed.toString()
+					},
 		totals: {
 			subtotalMinor: totals.subtotal.toString(),
 			discountMinor: totals.discount.toString(),

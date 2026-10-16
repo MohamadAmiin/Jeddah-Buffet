@@ -1,7 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { addExact, exact, minor, roundToMinor, ROUNDING_RULE, sumExact } from './index';
-import { formatTaxRate, parsePercentToBp, TAX_MODES, taxOnAmount, taxOnLine } from './tax';
+import {
+	formatTaxRate,
+	parsePercentToBp,
+	retaxIncluded,
+	TAX_MODES,
+	taxOnAmount,
+	taxOnLine
+} from './tax';
 
 // A seeded linear-congruential generator (Numerical Recipes constants), in bigint,
 // so a failing generated case reproduces exactly. No property-testing library.
@@ -118,6 +125,34 @@ describe('tax in BOTH modes (spec 17)', () => {
 
 // MANDATORY (spec 29 — money arithmetic and rounding). Moved here from
 // src/lib/pos/menu-view.ts by tasks/settings-tax-payments-receipt T-08.
+describe('retaxIncluded — the inclusive-mode bill tax override (bill-tax-override T-02)', () => {
+	it('MANDATORY (spec 29 — tax): 1100 with 10% included, charged 0% → net 1000, no tax', () => {
+		const t = retaxIncluded(exact(1100n), 1000, 0);
+		expect(t.net).toEqual(exact(1000n));
+		expect(t.tax).toEqual(exact(0n));
+		expect(t.gross).toEqual(exact(1000n));
+	});
+
+	it('1050 with 5% included, charged 0% → net 1000', () => {
+		const t = retaxIncluded(exact(1050n), 500, 0);
+		expect(t.net).toEqual(exact(1000n));
+		expect(t.gross).toEqual(exact(1000n));
+	});
+
+	it('999 with 20% included, charged 0% → 832.5 exactly, never rounded', () => {
+		const t = retaxIncluded(exact(999n), 2000, 0);
+		expect(t.gross).toEqual(exact(1665n, 2n));
+		expect(t.tax).toEqual(exact(0n));
+	});
+
+	it('a charged rate goes on top of the stripped net', () => {
+		const t = retaxIncluded(exact(1100n), 1000, 500);
+		expect(t.net).toEqual(exact(1000n));
+		expect(t.tax).toEqual(exact(50n));
+		expect(t.gross).toEqual(exact(1050n));
+	});
+});
+
 describe('formatTaxRate — basis points to "x.xx%"', () => {
 	it('renders basis points as a two-decimal percentage', () => {
 		expect(formatTaxRate(825)).toBe('8.25%');

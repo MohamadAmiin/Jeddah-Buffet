@@ -104,7 +104,7 @@ describe('GET /api/menu/version', () => {
 
 		expect(result.status).toBe(200);
 		expect(JSON.parse(result.text)).toEqual({ version: 1, restaurantId: a.restaurantId });
-		expect(result.headers!.get('etag')).toBe(`W/"menu-${a.restaurantId}-1"`);
+		expect(result.headers!.get('etag')).toBe(`W/"menu-${a.restaurantId}-1-b"`);
 		expect(result.headers!.get('cache-control')).toBe('private, no-cache');
 		expect(result.headers!.get('vary')).toBe('Cookie');
 	});

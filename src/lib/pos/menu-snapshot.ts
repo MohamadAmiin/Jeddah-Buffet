@@ -80,6 +80,12 @@ export type MenuSnapshot = {
 	 * one. Missing on a format-1 snapshot → null.
 	 */
 	defaultTaxRate: SnapshotTaxRate | null;
+	/**
+	 * The 0% rates the owner offered for tax-exempt bills (tasks/bill-tax-override):
+	 * a cashier may apply one to a whole bill. Missing on a snapshot from a server
+	 * before that plan → [].
+	 */
+	billTaxRates: SnapshotTaxRate[];
 	categories: SnapshotCategory[];
 	items: SnapshotItem[];
 	modifierGroups: SnapshotModifierGroup[];
@@ -182,6 +188,16 @@ export function parseSnapshot(raw: unknown): MenuSnapshot {
 			body.defaultTaxRate === undefined
 				? null
 				: nullableTaxRate(body.defaultTaxRate, 'defaultTaxRate'),
+		// A MISSING key (a server before bill-tax-override) reads as no offered rate;
+		// a present key must be a list of rates, each one non-null.
+		billTaxRates:
+			body.billTaxRates === undefined
+				? []
+				: list(body.billTaxRates, 'billTaxRates').map((entry, i) => {
+						const rate = nullableTaxRate(entry, `billTaxRates[${i}]`);
+						if (rate === null) throw new SnapshotError(`billTaxRates[${i}]`, 'is null');
+						return rate;
+					}),
 		categories: list(body.categories, 'categories').map((entry, i) => {
 			const category = record(entry, `categories[${i}]`);
 			return {

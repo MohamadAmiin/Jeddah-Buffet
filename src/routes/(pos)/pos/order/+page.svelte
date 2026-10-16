@@ -12,19 +12,22 @@
 	import { resolve } from '$app/paths';
 	import { minor } from '$lib/money';
 	import { formatAmount, formatMoney, moneyFormatFor, type MoneyFormat } from '$lib/money/format';
-	import { TAX_MODES, type TaxMode } from '$lib/money/tax';
+	import { formatTaxRate, TAX_MODES, type TaxMode } from '$lib/money/tax';
 	import { tillImageUrl } from '$lib/menu-images';
 	import { RESTORED_CONTEXT, signedIn } from '$lib/pos/employee.svelte';
 	import { readLocalSession } from '$lib/pos/session';
 	import { readBoundDeviceId, readMenu, syncMenu, type LocalMenu } from '$lib/pos/store';
+	import { readReceiptLayout } from '$lib/pos/settings';
 	import {
 		addLine,
+		cartTaxRemoved,
 		cartTotals,
 		changeQuantity,
 		clearCart,
 		lineAmounts,
 		newCart,
 		readCart,
+		reconcileTaxOverride,
 		removeLine,
 		saveCart,
 		setNote,
@@ -87,6 +90,11 @@
 	let noteInput = $state('');
 	let selectedTab = $state<string | null>(null);
 	let error = $state('');
+	// A tax exemption the menu no longer offers, or another employee's, was dropped
+	// on load (tasks/bill-tax-override): said in words, never silently.
+	let exemptNotice = $state('');
+	// The owner's zeroTax receipt switch; the check follows the paper.
+	let zeroTaxShown = $state(true);
 	let gridDisabled = $state(false);
 	let confirmingClear = $state(false);
 	// The line whose keys are showing. The newest line is selected after every add;
@@ -151,7 +159,22 @@
 				figures.totals.discount !== 0n ? formatMoney(figures.totals.discount, format) : null,
 			tax: formatMoney(figures.totals.tax, format),
 			taxMode,
-			total: formatMoney(figures.totals.total, format)
+			total: formatMoney(figures.totals.total, format),
+			hideZeroTax: !zeroTaxShown && figures.totals.tax === 0n,
+			// The bill's tax exemption (tasks/bill-tax-override) — applied on the pay
+			// screen; shown here so both screens show the same bill.
+			exempt: exemptView
+		};
+	});
+	const exemptView = $derived.by(() => {
+		const override = cart?.taxOverride ?? null;
+		if (!cart || !override || !format) return null;
+		const removed = cartTaxRemoved(cart, taxMode);
+		if (removed === null) return null;
+		return {
+			label: `${override.rateName} ${formatTaxRate(override.rateBp)}`,
+			reason: override.reason,
+			removed: formatMoney(removed, format)
 		};
 	});
 
@@ -234,6 +257,19 @@
 				gridDisabled = true;
 				return;
 			}
+			if (cart && menu && signedIn.current) {
+				const name = cart.taxOverride?.rateName ?? '';
+				const checked = reconcileTaxOverride(cart, menu.billTaxRates, signedIn.current.id);
+				if (checked.dropped !== null) {
+					await commit(checked.cart);
+					exemptNotice =
+						checked.dropped === 'not_offered'
+							? `◆ ${name} is no longer offered — this bill is taxed again.`
+							: '◆ The tax exemption was applied by another employee — apply it again on the pay screen.';
+				}
+			}
+			const layout = await readReceiptLayout().catch(() => null);
+			zeroTaxShown = layout?.show.zeroTax ?? true;
 			if (cart) {
 				segment = cart.orderType;
 				tableInput = cart.tableLabel ?? '';
@@ -547,6 +583,11 @@
 
 			{#if error}
 				<p class="bg-danger-bg text-danger rounded-control basis-full px-3 py-2">{error}</p>
+			{/if}
+			{#if exemptNotice}
+				<p role="status" class="bg-raise-2 text-ink rounded-control basis-full px-3 py-2">
+					{exemptNotice}
+				</p>
 			{/if}
 		</div>
 

@@ -1,5 +1,5 @@
 // THE RECEIPT LAYOUT (spec 11, 4, 3; tasks/settings-tax-payments-receipt T-12):
-// the header and footer lines, the logo, and the column map behind the nine
+// the header and footer lines, the logo, and the column map behind the ten
 // display switches. The switches and the payment-numbers heading are settings
 // columns, so their ONE writer stays updateSettings in ./index; this file gives it
 // the map (RECEIPT_SHOW_COLUMNS) and the reader (receiptShowFrom).
@@ -62,7 +62,8 @@ export const RECEIPT_SHOW_COLUMNS = {
 	currencyLine: 'receiptShowCurrencyLine',
 	deviceLine: 'receiptShowDeviceLine',
 	paymentNumbers: 'receiptShowPaymentNumbers',
-	taxBreakdown: 'receiptTaxBreakdown'
+	taxBreakdown: 'receiptTaxBreakdown',
+	zeroTax: 'receiptShowZeroTax'
 } as const satisfies Record<
 	(typeof RECEIPT_SHOW_KEYS)[number],
 	keyof typeof restaurantSettings.$inferSelect
@@ -71,7 +72,7 @@ export const RECEIPT_SHOW_COLUMNS = {
 type ReceiptShowColumn = (typeof RECEIPT_SHOW_COLUMNS)[keyof typeof RECEIPT_SHOW_COLUMNS];
 
 /**
- * The nine switch columns as a select shape, keyed by their restaurantSettings
+ * The ten switch columns as a select shape, keyed by their restaurantSettings
  * property — the mapped type makes a missing or extra column fail to compile.
  * getReceiptLayout and getRestaurantWithSettings select through it.
  */
@@ -85,7 +86,8 @@ export const RECEIPT_SHOW_SELECTION: { [C in ReceiptShowColumn]: (typeof restaur
 		receiptShowCurrencyLine: restaurantSettings.receiptShowCurrencyLine,
 		receiptShowDeviceLine: restaurantSettings.receiptShowDeviceLine,
 		receiptShowPaymentNumbers: restaurantSettings.receiptShowPaymentNumbers,
-		receiptTaxBreakdown: restaurantSettings.receiptTaxBreakdown
+		receiptTaxBreakdown: restaurantSettings.receiptTaxBreakdown,
+		receiptShowZeroTax: restaurantSettings.receiptShowZeroTax
 	};
 
 /** A ReceiptShow, keyed RECEIPT_SHOW_KEYS-first, from a selected settings row. */
@@ -96,7 +98,7 @@ export function receiptShowFrom(row: { [C in ReceiptShowColumn]: boolean }): Rec
 }
 
 /**
- * The restaurant's receipt layout: the nine switches, the heading, both sections'
+ * The restaurant's receipt layout: the ten switches, the heading, both sections'
  * lines in position order, and the logo's fingerprint and shape — NEVER its
  * bitmap (readReceiptLogo serves the bytes).
  */

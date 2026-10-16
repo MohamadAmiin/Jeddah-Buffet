@@ -206,7 +206,7 @@ export const actions: Actions = {
 		if (!parsed.success) return fail(400, { message: INVALID_FIELD_MESSAGE });
 
 		// Checkbox semantics: a switch absent from the form is OFF; a value that is
-		// not one of the nine keys is ignored.
+		// not one of the ten keys is ignored.
 		const shown = new Set(strings(form, 'show'));
 		const receiptShow = Object.fromEntries(
 			RECEIPT_SHOW_KEYS.map((key) => [key, shown.has(key)])

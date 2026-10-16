@@ -223,7 +223,8 @@ async function settingsRow(restaurantId: string) {
 			receiptShowCurrencyLine: restaurantSettings.receiptShowCurrencyLine,
 			receiptShowDeviceLine: restaurantSettings.receiptShowDeviceLine,
 			receiptShowPaymentNumbers: restaurantSettings.receiptShowPaymentNumbers,
-			receiptTaxBreakdown: restaurantSettings.receiptTaxBreakdown
+			receiptTaxBreakdown: restaurantSettings.receiptTaxBreakdown,
+			receiptShowZeroTax: restaurantSettings.receiptShowZeroTax
 		})
 		.from(restaurantSettings)
 		.where(eq(restaurantSettings.restaurantId, restaurantId));
@@ -295,7 +296,8 @@ function switches(hidden: Array<keyof ReceiptShow> = []) {
 		receiptShowCurrencyLine: !hidden.includes('currencyLine'),
 		receiptShowDeviceLine: !hidden.includes('deviceLine'),
 		receiptShowPaymentNumbers: !hidden.includes('paymentNumbers'),
-		receiptTaxBreakdown: !hidden.includes('taxBreakdown')
+		receiptTaxBreakdown: !hidden.includes('taxBreakdown'),
+		receiptShowZeroTax: !hidden.includes('zeroTax')
 	};
 }
 
@@ -330,6 +332,17 @@ describe('receipt settings page', () => {
 		expect(await logoRows(restaurantId)).toEqual([]);
 		expect(await settingsRow(restaurantId)).toMatchObject({ receiptAddress: null, ...switches() });
 		expect(await auditCount(restaurantId)).toBe(auditBefore);
+	});
+
+	it('saves the zeroTax switch off and the till reads it back (bill-tax-override T-11)', async () => {
+		const { restaurantId, owner } = await owned();
+		const result = await action('save', makeEvent(owner, saveForm({ hidden: ['zeroTax'] })));
+		expect(result).toEqual({ message: 'Receipt saved.' });
+		expect(await settingsRow(restaurantId)).toMatchObject(switches(['zeroTax']));
+		const data = await loadData(owner);
+		expect(data.layout.show.zeroTax).toBe(false);
+		expect(data.layout.show.taxBreakdown).toBe(true);
+		expect(await eventCount(restaurantId, 'settings.updated')).toBe(1);
 	});
 
 	it('saves lines, switches and the heading in one transaction', async () => {
@@ -373,7 +386,8 @@ describe('receipt settings page', () => {
 			currencyLine: true,
 			deviceLine: true,
 			paymentNumbers: true,
-			taxBreakdown: true
+			taxBreakdown: true,
+			zeroTax: true
 		});
 		expect(data.layout.paymentNumbersHeading).toBe('PAY BY MOBILE MONEY');
 

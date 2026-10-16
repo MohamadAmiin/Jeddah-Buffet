@@ -36,6 +36,7 @@ function menu(over: Partial<LocalMenu>): LocalMenu {
 		taxMode: 'exclusive',
 		taxRateBp: 825,
 		defaultTaxRate: null,
+		billTaxRates: [],
 		categories: [],
 		items: [],
 		modifierGroups: [],

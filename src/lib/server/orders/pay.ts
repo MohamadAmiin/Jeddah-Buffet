@@ -17,7 +17,13 @@
 //      (spec 13's "Mark Order PAID"; invariant 2 keeps every other row
 //      immutable).
 //   9. Audit: sale.recorded with clientOpId, plus sale.flagged (clientOpId
-//      null) when softFlags is non-empty.
+//      null) when softFlags is non-empty, plus sale.tax_override (clientOpId
+//      null) when the bill carries a tax override (tasks/bill-tax-override).
+//
+// A bill tax override changes no posting rule: the totals already carry tax 0,
+// so the sale entry's Cr 2100 line is zero and postEntry drops it. Its five
+// order columns and each line's menu_tax_rate_bp / charged_minor are written HERE,
+// at INSERT, and never again (invariant 2).
 //
 // Never catches, never opens a transaction of its own, never reads
 // menu_items or restaurant_settings (spec 6: price at time of sale wins).
@@ -65,6 +71,11 @@ export async function recordSale(
 		taxMinor: sale.totals.taxMinor,
 		totalMinor: sale.totals.totalMinor,
 		flagReason: softFlags.length > 0 ? softFlags.join(',') : null,
+		taxOverrideRateId: sale.taxOverride?.taxRateId ?? null,
+		taxOverrideRateName: sale.taxOverride?.taxRateName ?? null,
+		taxOverrideRateBp: sale.taxOverride?.rateBp ?? null,
+		taxOverrideReason: sale.taxOverride?.reason ?? null,
+		taxRemovedMinor: sale.taxOverride?.taxRemovedMinor ?? null,
 		openedAt: sale.openedAt,
 		paidAt: ctx.occurredAt
 	});
@@ -83,6 +94,8 @@ export async function recordSale(
 				taxRateBp: line.taxRateBp,
 				taxRateId: line.taxRateId,
 				taxRateName: line.taxRateName,
+				menuTaxRateBp: line.menuTaxRateBp,
+				chargedMinor: line.chargedMinor,
 				discountMinor: line.discountMinor,
 				status: 'new' as const
 			}))
@@ -217,6 +230,33 @@ export async function recordSale(
 				deviceCode: ctx.opDeviceCode,
 				invoiceNumber: sale.invoiceNumber,
 				flags: softFlags
+			},
+			restaurantId: ctx.restaurantId,
+			actorUserId: ctx.employeeUserId,
+			subjectUserId: null,
+			deviceId: ctx.opDeviceId,
+			clientOpId: null,
+			occurredAt: ctx.occurredAt,
+			ip: ctx.ip,
+			userAgent: ctx.userAgent
+		});
+	}
+
+	// clientOpId null: audit_log_device_client_op_unique allows ONE row per
+	// (device_id, client_op_id), and sale.recorded owns it — copying its call here
+	// would raise 23505 and turn every exempt sale into an unrecorded one.
+	if (sale.taxOverride !== null) {
+		await writeAudit(tx, {
+			event: 'sale.tax_override',
+			details: {
+				deviceCode: ctx.opDeviceCode,
+				invoiceNumber: sale.invoiceNumber,
+				taxRateId: sale.taxOverride.taxRateId,
+				taxRateName: sale.taxOverride.taxRateName,
+				rateBp: sale.taxOverride.rateBp,
+				reason: sale.taxOverride.reason,
+				taxRemovedMinor: sale.taxOverride.taxRemovedMinor.toString(),
+				totalMinor: sale.totals.totalMinor.toString()
 			},
 			restaurantId: ctx.restaurantId,
 			actorUserId: ctx.employeeUserId,

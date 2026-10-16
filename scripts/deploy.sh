@@ -38,6 +38,13 @@
 #     failed deploy it prints the previous commit and the restore steps instead
 #     of guessing.
 #
+# Rolling the CODE back past migration 0019 (tasks/bill-tax-override): an older
+# server strips a queued sale's tax exemption and records it without its reason
+# (or refuses it), and a posted sale can never be repaired in place. First stop
+# offering every rate for tax-exempt bills (/settings/tax), wait until every
+# till shows 0 unsynced, reload the tills, and only then roll back. Otherwise
+# roll FORWARD.
+#
 set -euo pipefail
 
 BRANCH="${BRANCH:-main}"
@@ -227,7 +234,9 @@ if [ -z "$ok" ]; then
     git reset --hard $OLD && pnpm install --frozen-lockfile && pnpm build && pm2 restart $PM2_APP
   A failure on startup (bad .env, missing variable) is NOT fixed by rolling back:
   the previous commit reads the same .env and will die the same way.
-  If a migration ran, restore the newest dump in backups/ with pg_restore first."
+  If a migration ran, restore the newest dump in backups/ with pg_restore first.
+  Never roll back past 0019 while a till has unsynced sales or a rate is offered
+  for tax-exempt bills: un-offer them, wait for 0 unsynced, reload the tills."
 fi
 
 pm2 save >/dev/null 2>&1 || true

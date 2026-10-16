@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { acquireRunLock, closeResetPool, resetDb } from '../src/lib/server/db/test/reset';
 import {
 	addItem,
+	addTaxRate,
 	chooseOrderType,
 	closeDbRows,
 	closeSession,
@@ -37,6 +38,11 @@ const OWNER = {
 	email: 'owner@sale.test',
 	password: 'a strong enough password'
 };
+
+// SERIAL: the tax-exempt journey at the end REUSES this file's restaurant and
+// cashier. The suite's sign-ups already fill the /register throttle (10 per 10
+// minutes, per address), so a new company here would fail a later spec.
+test.describe.configure({ mode: 'serial' });
 
 test.beforeAll(async () => {
 	await acquireRunLock();
@@ -452,6 +458,175 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 		.getByRole('link', { name: 'Overview', exact: true })
 		.click();
 	await expect(page.getByText(/sales await your review/)).toHaveCount(0);
+
+	await till.close();
+});
+
+// A TAX-EXEMPT CASH BILL, END TO END (tasks/bill-tax-override T-17): the owner
+// offers a 0% rate on /settings/tax; a cashier on a second till makes a bill
+// tax-exempt with a reason; the customer pays the net; the books post no tax; the
+// owner sees it on /reports/tax-overrides. MANDATORY (spec 29 — offline sync: the
+// exempt sale records once; tax: the exempt bill posts no 2100 line).
+test('a tax-exempt cash bill: offered on /settings/tax, applied at the till, on the report', async ({
+	page,
+	browser
+}) => {
+	test.setTimeout(300_000);
+
+	// 1. The owner adds a 0% rate and offers it for tax-exempt bills.
+	await page.goto('/settings/tax');
+	if (/\/login/.test(page.url())) {
+		await signIn(page, OWNER);
+		await page.goto('/settings/tax');
+	}
+	await addTaxRate(page, { name: 'Exempt', percent: '0', makeDefault: false });
+	// Only a 0% rate carries the button, and Exempt is the restaurant's only one.
+	await expect(page.getByRole('heading', { name: 'Exempt 0.00%', exact: true })).toBeVisible();
+	await page.getByRole('button', { name: 'Offer for tax-exempt bills' }).click();
+	await expect(page.getByRole('alert')).toContainText('Exempt is offered for tax-exempt bills.');
+	// The card now offers the opposite action.
+	await expect(page.getByRole('button', { name: 'Stop offering' })).toBeVisible();
+
+	// 2. A second till, the same cashier, a fresh shift: its menu carries the rate.
+	const till = await browser.newContext();
+	const tillPage = await till.newPage();
+	await signIn(tillPage, OWNER);
+	await registerDevice(tillPage, OWNER, 'Second till');
+	await pickEmployee(tillPage, 'The Cashier');
+	await enterPin(tillPage, '4321');
+	await openSession(tillPage, 0n);
+	const status = tillPage.getByRole('status', { name: 'Connection and sync' });
+
+	// 3. One Burger (8.00 + 10% = 8.80), then the bill made tax-exempt.
+	await addItem(tillPage, 'Burger');
+	await tillPage.getByRole('link', { name: /^Pay\b/ }).click();
+	await expect(tillPage).toHaveURL(/\/pos\/pay$/);
+	const totals = tillPage.getByRole('region', { name: 'Current Order' });
+	await expect(totals).toContainText(/Total\s*8\.80/);
+	await tillPage.getByRole('button', { name: 'Tax exempt…' }).click();
+	const sheet = tillPage.getByRole('dialog', { name: 'Make this bill tax-exempt' });
+	await expect(sheet).toBeVisible();
+	await sheet.getByRole('radio', { name: /^Exempt 0\.00%/ }).click();
+	// Too short a reason is refused before anything changes.
+	await sheet.getByLabel(/Who is exempt and why/).fill('UN');
+	await expect(sheet.getByRole('button', { name: 'Remove the tax' })).toBeDisabled();
+	await sheet.getByLabel(/Who is exempt and why/).fill('UNICEF');
+	await sheet.getByRole('button', { name: 'Remove the tax' }).click();
+	await expect(sheet).toBeHidden();
+
+	const exempt = tillPage.getByTestId('tax-exempt');
+	await expect(exempt).toContainText('Tax exempt · Exempt');
+	await expect(exempt).toContainText('UNICEF');
+	await expect(exempt).toContainText(/Tax removed\s*0\.80/);
+	await expect(totals).toContainText(/Exempt 0\.00%\s*0\.00/);
+	await expect(totals.getByTestId('check-exempt')).toContainText('UNICEF');
+	await expect(totals).toContainText(/Total\s*8\.00/);
+
+	// 3b. MANDATORY (invariant 5; plan risk R1e): the owner withdraws the rate while
+	// the bill is exempt. After the till's next menu sync the exemption is dropped
+	// when the bill loads — said in words, the bill taxed again — so the sale is
+	// never sent at a menu version that no longer offers its rate (a HARD
+	// price_tamper on a sale the till already took).
+	const resync = async () => {
+		const snapshot = tillPage.waitForResponse(
+			(r) => new URL(r.url()).pathname === '/api/menu' && r.status() === 200
+		);
+		await tillPage.goto('/pos');
+		await snapshot;
+		await pickEmployee(tillPage, 'The Cashier');
+		await enterPin(tillPage, '4321');
+		await expect(tillPage).toHaveURL(/\/pos\/order$/);
+	};
+	await page.getByRole('button', { name: 'Stop offering' }).click();
+	await expect(page.getByRole('alert')).toContainText(
+		'Exempt is no longer offered for tax-exempt bills.'
+	);
+	await resync();
+	await expect(
+		tillPage.getByText('◆ Exempt is no longer offered — this bill is taxed again.')
+	).toBeVisible();
+	await expect(totals).toContainText(/Total\s*8\.80/);
+	await tillPage.getByRole('link', { name: /^Pay\b/ }).click();
+	await expect(tillPage).toHaveURL(/\/pos\/pay$/);
+	await expect(totals).toContainText(/Total\s*8\.80/);
+	await expect(tillPage.getByTestId('tax-exempt')).toHaveCount(0);
+	// Nothing is offered now, so the key is not there at all.
+	await expect(tillPage.getByRole('button', { name: 'Tax exempt…' })).toHaveCount(0);
+
+	// 3c. Offered again: after the next sync the cashier applies it again.
+	await page.getByRole('button', { name: 'Offer for tax-exempt bills' }).click();
+	await expect(page.getByRole('alert')).toContainText('Exempt is offered for tax-exempt bills.');
+	await resync();
+	await tillPage.getByRole('link', { name: /^Pay\b/ }).click();
+	await expect(tillPage).toHaveURL(/\/pos\/pay$/);
+	await tillPage.getByRole('button', { name: 'Tax exempt…' }).click();
+	await expect(sheet).toBeVisible();
+	await sheet.getByRole('radio', { name: /^Exempt 0\.00%/ }).click();
+	await sheet.getByLabel(/Who is exempt and why/).fill('UNICEF');
+	await sheet.getByRole('button', { name: 'Remove the tax' }).click();
+	await expect(sheet).toBeHidden();
+	await expect(exempt).toContainText(/Tax removed\s*0\.80/);
+	await expect(totals).toContainText(/Total\s*8\.00/);
+
+	// 4. Cash, the exact amount: paid, and synced once.
+	await tillPage
+		.getByRole('radiogroup', { name: 'Tender' })
+		.getByRole('radio', { name: 'Cash', exact: true })
+		.click();
+	await tillPage.getByRole('button', { name: /^Pay · Cash/ }).click();
+	await expect(tillPage.getByText('● Paid', { exact: true })).toBeVisible();
+	await expect(status).toContainText('0 unsynced');
+
+	// 5. The books: the net was charged, no tax was posted, the reason was kept.
+	const [order] = await dbRows<Record<string, string | number | null>>(
+		`select id, subtotal_minor::text, tax_minor::text, total_minor::text, tax_override_rate_name,
+			tax_override_rate_bp, tax_override_reason, tax_removed_minor::text
+		 from orders where tax_override_rate_id is not null`
+	);
+	expect(order).toMatchObject({
+		subtotal_minor: '800',
+		tax_minor: '0',
+		total_minor: '800',
+		tax_override_rate_name: 'Exempt',
+		tax_override_rate_bp: 0,
+		tax_override_reason: 'UNICEF',
+		tax_removed_minor: '80'
+	});
+	expect(
+		await dbRows(
+			`select a.code, l.debit_minor::text as debit, l.credit_minor::text as credit
+			 from journal_entry_lines l
+			 join journal_entries e on e.id = l.entry_id
+			 join accounts a on a.id = l.account_id
+			 where e.source_id = $1 and e.event = 'cash_sale' order by l.line_no`,
+			[order.id]
+		)
+	).toEqual([
+		{ code: '1000', debit: '800', credit: '0' },
+		{ code: '4000', debit: '0', credit: '800' }
+	]);
+	expect(
+		await dbRows(`select menu_tax_rate_bp, tax_rate_bp from order_lines where order_id = $1`, [
+			order.id
+		])
+	).toEqual([{ menu_tax_rate_bp: 1000, tax_rate_bp: 0 }]);
+	expect(
+		await count("select count(*)::text as n from audit_log where event = 'sale.tax_override'")
+	).toBe('1');
+
+	// 6. The owner's report of tax-exempt bills.
+	const [{ business_date: day }] = await dbRows<{ business_date: string }>(
+		`select s.business_date::text as business_date from orders o
+		 join pos_sessions s on s.id = o.pos_session_id where o.id = $1`,
+		[order.id]
+	);
+	await page.goto(`/reports/tax-overrides?from=${day}&to=${day}`);
+	await expect(page.getByRole('heading', { name: 'Tax-exempt bills' })).toBeVisible();
+	const bill = page.getByRole('row', { name: /UNICEF/ });
+	await expect(bill).toContainText('Exempt');
+	await expect(bill).toContainText('8.00');
+	await expect(bill).toContainText('0.80');
+	await expect(page.getByRole('row', { name: /^The Cashier/ })).toContainText(/1\s*0\.80/);
 
 	await till.close();
 });

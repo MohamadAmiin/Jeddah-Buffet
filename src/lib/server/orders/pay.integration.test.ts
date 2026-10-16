@@ -4,7 +4,14 @@ import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { onRestaurantCreated, updateSettings } from '../restaurants';
 import { registerDevice } from '../auth/pos-device';
-import { createCategory, createItem, getMenuVersion, updateTaxRate } from '../menu';
+import {
+	createCategory,
+	createItem,
+	createTaxRate,
+	getMenuVersion,
+	setTaxRateOffered,
+	updateTaxRate
+} from '../menu';
 import { seedStaff } from '../db/test/seed';
 import {
 	cashMethodId,
@@ -25,6 +32,9 @@ import { validateSale, type SyncContext } from './validate';
 import { recordSale } from './pay';
 import { expectedCash } from '../pos-sessions';
 import type { OpEnvelope } from '../../sync-ops';
+import { minor, ROUNDING_RULE } from '../../money';
+import { changeDue } from '../../money/change';
+import { computeOrderTotals, serializeTotals, taxRemoved } from '../../money/order-totals';
 
 afterAll(async () => {
 	await closeTestDb();
@@ -961,5 +971,188 @@ describe('recordSale — named methods and rates (settings-tax-payments-receipt 
 
 		// fx.sessionId opened with a float of 0.
 		expect(await expectedCash(testDb(), fx.restaurantId, fx.sessionId)).toBe(1100n);
+	});
+});
+
+// THE BILL TAX OVERRIDE (tasks/bill-tax-override T-08). MANDATORY (spec 29 —
+// posting rules per event; entries balance): an exempt bill posts the ordinary
+// sale rule with Cr 2100 = 0, which postEntry drops.
+describe('recordSale — bill tax override (bill-tax-override T-08)', () => {
+	const ownerCtx = (f: Fixture) => ({ actorUserId: f.ownerId, ip: null, userAgent: null });
+
+	async function offeredExempt(f: Fixture): Promise<string> {
+		return db.transaction(async (tx) => {
+			const created = await createTaxRate(
+				tx,
+				f.restaurantId,
+				{ name: 'Exempt', rateBp: 0 },
+				ownerCtx(f)
+			);
+			if (!created.ok) throw new Error(created.reason);
+			const offered = await setTaxRateOffered(tx, f.restaurantId, created.id, true, ownerCtx(f));
+			if (!offered.ok) throw new Error(offered.reason);
+			return created.id;
+		});
+	}
+
+	type WireLine = {
+		unitPriceMinor: string;
+		quantity: number;
+		taxRateBp: number;
+		[key: string]: unknown;
+	};
+
+	/** The two-line sale made exempt, totalled as the till's cartTotals does. */
+	async function exemptEnvelope(f: Fixture, taxMode: 'exclusive' | 'inclusive'): Promise<Payload> {
+		const rateId = await offeredExempt(f);
+		const env = twoLineCashEnvelope(f);
+		const payload = env.payload as { lines: WireLine[] } & Record<string, unknown>;
+		const totalsOf = (
+			charged: (l: WireLine) => { taxRateBp: number; includedTaxRateBp?: number }
+		) =>
+			computeOrderTotals(
+				{
+					taxMode,
+					lines: payload.lines.map((l) => ({
+						unitPriceMinor: minor(BigInt(l.unitPriceMinor)),
+						quantity: BigInt(l.quantity),
+						modifierDeltasMinor: [],
+						discountMinor: minor(0n),
+						...charged(l)
+					}))
+				},
+				ROUNDING_RULE
+			);
+		const actual = totalsOf((l) => ({ taxRateBp: 0, includedTaxRateBp: l.taxRateBp }));
+		const standard = totalsOf((l) => ({ taxRateBp: l.taxRateBp }));
+		const totals = serializeTotals(actual);
+		return {
+			...env,
+			payload: {
+				...payload,
+				taxMode,
+				menuVersion: await getMenuVersion(testDb(), f.restaurantId),
+				lines: payload.lines.map((l) => ({
+					...l,
+					taxRateBp: 0,
+					taxRateId: rateId,
+					taxRateName: 'Exempt',
+					menuTaxRateBp: l.taxRateBp
+				})),
+				totals,
+				taxOverride: {
+					taxRateId: rateId,
+					taxRateName: 'Exempt',
+					rateBp: 0,
+					reason: 'UNICEF',
+					taxRemovedMinor: taxRemoved(standard, actual).toString()
+				},
+				payments: [
+					{
+						paymentId: randomUUID(),
+						method: 'cash',
+						amountMinor: totals.totalMinor,
+						tenderedMinor: '2000',
+						changeMinor: changeDue(minor(2000n), actual.total).toString()
+					}
+				]
+			}
+		};
+	}
+
+	const overrideAudits = (restaurantId: string) =>
+		testDb()
+			.select()
+			.from(auditLog)
+			.where(and(eq(auditLog.restaurantId, restaurantId), eq(auditLog.event, 'sale.tax_override')));
+
+	it('MANDATORY (spec 29): an exempt cash bill (exclusive) posts Dr 1000 / Cr 4000 = 1000 with no 2100 line', async () => {
+		const env = await exemptEnvelope(fx, 'exclusive');
+		const result = await recordThrough(fx, env, fx.cashierId);
+
+		const jLines = await entryLines(result.entryIds[0]);
+		expect(jLines).toHaveLength(2);
+		const byCode = Object.fromEntries(jLines.map((l) => [l.code, l]));
+		expect(byCode['1000'].debit).toBe(1000n);
+		expect(byCode['4000'].credit).toBe(1000n);
+		expect(byCode['2100']).toBeUndefined();
+
+		const [order] = await testDb().select().from(orders).where(eq(orders.id, result.orderId));
+		expect(order).toMatchObject({
+			taxMinor: 0n,
+			totalMinor: 1000n,
+			taxOverrideRateName: 'Exempt',
+			taxOverrideRateBp: 0,
+			taxOverrideReason: 'UNICEF',
+			taxRemovedMinor: 100n
+		});
+		const lines = await testDb()
+			.select({
+				taxRateBp: orderLines.taxRateBp,
+				menuTaxRateBp: orderLines.menuTaxRateBp,
+				chargedMinor: orderLines.chargedMinor
+			})
+			.from(orderLines)
+			.where(eq(orderLines.orderId, result.orderId));
+		expect(lines).toEqual([
+			{ taxRateBp: 0, menuTaxRateBp: 1000, chargedMinor: null },
+			{ taxRateBp: 0, menuTaxRateBp: 1000, chargedMinor: null }
+		]);
+
+		const audits = await overrideAudits(fx.restaurantId);
+		expect(audits).toHaveLength(1);
+		expect(audits[0].clientOpId).toBeNull();
+		expect(audits[0].actorUserId).toBe(fx.cashierId);
+		expect(audits[0].details).toMatchObject({
+			taxRateName: 'Exempt',
+			rateBp: 0,
+			reason: 'UNICEF',
+			taxRemovedMinor: '100',
+			totalMinor: '1000'
+		});
+	});
+
+	it("MANDATORY (spec 29): an exempt bill in inclusive mode posts the net and stores each line's share", async () => {
+		await db.transaction((tx) =>
+			updateSettings(tx, fx.restaurantId, { taxMode: 'inclusive' }, ownerCtx(fx))
+		);
+		const env = await exemptEnvelope(fx, 'inclusive');
+		const result = await recordThrough(fx, env, fx.cashierId);
+
+		// 600/1.1 + 2 × 200/1.1 = 909.09… → 909, rounded once on the total.
+		const jLines = await entryLines(result.entryIds[0]);
+		const byCode = Object.fromEntries(jLines.map((l) => [l.code, l]));
+		expect(jLines).toHaveLength(2);
+		expect(byCode['1000'].debit).toBe(909n);
+		expect(byCode['4000'].credit).toBe(909n);
+		const lines = await testDb()
+			.select({ lineNo: orderLines.lineNo, chargedMinor: orderLines.chargedMinor })
+			.from(orderLines)
+			.where(eq(orderLines.orderId, result.orderId))
+			.orderBy(orderLines.lineNo);
+		expect(lines.map((l) => l.chargedMinor)).toEqual([545n, 364n]);
+		const [order] = await testDb().select().from(orders).where(eq(orders.id, result.orderId));
+		expect(order.taxRemovedMinor).toBe(91n);
+	});
+
+	it('a sale with no override stores menu_tax_rate_bp = tax_rate_bp and no override columns', async () => {
+		const result = await recordThrough(fx, twoLineCashEnvelope(fx), fx.cashierId);
+		const [order] = await testDb().select().from(orders).where(eq(orders.id, result.orderId));
+		expect(order).toMatchObject({
+			taxOverrideRateId: null,
+			taxOverrideRateName: null,
+			taxOverrideRateBp: null,
+			taxOverrideReason: null,
+			taxRemovedMinor: null
+		});
+		const lines = await testDb()
+			.select({ menuTaxRateBp: orderLines.menuTaxRateBp, chargedMinor: orderLines.chargedMinor })
+			.from(orderLines)
+			.where(eq(orderLines.orderId, result.orderId));
+		expect(lines).toEqual([
+			{ menuTaxRateBp: 1000, chargedMinor: null },
+			{ menuTaxRateBp: 1000, chargedMinor: null }
+		]);
+		expect(await overrideAudits(fx.restaurantId)).toHaveLength(0);
 	});
 });

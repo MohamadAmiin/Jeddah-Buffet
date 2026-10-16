@@ -27,6 +27,7 @@ import {
 	HARD_FLAGS,
 	ORDER_TYPES,
 	PAYMENT_METHODS,
+	cleanTaxOverrideReason,
 	formatInvoiceNumber,
 	type OpEnvelope,
 	type OrderType,
@@ -34,7 +35,13 @@ import {
 } from '../../sync-ops';
 import { TAX_MODES, type TaxMode } from '../../money/tax';
 import { minor, type Minor, ROUNDING_RULE } from '../../money';
-import { computeOrderTotals, totalsEqual } from '../../money/order-totals';
+import {
+	allocateLineGross,
+	computeOrderTotals,
+	taxRemoved,
+	totalsEqual,
+	type TotalsLine
+} from '../../money/order-totals';
 import { changeDue } from '../../money/change';
 
 // A read-side import so 02-schema.md's orders table stays in the module graph.
@@ -76,8 +83,24 @@ export type ParsedSaleLine = {
 	 * no resolved rate. */
 	taxRateId: string | null;
 	taxRateName: string | null;
+	/** The item's OWN resolved rate as the till sent it (tasks/bill-tax-override);
+	 * taxRateBp when the till predates that plan or the bill has no override. */
+	menuTaxRateBp: number;
+	/** The line's share of the bill total — only on an INCLUSIVE-mode bill with a
+	 * tax override (allocateLineGross); null otherwise. */
+	chargedMinor: Minor | null;
 	discountMinor: Minor;
 	modifiers: ParsedSaleLineModifier[];
+};
+
+/** A bill tax override as RECORDED: the payload's copy of the rate (never the row
+ * at sync time — spec 6), the CLEANED reason and what the override took off. */
+export type ParsedTaxOverride = {
+	taxRateId: string;
+	taxRateName: string;
+	rateBp: number;
+	reason: string;
+	taxRemovedMinor: Minor;
 };
 
 export type ParsedSale = {
@@ -95,6 +118,8 @@ export type ParsedSale = {
 	invoiceNumber: string;
 	openedAt: Date;
 	lines: ParsedSaleLine[];
+	/** Null when the bill carries no tax override (and from every pre-plan till). */
+	taxOverride: ParsedTaxOverride | null;
 	totals: {
 		subtotalMinor: Minor;
 		discountMinor: Minor;
@@ -164,7 +189,22 @@ const lineSchema = z.object({
 	// OPTIONAL, the `note` precedent: a pre-plan till omits it (invariant 5).
 	taxRateName: snapshotName.nullable().optional(),
 	discountMinor: zeroMinor,
-	modifiers: z.array(modifierSchema).max(20)
+	modifiers: z.array(modifierSchema).max(20),
+	// OPTIONAL (tasks/bill-tax-override), the `note` precedent: every till queued
+	// before that plan omits the key, and that payload must still record (inv. 5).
+	menuTaxRateBp: z.number().int().min(0).max(10_000).optional()
+});
+
+// A bill tax override (tasks/bill-tax-override). The REASON is deliberately loose
+// here — any string up to 2000 — because Step 7c CLEANS it with the till's own
+// cleanTaxOverrideReason and refuses only one that cleans to nothing: a reason the
+// till accepted must never turn a completed cash sale into an unrecorded one.
+const taxOverrideSchema = z.object({
+	taxRateId: z.string().uuid(),
+	taxRateName: snapshotName,
+	rateBp: z.number().int().min(0).max(10_000),
+	reason: z.string().max(2000),
+	taxRemovedMinor: nonNegativeMinor
 });
 
 const paymentSchema = z
@@ -249,6 +289,8 @@ export const saleCompletePayloadSchema = z
 		invoiceNumber: z.string().min(1).max(15),
 		openedAt: z.string().datetime({ offset: true }),
 		lines: z.array(lineSchema).min(1).max(200),
+		// OPTIONAL (tasks/bill-tax-override): absent or null = no override.
+		taxOverride: taxOverrideSchema.nullable().optional(),
 		totals: z.object({
 			subtotalMinor: minorString,
 			discountMinor: minorString,
@@ -388,8 +430,13 @@ export async function validateSale(
 	// rate a line names (`lineRateIds`, checked in Step 7b), still with no archived
 	// filter, and each row's name for the line's snapshot (Step 13). No query runs
 	// when no id is wanted.
+	const override = payload.taxOverride ?? null;
 	const lineRateIds = Array.from(
-		new Set(payload.lines.map((l) => l.taxRateId).filter((id): id is string => id != null))
+		new Set(
+			[...payload.lines.map((l) => l.taxRateId), override?.taxRateId].filter(
+				(id): id is string => id != null
+			)
+		)
 	);
 	const rateIds = Array.from(
 		new Set([
@@ -399,16 +446,27 @@ export async function validateSale(
 			...lineRateIds
 		])
 	);
-	const rateRows: { id: string; name: string; rateBp: number }[] =
+	type RateRow = {
+		id: string;
+		name: string;
+		rateBp: number;
+		archivedAt: Date | null;
+		offeredForBills: boolean;
+	};
+	const rateRows: RateRow[] =
 		rateIds.length === 0
 			? []
 			: await tx
-					.select({ id: taxRates.id, name: taxRates.name, rateBp: taxRates.rateBp })
+					.select({
+						id: taxRates.id,
+						name: taxRates.name,
+						rateBp: taxRates.rateBp,
+						archivedAt: taxRates.archivedAt,
+						offeredForBills: taxRates.offeredForBills
+					})
 					.from(taxRates)
 					.where(and(eq(taxRates.restaurantId, ctx.restaurantId), inArray(taxRates.id, rateIds)));
-	const rateById: ReadonlyMap<string, { id: string; name: string; rateBp: number }> = new Map(
-		rateRows.map((r) => [r.id, r])
-	);
+	const rateById: ReadonlyMap<string, RateRow> = new Map(rateRows.map((r) => [r.id, r]));
 
 	// Step 6 — modifiers: every (menuItemId, modifierId) pair must belong to a
 	// group linked to that item.
@@ -526,6 +584,38 @@ export async function validateSale(
 		}
 	}
 
+	// Step 7c — the bill tax override's SHAPE (tasks/bill-tax-override). HARD
+	// whatever the menu version: the till builds the override and every line's rate
+	// from ONE cart field, so a payload that disagrees with itself came from no till.
+	// The database is compared with the override only in Step 8, through the
+	// version rule. The reason is CLEANED with the till's own function and refused
+	// only when nothing is left; its length is never a reason to refuse.
+	let overrideReason: string | null = null;
+	if (override !== null) {
+		if (override.rateBp !== 0) {
+			return { ok: false, hard: 'invalid_payload', detail: 'tax_override_rate' };
+		}
+		for (const line of payload.lines) {
+			if (
+				line.taxRateId !== override.taxRateId ||
+				line.taxRateBp !== override.rateBp ||
+				typeof line.menuTaxRateBp !== 'number'
+			) {
+				return { ok: false, hard: 'invalid_payload', detail: 'tax_override_lines' };
+			}
+		}
+		overrideReason = cleanTaxOverrideReason(override.reason);
+		if (overrideReason === '') {
+			return { ok: false, hard: 'invalid_payload', detail: 'tax_override_reason' };
+		}
+	} else {
+		for (const line of payload.lines) {
+			if (line.menuTaxRateBp !== undefined && line.menuTaxRateBp !== line.taxRateBp) {
+				return { ok: false, hard: 'invalid_payload', detail: 'menu_tax_rate' };
+			}
+		}
+	}
+
 	// Step 8 — price / tax-rate / tax-mode comparison. A difference at the SAME
 	// version is HARD price_tamper; at a DIFFERENT version it's SOFT stale_menu_price.
 	let firstDiff: string | null = null;
@@ -548,17 +638,41 @@ export async function validateSale(
 		// difference like any other, never a fallback number (risk 5).
 		const rateId = item.taxRateId ?? settings.defaultTaxRateId;
 		const resolved = rateId === null ? null : (rateById.get(rateId) ?? null);
-		if (resolved === null || line.taxRateBp !== resolved.rateBp) {
+		// With a bill tax override the line is CHARGED the override's rate (checked
+		// below), and the item's own rate travels as menuTaxRateBp (Step 7c made it
+		// a number) — that is the number compared with the menu. Without one, this
+		// is exactly the pre-override check, so a payload from an older till
+		// validates as it always did.
+		const menuRateBp = override !== null ? (line.menuTaxRateBp as number) : line.taxRateBp;
+		if (resolved === null || menuRateBp !== resolved.rateBp) {
 			firstDiff = `line:${line.lineId}:tax_rate`;
 			break;
 		}
 		// T-15: a named rate must be the item's resolved one too (rateId above), not
 		// merely one with the same number. The SAME detail as the number check, so
 		// the version rule below decides: HARD price_tamper at the same menuVersion,
-		// SOFT stale_menu_price (recorded) at another.
-		if (line.taxRateId != null && line.taxRateId !== rateId) {
+		// SOFT stale_menu_price (recorded) at another. A line under an override names
+		// the override's rate instead — Step 7c checked that.
+		if (override === null && line.taxRateId != null && line.taxRateId !== rateId) {
 			firstDiff = `line:${line.lineId}:tax_rate`;
 			break;
+		}
+	}
+	// The override's copy against its row (tasks/bill-tax-override): the same
+	// number and name, still live and still offered. THE SAME offered predicate as
+	// readMenuSnapshot's billTaxRates (src/lib/server/menu/index.ts) — the test
+	// "validator and snapshot agree on offered rates" pins the two. A rate renamed,
+	// re-rated, archived or un-offered after the till cached it bumped the version,
+	// so it lands SOFT stale_menu_price — recorded with the till's copy (spec 6).
+	if (!firstDiff && override !== null) {
+		const row = rateById.get(override.taxRateId)!;
+		if (
+			row.rateBp !== override.rateBp ||
+			row.name !== override.taxRateName ||
+			row.archivedAt !== null ||
+			row.offeredForBills !== true
+		) {
+			firstDiff = 'tax_override';
 		}
 	}
 	if (!firstDiff && payload.taxMode !== settings.taxMode) {
@@ -571,17 +685,26 @@ export async function validateSale(
 		pushOnce(softFlags, 'stale_menu_price');
 	}
 
-	// Step 9 — totals recomputed from the payload's own lines and mode.
+	// Step 9 — totals recomputed from the payload's own lines and mode. Under a
+	// bill tax override each line is charged its taxRateBp (the override's) on the
+	// price stripped of its menuTaxRateBp in inclusive mode (includedTaxRateBp) —
+	// exactly what the till's cartTotals did.
+	const taxMode = payload.taxMode as TaxMode;
+	const totalsLine = (l: (typeof payload.lines)[number], rateBp: number): TotalsLine => ({
+		unitPriceMinor: minor(l.unitPriceMinor),
+		quantity: BigInt(l.quantity),
+		modifierDeltasMinor: l.modifiers.map((m) => minor(m.priceDeltaMinor)),
+		taxRateBp: rateBp,
+		discountMinor: minor(0n)
+	});
 	const recomputed = computeOrderTotals(
 		{
-			taxMode: payload.taxMode as TaxMode,
-			lines: payload.lines.map((l) => ({
-				unitPriceMinor: minor(l.unitPriceMinor),
-				quantity: BigInt(l.quantity),
-				modifierDeltasMinor: l.modifiers.map((m) => minor(m.priceDeltaMinor)),
-				taxRateBp: l.taxRateBp,
-				discountMinor: minor(0n)
-			}))
+			taxMode,
+			lines: payload.lines.map((l) =>
+				override !== null
+					? { ...totalsLine(l, l.taxRateBp), includedTaxRateBp: l.menuTaxRateBp }
+					: totalsLine(l, l.taxRateBp)
+			)
 		},
 		ROUNDING_RULE
 	);
@@ -593,6 +716,22 @@ export async function validateSale(
 	};
 	if (!totalsEqual(recomputed, wireTotals)) {
 		pushOnce(softFlags, 'totals_mismatch');
+	}
+	// The override's taxRemovedMinor: the bill at its lines' OWN rates minus the bill
+	// as charged. A difference is SOFT, like the totals: the device's number is
+	// stored (spec 6). An inclusive-mode exempt bill also stores each line's share
+	// of the total, so the item reports never read unit price × quantity for it.
+	let chargedByLine: Minor[] | null = null;
+	if (override !== null) {
+		const standard = computeOrderTotals(
+			{ taxMode, lines: payload.lines.map((l) => totalsLine(l, l.menuTaxRateBp as number)) },
+			ROUNDING_RULE
+		);
+		const removed = standard.total >= recomputed.total ? taxRemoved(standard, recomputed) : null;
+		if (removed === null || removed !== override.taxRemovedMinor) {
+			pushOnce(softFlags, 'totals_mismatch');
+		}
+		if (taxMode === 'inclusive') chargedByLine = allocateLineGross(recomputed, ROUNDING_RULE);
 	}
 
 	// Step 10 — payment shape and cash arithmetic.
@@ -645,7 +784,7 @@ export async function validateSale(
 		invoiceSeq: payload.invoiceSeq,
 		invoiceNumber: payload.invoiceNumber,
 		openedAt: new Date(payload.openedAt),
-		lines: payload.lines.map((l) => ({
+		lines: payload.lines.map((l, index) => ({
 			lineId: l.lineId,
 			lineNo: l.lineNo,
 			menuItemId: l.menuItemId,
@@ -654,6 +793,8 @@ export async function validateSale(
 			unitPriceMinor: minor(l.unitPriceMinor),
 			taxRateBp: l.taxRateBp,
 			...lineRateSnapshot(l, resolvedFor(l), rateById),
+			menuTaxRateBp: l.menuTaxRateBp ?? l.taxRateBp,
+			chargedMinor: chargedByLine === null ? null : chargedByLine[index],
 			discountMinor: minor(l.discountMinor),
 			modifiers: l.modifiers.map((m) => ({
 				modifierId: m.modifierId,
@@ -661,6 +802,16 @@ export async function validateSale(
 				priceDeltaMinor: minor(m.priceDeltaMinor)
 			}))
 		})),
+		taxOverride:
+			override === null
+				? null
+				: {
+						taxRateId: override.taxRateId,
+						taxRateName: override.taxRateName,
+						rateBp: override.rateBp,
+						reason: overrideReason as string,
+						taxRemovedMinor: minor(override.taxRemovedMinor)
+					},
 		totals: {
 			subtotalMinor: minor(payload.totals.subtotalMinor),
 			discountMinor: minor(payload.totals.discountMinor),

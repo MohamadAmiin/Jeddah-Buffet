@@ -74,8 +74,10 @@ invariant 5).
   `lastActiveAt` and refuses to restore past the idle limit — NEVER `localStorage`.
 - `idle.ts` — the idle watch; `null` seconds is inert, never a default.
 - `menu-snapshot.ts` — parses the full menu snapshot; amounts stay decimal strings until
-  `readMenu` converts them with `BigInt`; format 2 carries each item's resolved named rate; a
-  cached copy in another format is replaced at the next version check.
+  `readMenu` converts them with `BigInt`; format 2 carries each item's resolved named rate and
+  the rates offered for tax-exempt bills (`billTaxRates`, tasks/bill-tax-override); a cached copy
+  in another format, or one whose header has no `billTaxRates` key (written by a build before
+  that plan), is replaced at the next version check, even at an equal version.
 - `settings.ts` — the cached payment methods, receipt layout and logo (keys `paymentMethods`,
   `receiptLayout`, `receiptLogo`); readers fall back safely (no methods → `[]`; no layout → the
   default with a pre-plan `receiptFooter` as footer line 1; a bad logo → null); the logo's bytes
@@ -101,7 +103,9 @@ invariant 5).
   lines that may never be hidden (Settings 4) are enforced here, not in the database. The tax
   lines print the stored rate names and the sale's stored per-rate rows (`taxBreakdown`, else one
   mixed-rates line), the payment line the stored method name, and the payment-numbers block the
-  enabled methods' merchant numbers.
+  enabled methods' merchant numbers. A tax-exempt bill (tasks/bill-tax-override) prints its rate's
+  own label and two never-hideable lines, `Tax exempt: <reason>` and `Tax removed`; with the
+  owner's `zeroTax` switch off, a tax line whose stored amount is `0` is left out.
 - `print-client.ts` — the loopback agent client: the pairing settings (a loopback address and a
   64-hex token, in IndexedDB, never `localStorage`), obtained from the agent itself
   (`requestPairing`, answered once while the agent's pairing is open) or read from the

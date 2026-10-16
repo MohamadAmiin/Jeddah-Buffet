@@ -18,7 +18,8 @@
 // times per order (total, tax, discount); taxBreakdown rounds once per rate
 // group, CUMULATIVELY, so its rows split the tax computeOrderTotals rounded and
 // add back to it exactly — it never rounds a line
-// (tasks/settings-tax-payments-receipt T-09).
+// (tasks/settings-tax-payments-receipt T-09). allocateLineGross does the same
+// for each line's gross (tasks/bill-tax-override).
 
 import {
 	add,
@@ -34,7 +35,7 @@ import {
 	type Minor,
 	type RoundingRule
 } from './index';
-import { taxOnAmount, type TaxMode } from './tax';
+import { retaxIncluded, taxOnAmount, type TaxMode } from './tax';
 
 export type TotalsLine = {
 	/** The price STORED on the line, never re-read from the menu. */
@@ -47,6 +48,13 @@ export type TotalsLine = {
 	taxRateBp: number;
 	/** A whole-line discount in minor units; `0n` everywhere in this plan. */
 	discountMinor: Minor;
+	/**
+	 * The rate the unit price already includes, when the bill charges another — a
+	 * bill tax override (tasks/bill-tax-override). Read in INCLUSIVE mode only:
+	 * the line is then stripped of this rate and charged `taxRateBp` on the net
+	 * (retaxIncluded). Exclusive mode ignores it — its price is already the net.
+	 */
+	includedTaxRateBp?: number;
 };
 
 export type OrderTotals = {
@@ -85,8 +93,16 @@ export function computeOrderTotals(
 		const base = multiplyByInteger(unit, line.quantity);
 		const amount = subtract(base, line.discountMinor);
 		if (amount < 0n) throw new RangeError('discount exceeds the line');
-		const undiscountedNet = taxOnAmount(exact(base), line.taxRateBp, input.taxMode).net;
-		const { net, tax, gross } = taxOnAmount(exact(amount), line.taxRateBp, input.taxMode);
+		// ONE tax function per line, for BOTH the undiscounted and the discounted
+		// amount: re-taxing only one of them would book the waived tax as a
+		// discount (Dr 4100) on a bill that has none.
+		const included = line.includedTaxRateBp;
+		const lineTax =
+			input.taxMode === 'inclusive' && typeof included === 'number'
+				? (x: Exact) => retaxIncluded(x, included, line.taxRateBp)
+				: (x: Exact) => taxOnAmount(x, line.taxRateBp, input.taxMode);
+		const undiscountedNet = lineTax(exact(base)).net;
+		const { net, tax, gross } = lineTax(exact(amount));
 		lines.push({ undiscountedNet, net, tax, gross });
 	}
 
@@ -172,4 +188,40 @@ export function taxBreakdown(
 		);
 	}
 	return rows;
+}
+
+/**
+ * Each line's GROSS as whole minor units that add up to `totals.total` — the
+ * taxBreakdown technique, line by line: r_k = roundToMinor(S_k, rule) where S_k
+ * is the exact gross of lines 1..k, and row k = r_k − r_{k−1}. A line whose gross
+ * is already whole comes back unchanged. Used for an inclusive-mode exempt bill,
+ * whose lines are worth a fraction of a cent each (tasks/bill-tax-override), so
+ * the item reports read a stored amount instead of unit price × quantity. Pass
+ * the SAME rule computeOrderTotals got (ROUNDING_RULE).
+ */
+export function allocateLineGross(totals: OrderTotals, rule: RoundingRule): Minor[] {
+	const rows: Minor[] = [];
+	let running = exact(0n);
+	let previous = minor(0n);
+	for (const line of totals.lines) {
+		running = addExact(running, line.gross);
+		const rounded = roundToMinor(running, rule);
+		rows.push(subtract(rounded, previous));
+		previous = rounded;
+	}
+	if (previous !== totals.total) {
+		throw new Error('allocateLineGross: the rows do not reconcile with totals.total');
+	}
+	return rows;
+}
+
+/**
+ * What a bill tax override took off the bill: the bill at its lines' own rates
+ * (`standard`) minus the bill as charged (`actual`). Never negative — an
+ * override to a 0% rate never raises a bill.
+ */
+export function taxRemoved(standard: OrderTotals, actual: OrderTotals): Minor {
+	const removed = subtract(standard.total, actual.total);
+	if (removed < 0n) throw new RangeError('a tax override cannot raise the bill');
+	return removed;
 }

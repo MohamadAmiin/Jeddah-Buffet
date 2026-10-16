@@ -41,6 +41,11 @@
 			tax: string;
 			taxMode: 'exclusive' | 'inclusive';
 			total: string;
+			/** Leave the tax row out: the owner's zeroTax switch is off and the tax is zero. */
+			hideZeroTax?: boolean;
+			/** A tax-exempt bill (tasks/bill-tax-override): the rate's label ("Exempt
+			 * 0.00%"), who is exempt and why, and the tax removed — all formatted. */
+			exempt?: { label: string; reason: string; removed: string } | null;
 		};
 		totalLabel?: string;
 		selectedId?: string | null;
@@ -130,10 +135,29 @@
 					<dd class="text-danger text-right font-mono tabular-nums">−{totals.discount}</dd>
 				</div>
 			{/if}
-			<div class="text-ink-2 flex items-baseline justify-between gap-4">
-				<dt>Tax <span class="text-body">({totals.taxMode})</span></dt>
-				<dd class="text-right font-mono tabular-nums">{totals.tax}</dd>
-			</div>
+			{#if !totals.hideZeroTax}
+				<div class="text-ink-2 flex items-baseline justify-between gap-4">
+					{#if totals.exempt}
+						<dt>{totals.exempt.label}</dt>
+					{:else}
+						<dt>Tax <span class="text-body">({totals.taxMode})</span></dt>
+					{/if}
+					<dd class="text-right font-mono tabular-nums">{totals.tax}</dd>
+				</div>
+			{/if}
+			{#if totals.exempt}
+				<!-- Never hidden: the bill says it is tax-exempt, why, and by how much. -->
+				<div class="flex items-baseline justify-between gap-4" data-testid="check-exempt">
+					<dt class="shrink-0 font-semibold">
+						<span aria-hidden="true" class="font-mono">◆</span> Tax exempt
+					</dt>
+					<dd class="min-w-0 truncate text-right">{totals.exempt.reason}</dd>
+				</div>
+				<div class="text-ink-2 flex items-baseline justify-between gap-4">
+					<dt>Tax removed</dt>
+					<dd class="text-right font-mono tabular-nums">{totals.exempt.removed}</dd>
+				</div>
+			{/if}
 			<div
 				class="border-line mt-1 flex flex-wrap items-baseline justify-between gap-x-4 border-t pt-2"
 			>

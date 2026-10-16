@@ -87,6 +87,9 @@ export const GET: RequestHandler = async (event) => {
 			currencyExponent,
 			taxMode: snapshot.taxMode,
 			defaultTaxRate: snapshot.defaultTaxRate,
+			// The 0% rates offered for tax-exempt bills (tasks/bill-tax-override). A
+			// till treats a cached copy WITHOUT this key as stale and refetches.
+			billTaxRates: snapshot.billTaxRates,
 			// Legacy (pre-format-2 tills): the default's number, or null.
 			taxRateBp: snapshot.defaultTaxRate?.rateBp ?? null,
 			categories: snapshot.categories.map((category) => ({

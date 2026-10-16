@@ -5,6 +5,7 @@ import { db } from '../db/client';
 import { closeTestDb, testDb } from '../db/test/db';
 import {
 	seedSalesRestaurant,
+	offerExemptRate,
 	openSessionAt,
 	closeSessionAt,
 	recordSaleAt,
@@ -592,6 +593,48 @@ describe('salesReport — tenant isolation and edge cases', () => {
 		// The first restaurant is unchanged.
 		const firstReport = await salesReport(db, fx.restaurantId, '2026-09-28');
 		expect(firstReport.totals.orderCount).toBe(3);
+	});
+
+	it('MANDATORY (money): an inclusive restaurant with an exempt bill keeps Σ byItem = takings (bill-tax-override T-09)', async () => {
+		const other = await seedSalesRestaurant(db, { taxMode: 'inclusive', taxRateBp: 2000 });
+		const exempt = await offerExemptRate(db, other);
+		const session = randomUUID();
+		await openSessionAt(db, other, {
+			posSessionId: session,
+			openedAt: new Date('2026-09-28T09:00:00Z'),
+			openingCashMinor: 0n
+		});
+		const special = {
+			menuItemId: other.items.special,
+			itemName: 'Special',
+			quantity: 1,
+			unitPriceMinor: 999n,
+			taxRateBp: other.taxRateBp
+		};
+		const sale = (invoiceSeq: number, exemptBill: boolean) =>
+			recordSaleAt(db, other, {
+				posSessionId: session,
+				occurredAt: new Date(`2026-09-28T1${invoiceSeq}:00:00Z`),
+				invoiceSeq,
+				method: 'cash',
+				orderType: 'takeaway',
+				tableLabel: null,
+				...(exemptBill
+					? { exempt: { rateId: exempt.id, rateName: exempt.name, reason: 'UNICEF' } }
+					: {}),
+				lines: [special, { ...special, quantity: 2 }]
+			});
+		await sale(1, false);
+		await sale(2, true);
+
+		const report = await salesReport(db, other.restaurantId, '2026-09-28');
+		// Taxed: 999 + 1998 = 2997. Exempt: 2997 × 10000 / 12000 = 2497.5 → 2498.
+		expect(report.totals.takings).toBe(2997n + 2498n);
+		expect(report.byItem).toHaveLength(1);
+		expect(report.byItem[0].amount).toBe(report.totals.takings);
+		expect(report.byCategory.reduce((sum, row) => sum + row.amount, 0n)).toBe(
+			report.totals.takings
+		);
 	});
 
 	it('empty date returns zeros and empty sections', async () => {
