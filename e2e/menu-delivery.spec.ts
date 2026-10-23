@@ -94,6 +94,29 @@ test('menu photos, optional categories and a Delivery sale, online and offline',
 	expect(photos[0].byte_size).toBeLessThanOrEqual(409_600);
 	expect(['image/webp', 'image/jpeg']).toContain(photos[0].content_type);
 
+	// 2b. A photo alone on an existing item says "Photo saved." (not "No change to
+	//     save."), and Remove photo leaves the panel showing no photo and no Remove
+	//     key — the panel re-reads the item after each of its forms.
+	const teaTile = page.getByRole('listitem').filter({ hasText: 'Tea' }).first();
+	await teaTile.getByRole('button', { name: 'Edit' }).click();
+	await expect(page.getByRole('heading', { name: 'Edit Tea' })).toBeVisible();
+	await page
+		.getByLabel('Photo')
+		.setInputFiles({ name: 'tea.png', mimeType: 'image/png', buffer: PNG_1X1 });
+	await expect(page.locator('img[src^="blob:"]')).toBeVisible();
+	await page.getByRole('button', { name: 'Save item' }).click();
+	await expect(page.getByRole('alert')).toContainText('Photo saved.');
+	await expect(teaTile.locator('img')).toBeVisible();
+	expect(await dbRows('select id from menu_images')).toHaveLength(2);
+	const removePhoto = page.getByRole('button', { name: 'Remove photo' });
+	await removePhoto.click();
+	await expect(page.getByRole('alert')).toContainText('Photo removed.');
+	await expect(removePhoto).toHaveCount(0);
+	await expect(page.getByRole('heading', { name: 'Edit Tea' })).toBeVisible();
+	await expect(teaTile.locator('img')).toHaveCount(0);
+	expect(await dbRows('select id from menu_images')).toHaveLength(1);
+	await page.getByRole('button', { name: 'Cancel' }).click();
+
 	// 3. A cashier, the registered till, a PIN, an open session.
 	await createCashier(page, { displayName: 'The Cashier', pin: '4321' });
 	const till = await browser.newContext();

@@ -309,7 +309,10 @@ describe('the /menu page', () => {
 		});
 
 		// Saving the form again with Default still chosen writes and audits nothing.
-		expect(await act('updateItem', form(''))).toEqual({ message: 'No change to save.' });
+		expect(await act('updateItem', form(''))).toEqual({
+			message: 'No change to save.',
+			unchanged: true
+		});
 		expect(await rateChangeAudits()).toHaveLength(1);
 	});
 

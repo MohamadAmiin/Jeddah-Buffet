@@ -310,7 +310,11 @@ export const actions: Actions = {
 						: 'That item no longer exists.'
 			});
 		}
-		return { message: result.changed ? `${parsed.data.name} saved.` : 'No change to save.' };
+		// `unchanged` lets the panel say "Photo saved." when only the photo changed:
+		// the photo follows in its own request (setImage), which this one cannot see.
+		return result.changed
+			? { message: `${parsed.data.name} saved.` }
+			: { message: 'No change to save.', unchanged: true };
 	},
 
 	archiveItem: async (event) => {

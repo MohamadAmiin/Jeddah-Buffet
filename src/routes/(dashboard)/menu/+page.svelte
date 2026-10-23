@@ -175,6 +175,63 @@
 		}
 	}
 
+	// One photo upload, in its own request, to the named action: null when it was
+	// saved, else the sentence to show.
+	async function uploadPhoto(
+		action: string,
+		fields: Record<string, string>,
+		blob: Blob
+	): Promise<string | null> {
+		const upload = new FormData();
+		for (const [name, value] of Object.entries(fields)) upload.set(name, value);
+		upload.set(
+			'image',
+			new File([blob], blob.type === 'image/webp' ? 'photo.webp' : 'photo.jpg', {
+				type: blob.type
+			})
+		);
+		let response: Response;
+		try {
+			response = await fetch(action, {
+				method: 'POST',
+				body: upload,
+				headers: { 'x-sveltekit-action': 'true' }
+			});
+		} catch {
+			return 'the upload failed. Check the connection and try again.';
+		}
+		// The Node server's body limit, or a proxy in front of it, refuses an
+		// oversized body before the action runs: there is no action result to read.
+		if (response.status === 413) return 'the server refused it as too large. Try a smaller photo.';
+		try {
+			// A manual fetch to an action needs deserialize: the body is devalue-encoded.
+			const photo = deserialize(await response.text());
+			if (photo.type === 'success') return null;
+			return photo.type === 'failure' && typeof photo.data?.message === 'string'
+				? photo.data.message
+				: 'the upload failed.';
+		} catch {
+			return 'the upload failed.';
+		}
+	}
+
+	// `editing` is a copy taken when Edit was pressed, and every form in the panel
+	// reloads the page data: read the item again afterwards, or the panel goes on
+	// showing a removed photo, a detached group or an archived item.
+	function refreshEditing(editedId: string | null) {
+		if (mode !== 'edit' || !editedId) return;
+		editing = data.items.find((item: Item) => item.id === editedId) ?? null;
+		if (!editing) mode = 'add';
+	}
+	const fromPanel: SubmitFunction = () => {
+		submitted = { source: 'panel', itemId: null };
+		const editedId = editing?.id ?? null;
+		return async ({ update }) => {
+			await update();
+			refreshEditing(editedId);
+		};
+	};
+
 	// The item fields go first; the photo follows in its own request, only once
 	// the server has answered success and given (or confirmed) the item's id.
 	const submitItem: SubmitFunction = ({ formData }) => {
@@ -192,40 +249,16 @@
 							: null
 						: editedId;
 				if (itemId) {
-					const upload = new FormData();
-					upload.set('itemId', itemId);
-					upload.set(
-						'image',
-						new File([held], held.type === 'image/webp' ? 'photo.webp' : 'photo.jpg', {
-							type: held.type
-						})
-					);
-					try {
-						const response = await fetch('?/setImage', {
-							method: 'POST',
-							body: upload,
-							headers: { 'x-sveltekit-action': 'true' }
-						});
-						// A manual fetch to an action needs deserialize: the body is devalue-encoded.
-						const photo = deserialize(await response.text());
-						if (photo.type !== 'success') {
-							const message =
-								photo.type === 'failure' && typeof photo.data?.message === 'string'
-									? photo.data.message
-									: 'the upload failed.';
-							photoOutcome = `Item saved, but the photo was not: ${message}`;
-						}
-					} catch {
-						photoOutcome = 'Item saved, but the photo was not: the upload failed.';
-					}
+					const refused = await uploadPhoto('?/setImage', { itemId }, held);
+					if (refused) photoOutcome = `Item saved, but the photo was not: ${refused}`;
+					// Only the photo changed: say that, not "No change to save." update()
+					// below applies this same result object to the page's form.
+					else if (result.data?.unchanged === true) result.data.message = 'Photo saved.';
 				}
 			}
 			if (result.type === 'success') resetPhoto();
 			await update();
-			if (mode === 'edit' && editedId) {
-				editing = data.items.find((item: Item) => item.id === editedId) ?? null;
-				if (!editing) mode = 'add';
-			}
+			refreshEditing(editedId);
 		};
 	};
 
@@ -533,7 +566,7 @@
 					{#if mode === 'edit' && editing}
 						<div class="border-line mt-4 flex flex-col gap-4 border-t pt-4">
 							{#if editing.imageUrl}
-								<form method="POST" action="?/removeImage" use:enhance={from('panel')}>
+								<form method="POST" action="?/removeImage" use:enhance={fromPanel}>
 									<input type="hidden" name="itemId" value={editing.id} />
 									<Button type="submit" variant="secondary">Remove photo</Button>
 								</form>
@@ -548,7 +581,7 @@
 									{#each editing.groupIds as groupId (groupId)}
 										<li class="flex items-center justify-between gap-2">
 											<span class="text-ink-2 text-sm">{groupName(groupId)}</span>
-											<form method="POST" action="?/unlinkGroup" use:enhance={from('panel')}>
+											<form method="POST" action="?/unlinkGroup" use:enhance={fromPanel}>
 												<input type="hidden" name="itemId" value={editing.id} />
 												<input type="hidden" name="groupId" value={groupId} />
 												<Button type="submit" variant="ghost" disabled={!ready}>Detach</Button>
@@ -561,7 +594,7 @@
 										method="POST"
 										action="?/linkGroup"
 										class="flex flex-wrap items-end gap-2"
-										use:enhance={from('panel')}
+										use:enhance={fromPanel}
 									>
 										<input type="hidden" name="itemId" value={editing.id} />
 										<label class="text-ink-2 text-sm" for="panel-link">Modifier group</label>
@@ -583,7 +616,7 @@
 									<p class="text-ink-2 text-sm">
 										It leaves the till and this page, and stays on past receipts and reports.
 									</p>
-									<form method="POST" action="?/archiveItem" use:enhance={from('panel')}>
+									<form method="POST" action="?/archiveItem" use:enhance={fromPanel}>
 										<input type="hidden" name="itemId" value={editing.id} />
 										<Button type="submit" variant="danger" disabled={!ready}>Archive item</Button>
 									</form>
