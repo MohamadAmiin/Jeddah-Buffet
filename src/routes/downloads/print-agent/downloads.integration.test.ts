@@ -142,9 +142,28 @@ describe('GET /downloads/print-agent — the manifest', () => {
 		]);
 		for (const file of body.files) {
 			expect(Object.keys(file).sort()).toEqual(
-				['arch', 'bytes', 'name', 'os', 'sha256', 'url', 'verified'].sort()
+				['arch', 'bytes', 'name', 'os', 'sha256', 'signed', 'url', 'verified'].sort()
 			);
 		}
+		// A manifest from before signing existed has no flag: unsigned.
+		expect(body.files.map((f) => f.signed)).toEqual([false, false]);
+	});
+
+	it("passes the Windows file's trusted signature through", async () => {
+		const manifest = manifestFor([
+			{ name: 'matcami-print-agent-windows-x64.exe', data: WINDOWS, os: 'windows' },
+			{ name: 'matcami-print-agent-linux-x64.zip', data: LINUX, os: 'linux' }
+		]);
+		manifest.files[0]!.signed = true;
+		manifest.files[1]!.signed = false;
+		writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest));
+		const body = (await (await manifestGET(manifestEvent())).json()) as ReturnType<
+			typeof publicManifest
+		>;
+		expect(body.files.map((f) => [f.os, f.signed])).toEqual([
+			['windows', true],
+			['linux', false]
+		]);
 	});
 
 	it('no build yet → 404 not_built', async () => {

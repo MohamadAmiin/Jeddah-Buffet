@@ -52,6 +52,10 @@ import {
 	writeZip,
 	verifyAdHocSignature,
 	WINDOWS_VERIFIED,
+	authenticodeState,
+	signWindowsInstaller,
+	stripAuthenticode,
+	windowsSigningCommand,
 	type Manifest,
 	type Target
 } from './build-print-agent/lib';
@@ -181,17 +185,28 @@ async function nodeBinary(target: Target): Promise<string> {
 }
 
 /** Copy the node binary (NEVER inject into the cached file) and inject the agent. */
-function inject(node: string, out: string, blob: string, macho: boolean): void {
+function inject(node: string, out: string, blob: string, target: Target): void {
 	mkdirSync(join(out, '..'), { recursive: true });
-	copyFileSync(node, out);
+	if (target.os === 'windows') {
+		// The Node.js project's signature would no longer match after injection,
+		// and postject would leave the header pointing at its missing table — a
+		// "tampered" file to Windows. Remove it first (the Node docs' `signtool
+		// remove /s`); the result is cleanly unsigned, ready to be signed.
+		writeFileSync(out, stripAuthenticode(readFileSync(node)));
+	} else {
+		copyFileSync(node, out);
+	}
 	chmodSync(out, 0o755);
 	const postject = join(REPO, 'node_modules', '.bin', 'postject');
 	const args = [out, 'NODE_SEA_BLOB', blob, '--sentinel-fuse', SEA_FUSE];
-	if (macho) args.push('--macho-segment-name', 'NODE_SEA');
-	// The Windows node.exe and the macOS node are signed by the Node.js project;
-	// injecting invalidates that signature and postject warns. Windows runs the
-	// result unsigned (Node docs); macOS is re-signed ad hoc below.
+	if (target.os === 'macos') args.push('--macho-segment-name', 'NODE_SEA');
+	// The macOS node is signed by the Node.js project too; injecting invalidates
+	// that signature and postject warns. It is re-signed ad hoc below.
 	execFileSync(postject, args, { stdio: 'pipe' });
+	if (target.os === 'windows') {
+		const state = authenticodeState(readFileSync(out));
+		if (state !== 'unsigned') fail(`${out} should be unsigned after injection, but is ${state}`);
+	}
 }
 
 /** rcodesign from the cache, checked against its pinned SHA-256 before it is used. */
@@ -413,6 +428,12 @@ async function main(): Promise<void> {
 		: TARGETS.map((t) => t.id);
 	for (const id of wanted) if (!TARGETS.some((t) => t.id === id)) fail(`unknown target ${id}`);
 
+	let windowsSign: string | null = null;
+	try {
+		windowsSign = windowsSigningCommand(process.env);
+	} catch (error) {
+		fail((error as Error).message);
+	}
 	const work = mkdtempSync(join(tmpdir(), 'matcami-agent-'));
 	try {
 		say(`Building the print agent installers for ${origin}`);
@@ -422,7 +443,8 @@ async function main(): Promise<void> {
 			origin,
 			nodeVersion: NODE_VERSION,
 			scriptVersion: BUILD_SCRIPT_VERSION,
-			verified: { macos: MACOS_VERIFIED, windows: WINDOWS_VERIFIED }
+			verified: { macos: MACOS_VERIFIED, windows: WINDOWS_VERIFIED },
+			signedWindows: windowsSign !== null
 		});
 		say('● Bundled the agent and made the SEA blob');
 		// The usual deploy changes neither the agent nor ORIGIN: nothing to download or build.
@@ -449,8 +471,20 @@ async function main(): Promise<void> {
 				target.id,
 				target.os === 'windows' ? 'matcami-print-agent.exe' : 'matcami-print-agent'
 			);
-			inject(node, binary, blob, target.os === 'macos');
+			inject(node, binary, blob, target);
 			let signed = '';
+			if (target.os === 'windows') {
+				if (windowsSign) {
+					try {
+						signWindowsInstaller(binary, windowsSign);
+					} catch (error) {
+						fail((error as Error).message);
+					}
+					signed = ' — signed (Authenticode)';
+				} else {
+					signed = ' — UNSIGNED: Smart App Control blocks it (set PRINT_AGENT_SIGN_WINDOWS)';
+				}
+			}
 			if (target.os === 'macos') {
 				signer ??= await rcodesign();
 				const pages = adHocSign(signer, binary);
@@ -473,7 +507,14 @@ async function main(): Promise<void> {
 				await smoke(linuxBinary, origin);
 			}
 		}
-		const manifest = buildManifest({ origin, builtAt, sourceSha: bundleSha, buildKey: key, files });
+		const manifest = buildManifest({
+			origin,
+			builtAt,
+			sourceSha: bundleSha,
+			buildKey: key,
+			files,
+			signedWindows: windowsSign !== null
+		});
 		writeFileSync(join(building, 'manifest.json'), JSON.stringify(manifest, null, '\t') + '\n');
 		publish(flags.out);
 		say(`● Published ${files.length} installer(s) to ${current}`);

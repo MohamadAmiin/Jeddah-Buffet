@@ -69,6 +69,7 @@
 		isDownloadFile,
 		notCheckedLabel,
 		recommend,
+		unsignedLabel,
 		shortOsLabel,
 		sizeLabel,
 		type DownloadFile
@@ -815,7 +816,9 @@
 						download={file.name}>Download for {shortOsLabel(file.os, file.arch)}</a
 					>
 					<p class="text-ink-2">
-						{sizeLabel(file.bytes)}{#if !file.verified}
+						{sizeLabel(file.bytes)}{#if unsignedLabel(file)}
+							· <span aria-hidden="true" class="font-mono">◆</span>
+							{unsignedLabel(file)}{:else if !file.verified}
 							· <span aria-hidden="true" class="font-mono">◆</span> {notCheckedLabel(file.os)}{/if}
 					</p>
 					<p class="text-ink-2 font-mono break-all">SHA-256 {file.sha256}</p>
@@ -823,7 +826,7 @@
 			{/each}
 			{#if pick.primary.length > 0}
 				<ul class="text-ink-2 flex flex-col gap-1" data-testid="first-run-steps">
-					{#each firstRunSteps(pick.primary[0]!.os) as step (step)}
+					{#each firstRunSteps( pick.primary[0]!.os, { signed: pick.primary[0]!.signed } ) as step (step)}
 						<li>{step}</li>
 					{/each}
 				</ul>

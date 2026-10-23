@@ -33,8 +33,15 @@ opens late: a pulse the agent could not send is refused, not retried.
    file's SHA-256, in case you want to compare it. A file marked `◆ Not yet checked on …` has not
    yet been tried on that kind of PC: it installs the same way, and if it does not start, say so
    to whoever runs your matcami server.
-2. Run it. The files are not signed yet, so the first run asks you to confirm it:
-   - **Windows:** If Windows says it protected your PC, choose More info → Run anyway.
+2. Run it. The first run may ask you to confirm it:
+   - **Windows:** If Windows says it protected your PC, choose More info → Run anyway. If it
+     says **Smart App Control blocked it**, the file is not signed yet (the download shows
+     `◆ Not signed yet — Smart App Control blocks it`): Windows 11 with Smart App Control on
+     runs only signed programs, with no button to allow one. Ask whoever runs your matcami
+     server for the signed version (docs/deployment.md, "Signing the Windows installer").
+     On a PC used only as a till you can instead turn Smart App Control off in Windows
+     Security → App & browser control; on some Windows versions it cannot be turned back on
+     without reinstalling Windows.
    - **Mac:** Double-click the zip, then double-click matcami-print-agent. If the Mac blocks it,
      open System Settings → Privacy & Security and choose Open Anyway.
    - **Linux:** Unzip it, then run matcami-print-agent (or right-click → Properties → allow

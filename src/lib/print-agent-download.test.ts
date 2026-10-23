@@ -9,6 +9,7 @@ import {
 	recommend,
 	shortOsLabel,
 	sizeLabel,
+	unsignedLabel,
 	type DownloadFile
 } from './print-agent-download';
 
@@ -86,6 +87,23 @@ describe('the words beside the print agent downloads (print-agent-installer T-13
 		expect(osLabel('linux', 'x64')).toBe('Linux (64-bit)');
 		expect(osLabel('macos', 'arm64')).toBe('Mac with Apple silicon (M1 or later)');
 		expect(osLabel('macos', 'x64')).toBe('Mac with Intel');
+	});
+
+	it('Windows: an unsigned file gets the Smart App Control step; a signed one does not', () => {
+		const unsigned = firstRunSteps('windows').join(' ');
+		expect(unsigned).toMatch(/Smart App Control blocked it/);
+		expect(unsigned).toMatch(/turn Smart App Control off/);
+		const signed = firstRunSteps('windows', { signed: true }).join(' ');
+		expect(signed).not.toMatch(/Smart App Control/);
+		expect(signed).toMatch(/More info → Run anyway/);
+		expect(unsignedLabel({ os: 'windows' })).toBe('Not signed yet — Smart App Control blocks it');
+		expect(unsignedLabel({ os: 'windows', signed: false })).not.toBeNull();
+		expect(unsignedLabel({ os: 'windows', signed: true })).toBeNull();
+		// Only Windows has the gate; the Mac and Linux files never get the mark.
+		expect(unsignedLabel({ os: 'macos' })).toBeNull();
+		expect(unsignedLabel({ os: 'linux' })).toBeNull();
+		expect(isDownloadFile({ ...FILES[1], signed: true })).toBe(true);
+		expect(isDownloadFile({ ...FILES[1], signed: 'yes' })).toBe(false);
 	});
 
 	it('says how to get an unsigned file past each OS on its first run', () => {

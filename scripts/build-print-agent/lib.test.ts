@@ -1,21 +1,27 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { crc32, inflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import {
+	authenticodeState,
 	BUILD_SCRIPT_VERSION,
 	buildKey,
 	buildManifest,
 	MACOS_VERIFIED,
 	NODE_VERSION,
 	OUTPUT_NAME,
+	peChecksum,
 	RCODESIGN,
+	signingCommandLine,
+	signWindowsInstaller,
+	stripAuthenticode,
 	TARGETS,
 	verifyAdHocSignature,
 	WINDOWS_VERIFIED,
+	windowsSigningCommand,
 	writeZip
 } from './lib';
 
@@ -154,6 +160,7 @@ describe('the manifest and the pinned signer', () => {
 		});
 		expect(manifest.schema).toBe(1);
 		expect(manifest.nodeVersion).toBe(NODE_VERSION);
+		expect(manifest.files.every((f) => f.signed === false)).toBe(true);
 		expect(manifest.files.map((f) => [f.name, f.verified])).toEqual([
 			['matcami-print-agent-linux-x64.zip', true],
 			['matcami-print-agent-windows-x64.exe', false],
@@ -199,7 +206,8 @@ describe('buildKey', () => {
 		origin: 'https://pos.example.com',
 		nodeVersion: NODE_VERSION,
 		scriptVersion: BUILD_SCRIPT_VERSION,
-		verified: { macos: false, windows: false }
+		verified: { macos: false, windows: false },
+		signedWindows: false
 	};
 
 	it('is stable for the same inputs', () => {
@@ -215,8 +223,137 @@ describe('buildKey', () => {
 		['nodeVersion', { nodeVersion: 'v24.22.0' }],
 		['scriptVersion', { scriptVersion: BUILD_SCRIPT_VERSION + 1 }],
 		['the macOS flag', { verified: { macos: true, windows: false } }],
-		['the Windows flag', { verified: { macos: false, windows: true } }]
+		['the Windows flag', { verified: { macos: false, windows: true } }],
+		['Windows signing being configured', { signedWindows: true }]
 	])('changes when %s changes', (_name, over) => {
 		expect(buildKey({ ...base, ...over })).not.toBe(buildKey(base));
+	});
+});
+
+// ── Windows: the Authenticode table ─────────────────────────────────────────
+
+/**
+ * A minimal PE32+ file: 'MZ', e_lfanew 0x80, 'PE\0\0', a COFF header and an
+ * optional header with 16 data directories — then `tail`, and, when `cert` is
+ * given, a WIN_CERTIFICATE table at the end that the Security directory names.
+ */
+function fakePe(opts: { cert?: 'pkcs7' | 'zeros'; tail?: number } = {}): Buffer {
+	const optional = 0x80 + 24;
+	const head = Buffer.alloc(optional + 240 + (opts.tail ?? 64), 0);
+	head.writeUInt16LE(0x5a4d, 0);
+	head.writeUInt32LE(0x80, 0x3c);
+	head.writeUInt32LE(0x00004550, 0x80);
+	head.writeUInt16LE(0x8664, 0x84);
+	head.writeUInt16LE(240, 0x80 + 20);
+	head.writeUInt16LE(0x20b, optional);
+	head.writeUInt32LE(16, optional + 108);
+	for (let i = optional + 240; i < head.length; i += 1) head[i] = i & 0xff;
+	if (!opts.cert) return head;
+	const table = Buffer.alloc(24, 0);
+	if (opts.cert === 'pkcs7') {
+		table.writeUInt32LE(24, 0);
+		table.writeUInt16LE(0x0200, 4);
+		table.writeUInt16LE(0x0002, 6);
+		table.fill(0x30, 8);
+	}
+	const pe = Buffer.concat([head, table]);
+	pe.writeUInt32LE(head.length, optional + 112 + 32);
+	pe.writeUInt32LE(table.length, optional + 112 + 36);
+	return pe;
+}
+const CHECKSUM_AT = 0x80 + 24 + 64;
+
+describe('the Windows signature table — what Smart App Control and SmartScreen read', () => {
+	it('tells unsigned, signed, corrupt (a table entry naming no certificate) and not-a-PE apart', () => {
+		expect(authenticodeState(fakePe())).toBe('unsigned');
+		expect(authenticodeState(fakePe({ cert: 'pkcs7' }))).toBe('signed');
+		// What postject left in the live installer: an entry pointing at zeros.
+		expect(authenticodeState(fakePe({ cert: 'zeros' }))).toBe('corrupt');
+		const outside = fakePe({ cert: 'pkcs7' });
+		outside.writeUInt32LE(outside.length, 0x80 + 24 + 112 + 32);
+		expect(authenticodeState(outside)).toBe('corrupt');
+		expect(authenticodeState(Buffer.from('not an exe at all, just text'))).toBe('not-pe');
+	});
+
+	it('stripping removes the table from the end, zeroes the entry and recomputes the checksum', () => {
+		const signed = fakePe({ cert: 'pkcs7' });
+		const stripped = stripAuthenticode(signed);
+		expect(authenticodeState(stripped)).toBe('unsigned');
+		expect(stripped.length).toBe(signed.length - 24);
+		expect(stripped.readUInt32LE(CHECKSUM_AT)).toBe(peChecksum(stripped, CHECKSUM_AT));
+		expect(stripped.readUInt32LE(CHECKSUM_AT)).not.toBe(0);
+		// Everything before the table is untouched but the entry and the checksum.
+		const compare = Buffer.from(signed.subarray(0, stripped.length));
+		compare.fill(0, 0x80 + 24 + 112 + 32, 0x80 + 24 + 112 + 40);
+		compare.writeUInt32LE(stripped.readUInt32LE(CHECKSUM_AT), CHECKSUM_AT);
+		expect(stripped.equals(compare)).toBe(true);
+		// An unsigned file comes back unchanged; a non-PE is refused.
+		expect(stripAuthenticode(fakePe()).equals(fakePe())).toBe(true);
+		expect(() => stripAuthenticode(Buffer.from('nope'))).toThrow(/not a Windows PE/);
+	});
+
+	it('the checksum is the one imagehlp computes: a 16-bit carry sum plus the length', () => {
+		const pe = Buffer.from([0x01, 0x00, 0xff, 0xff, 0xaa, 0xaa, 0xaa, 0xaa, 0x03]);
+		// Words 0x0001 + 0xffff → 0x10000 → folds to 0x0001; + 0x03 → 0x0004; the
+		// four bytes at 4..7 are the checksum field and are skipped; + length 9.
+		expect(peChecksum(pe, 4)).toBe(0x0004 + 9);
+	});
+});
+
+describe("signing the Windows installer with the operator's command", () => {
+	const dirs: string[] = [];
+	const fileWith = (data: Buffer, name = 'matcami-print-agent.exe') => {
+		const dir = mkdtempSync(join(tmpdir(), 'matcami-sign-'));
+		dirs.push(dir);
+		const file = join(dir, name);
+		writeFileSync(file, data);
+		return file;
+	};
+	const cleanup = () => {
+		for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+	};
+
+	it('reads PRINT_AGENT_SIGN_WINDOWS: nothing configured is null; a command without {file} is refused', () => {
+		expect(windowsSigningCommand({})).toBeNull();
+		expect(windowsSigningCommand({ PRINT_AGENT_SIGN_WINDOWS: '   ' })).toBeNull();
+		expect(windowsSigningCommand({ PRINT_AGENT_SIGN_WINDOWS: ' jsign {file} ' })).toBe(
+			'jsign {file}'
+		);
+		expect(() => windowsSigningCommand({ PRINT_AGENT_SIGN_WINDOWS: 'jsign app.exe' })).toThrow(
+			/\{file\}/
+		);
+	});
+
+	it('puts the path in, single-quoted for sh — a quote in the path cannot break out', () => {
+		expect(signingCommandLine('sign --in {file} --out {file}', '/tmp/a b.exe')).toBe(
+			"sign --in '/tmp/a b.exe' --out '/tmp/a b.exe'"
+		);
+		expect(signingCommandLine('sign {file}', "/tmp/it's.exe")).toBe("sign '/tmp/it'\\''s.exe'");
+	});
+
+	it('a command that signs passes; one that fails, or leaves the file unsigned, is an error', () => {
+		try {
+			const file = fileWith(fakePe());
+			// A fake signer: writes the signed shape where the command line says.
+			signWindowsInstaller(file, 'fake-sign {file}', (line) => {
+				expect(line).toBe(`fake-sign '${file}'`);
+				writeFileSync(file, fakePe({ cert: 'pkcs7' }));
+				return { status: 0, output: '' };
+			});
+			expect(authenticodeState(readFileSync(file))).toBe('signed');
+
+			const unsigned = fileWith(fakePe());
+			expect(() =>
+				signWindowsInstaller(unsigned, 'no-op {file}', () => ({ status: 0, output: '' }))
+			).toThrow(/unsigned after the signing command/);
+			expect(() =>
+				signWindowsInstaller(unsigned, 'broken {file}', () => ({
+					status: 1,
+					output: 'certificate expired'
+				}))
+			).toThrow(/signing the Windows installer failed: certificate expired/);
+		} finally {
+			cleanup();
+		}
 	});
 });
