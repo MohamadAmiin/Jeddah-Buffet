@@ -40,7 +40,9 @@ const ManifestSchema = z.object({
 				arch: z.enum(['x64', 'arm64']),
 				bytes: z.number().int().positive(),
 				sha256: z.string().regex(HEX64),
-				verified: z.boolean()
+				verified: z.boolean(),
+				// Absent from a manifest built before signing existed: unsigned.
+				signed: z.boolean().optional()
 			})
 		)
 		.max(4)
@@ -102,6 +104,7 @@ export function publicManifest(manifest: Manifest): PublicManifest {
 			bytes: file.bytes,
 			sha256: file.sha256,
 			verified: file.verified,
+			signed: file.signed ?? false,
 			url: `/downloads/print-agent/${file.name}`
 		}))
 	};
