@@ -370,7 +370,9 @@ const VALID: Record<PageKey, Record<string, ActionCase>> = {
 		setDefault: { form: (s) => ({ taxRateId: s.spareRateId }) },
 		create: { form: () => ({ name: 'Reduced', percent: '5' }) },
 		update: { form: (s) => ({ taxRateId: s.spareRateId, name: 'Exempt goods', percent: '0' }) },
-		archive: { form: (s) => ({ taxRateId: s.spareRateId, name: 'Exempt' }) }
+		archive: { form: (s) => ({ taxRateId: s.spareRateId, name: 'Exempt' }) },
+		// tasks/bill-tax-override T-10: the spare rate is 0%, so B may offer it.
+		offer: { form: (s) => ({ taxRateId: s.spareRateId, offered: 'true', name: 'Exempt' }) }
 	},
 	payments: {
 		create: {

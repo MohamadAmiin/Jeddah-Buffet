@@ -175,6 +175,20 @@ describe('readReceiptLayout', () => {
 		expect(await readReceiptLayout()).toEqual(layout);
 	});
 
+	it('reads zeroTax as true from a layout cached before bill-tax-override', async () => {
+		const { zeroTax, ...olderShow } = DEFAULT_RECEIPT_LAYOUT.show;
+		expect(zeroTax).toBe(true);
+		await cacheSettings([
+			{
+				key: RECEIPT_LAYOUT_SETTING,
+				value: { ...layoutWith(null), show: { ...olderShow, cashier: false } }
+			}
+		]);
+		const layout = await readReceiptLayout();
+		expect(layout.show.zeroTax).toBe(true);
+		expect(layout.show.cashier).toBe(false);
+	});
+
 	it('sanitises each field on its own and keeps the rest', async () => {
 		await cacheSettings([
 			{

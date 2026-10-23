@@ -11,6 +11,7 @@ import {
 import { onRestaurantCreated, updateSettings } from '$lib/server/restaurants';
 import {
 	archiveItem,
+	archiveTaxRate,
 	createCategory,
 	createItem,
 	createModifier,
@@ -18,6 +19,7 @@ import {
 	linkModifierGroup,
 	setItemAvailability,
 	setItemImage,
+	setTaxRateOffered,
 	updateTaxRate
 } from '$lib/server/menu';
 import { seedTaxRate } from '$lib/server/db/test/settings';
@@ -44,6 +46,8 @@ type Snapshot = {
 	currencyExponent: number | null;
 	taxMode: string | null;
 	defaultTaxRate: SnapshotTaxRate | null;
+	/** The 0% rates offered for tax-exempt bills (bill-tax-override T-06). */
+	billTaxRates: SnapshotTaxRate[];
 	/** Legacy (pre-format-2 tills): the default's number. */
 	taxRateBp: number | null;
 	categories: Array<{ id: string; name: string; sortOrder: number }>;
@@ -371,6 +375,46 @@ describe('GET /api/menu', () => {
 		);
 		expect(crossed.status).toBe(200);
 		expect((JSON.parse(crossed.text) as Snapshot).restaurantId).toBe(b.restaurantId);
+	});
+
+	it('lists only the live, offered rates of its own restaurant as billTaxRates (bill-tax-override T-06)', async () => {
+		const a = await makeRestaurant('Exempt Cafe');
+		const b = await makeRestaurant('Other Cafe');
+		const ids = await db.transaction(async (tx) => {
+			const vat = await seedTaxRate(tx, a.restaurantId, { name: 'VAT', rateBp: 500 }, a.ctx);
+			const ngo = await seedTaxRate(tx, a.restaurantId, { name: 'NGO', rateBp: 0 }, a.ctx);
+			const embassy = await seedTaxRate(tx, a.restaurantId, { name: 'Embassy', rateBp: 0 }, a.ctx);
+			const quiet = await seedTaxRate(tx, a.restaurantId, { name: 'Quiet', rateBp: 0 }, a.ctx);
+			const gone = await seedTaxRate(tx, a.restaurantId, { name: 'Gone', rateBp: 0 }, a.ctx);
+			const foreign = await seedTaxRate(tx, b.restaurantId, { name: 'Foreign', rateBp: 0 }, b.ctx);
+			for (const [restaurantId, id] of [
+				[a.restaurantId, ngo],
+				[a.restaurantId, embassy],
+				[a.restaurantId, gone],
+				[b.restaurantId, foreign]
+			]) {
+				const offered = await setTaxRateOffered(tx, restaurantId, id, true, a.ctx);
+				if (!offered.ok) throw new Error(offered.reason);
+			}
+			const archived = await archiveTaxRate(tx, a.restaurantId, gone, a.ctx);
+			if (!archived.ok) throw new Error(archived.reason);
+			return { vat, ngo, embassy, quiet };
+		});
+
+		const snapshot = await snapshotFor(a.token);
+		// In the owner's sort order (creation order here), never alphabetical.
+		expect(snapshot.billTaxRates).toEqual([
+			{ id: ids.ngo, name: 'NGO', rateBp: 0 },
+			{ id: ids.embassy, name: 'Embassy', rateBp: 0 }
+		]);
+		const other = await snapshotFor(b.token);
+		expect(other.billTaxRates.map((rate) => rate.name)).toEqual(['Foreign']);
+	});
+
+	it('answers with the shape-marked ETag (bill-tax-override T-06)', async () => {
+		const a = await makeRestaurant('Etag Cafe');
+		const result = await call(GET, '/api/menu', { [DEVICE_COOKIE]: a.token });
+		expect(result.headers!.get('etag')).toMatch(/^W\/"menu-[0-9a-f-]+-\d+-b"$/);
 	});
 
 	it("ships each item's imageId — null or the photo's id — and never the bytes", async () => {

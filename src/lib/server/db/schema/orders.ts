@@ -68,6 +68,17 @@ import { paymentMethods } from './payment-methods';
 // and the validator (T-18) pins it to 0 until the approvals plan. payments
 // takes N rows per order from day one (spec 13: split payments), while the
 // till writes exactly one.
+//
+// A BILL TAX OVERRIDE (tasks/bill-tax-override): a cashier may mark a whole bill
+// tax-exempt with one of the 0% rates the owner offered. The order snapshots the
+// rate the TILL used (id, name, number — the payload's values, never the row's at
+// sync time), the cleaned reason and tax_removed_minor (what the customer did not
+// pay: the bill at its lines' own rates minus the bill as charged, computed by
+// src/lib/money). All five are NULL on a bill without one, and on every order
+// recorded before migration 0019 — never backfilled (invariant 2). Each line also
+// snapshots its item's own rate (menu_tax_rate_bp) and, on an INCLUSIVE-mode
+// exempt bill only, its share of the bill total (charged_minor) — the stored
+// amount the item reports read instead of unit price × quantity.
 
 const tenant = () =>
 	uuid('restaurant_id')
@@ -106,6 +117,13 @@ export const orders = pgTable(
 		totalMinor: bigint('total_minor', { mode: 'bigint' }).notNull(),
 		// The soft flag a recorded sale carries (T-19), e.g. 'totals_mismatch'. Null = clean.
 		flagReason: text('flag_reason'),
+		// The bill tax override (tasks/bill-tax-override) — see the note above; all
+		// five or none (orders_tax_override_all_or_none).
+		taxOverrideRateId: uuid('tax_override_rate_id'),
+		taxOverrideRateName: text('tax_override_rate_name'),
+		taxOverrideRateBp: integer('tax_override_rate_bp'),
+		taxOverrideReason: text('tax_override_reason'),
+		taxRemovedMinor: bigint('tax_removed_minor', { mode: 'bigint' }),
 		openedAt: timestamp('opened_at', { withTimezone: true }).notNull(),
 		paidAt: timestamp('paid_at', { withTimezone: true }).notNull(),
 		receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
@@ -142,6 +160,19 @@ export const orders = pgTable(
 		check(
 			'orders_totals_identity',
 			sql`${t.subtotalMinor} - ${t.discountMinor} + ${t.taxMinor} = ${t.totalMinor}`
+		),
+		foreignKey({
+			columns: [t.restaurantId, t.taxOverrideRateId],
+			foreignColumns: [taxRates.restaurantId, taxRates.id],
+			name: 'orders_tax_override_rate_fk'
+		}).onDelete('restrict'),
+		check(
+			'orders_tax_override_all_or_none',
+			sql`(${t.taxOverrideRateId} is null and ${t.taxOverrideRateName} is null and ${t.taxOverrideRateBp} is null and ${t.taxOverrideReason} is null and ${t.taxRemovedMinor} is null) or (${t.taxOverrideRateId} is not null and ${t.taxOverrideRateName} is not null and ${t.taxOverrideRateBp} is not null and ${t.taxOverrideReason} is not null and ${t.taxRemovedMinor} is not null)`
+		),
+		check(
+			'orders_tax_override_values_valid',
+			sql`${t.taxOverrideRateId} is null or (char_length(${t.taxOverrideRateName}) between 1 and 40 and ${t.taxOverrideRateBp} between 0 and 10000 and char_length(${t.taxOverrideReason}) between 1 and 80 and ${t.taxOverrideReason} !~ '[[:cntrl:]]' and ${t.taxRemovedMinor} >= 0)`
 		)
 	]
 );
@@ -166,6 +197,14 @@ export const orderLines = pgTable(
 		// tax_rate_bp above stays the number that was TAXED; the rate row may be edited later.
 		taxRateId: uuid('tax_rate_id'),
 		taxRateName: text('tax_rate_name'),
+		// The item's OWN resolved rate (tasks/bill-tax-override): equal to tax_rate_bp
+		// unless the bill carries a tax override, when tax_rate_bp is the override's.
+		// Written on every line recorded from migration 0019 on; NULL only before it.
+		menuTaxRateBp: integer('menu_tax_rate_bp'),
+		// The line's share of the bill total, allocated by src/lib/money with the one
+		// rounding rule — written ONLY on lines of an inclusive-mode exempt bill. NULL
+		// means the line's amount is (unit price + Σ deltas) × quantity − discount.
+		chargedMinor: bigint('charged_minor', { mode: 'bigint' }),
 		discountMinor: bigint('discount_minor', { mode: 'bigint' })
 			.notNull()
 			.default(sql`0`),
@@ -201,7 +240,11 @@ export const orderLines = pgTable(
 		check('order_lines_unit_price_minor_non_negative', sql`${t.unitPriceMinor} >= 0`),
 		check('order_lines_tax_rate_bp_range', sql`${t.taxRateBp} >= 0 and ${t.taxRateBp} <= 10000`),
 		check('order_lines_discount_minor_non_negative', sql`${t.discountMinor} >= 0`),
-		check('order_lines_status_valid', sql`${t.status} in ('new', 'sent', 'voided')`)
+		check('order_lines_status_valid', sql`${t.status} in ('new', 'sent', 'voided')`),
+		check(
+			'order_lines_override_values_valid',
+			sql`(${t.menuTaxRateBp} is null or ${t.menuTaxRateBp} between 0 and 10000) and (${t.chargedMinor} is null or ${t.chargedMinor} >= 0)`
+		)
 	]
 );
 

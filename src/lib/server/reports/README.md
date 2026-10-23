@@ -18,4 +18,13 @@ payload for display; it never returns the raw payload to a page and never
 retries or dismisses anything — those are `orders/sync.ts`'s `retryOp` and
 `dismissOp`, called by the route.
 
+`tax-overrides.ts` (tasks/bill-tax-override) lists every paid tax-exempt bill
+in a business-date range — invoice, cashier, the rate and reason the till
+stored, the total and `tax_removed_minor` — and a count and `sum()` of the tax
+removed per cashier: the owner's control on an exemption any cashier may apply
+without a PIN. `sales.ts`'s by-item and by-category amounts read
+`order_lines.charged_minor` when it is set (a line of an inclusive-mode exempt
+bill, whose share of the total the payment transaction stored) instead of unit
+price × quantity, so those sections still add up to the takings.
+
 Spec 10, 17, 25, 26, 27. Invariants 1, 7, 11.

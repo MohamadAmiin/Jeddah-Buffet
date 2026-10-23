@@ -130,6 +130,9 @@ export const restaurantSettings = pgTable(
 		receiptShowDeviceLine: boolean('receipt_show_device_line').notNull().default(true),
 		receiptShowPaymentNumbers: boolean('receipt_show_payment_numbers').notNull().default(true),
 		receiptTaxBreakdown: boolean('receipt_tax_breakdown').notNull().default(true),
+		// Print a tax line whose STORED amount is zero (tasks/bill-tax-override). An
+		// exempt bill's own lines never hide — the formatter enforces that.
+		receiptShowZeroTax: boolean('receipt_show_zero_tax').notNull().default(true),
 		// Optional heading above the payment-numbers block; NULL = no heading. No DEFAULT.
 		receiptPaymentNumbersHeading: text('receipt_payment_numbers_heading'),
 		// The menu snapshot's version (spec 5) — see the note above this table.

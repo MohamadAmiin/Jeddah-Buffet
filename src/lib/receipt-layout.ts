@@ -31,7 +31,9 @@
 // byte can reach the printer as a command — the drawer pulse included
 // (invariant 9).
 
-/** The nine display switches, in the order every settings page lists them. */
+/** The ten display switches, in the order every settings page lists them.
+ * `zeroTax` (tasks/bill-tax-override): print a tax line whose STORED amount is
+ * zero; an exempt bill's own "Tax exempt" lines never hide. */
 export const RECEIPT_SHOW_KEYS = [
 	'cashier',
 	'table',
@@ -41,7 +43,8 @@ export const RECEIPT_SHOW_KEYS = [
 	'currencyLine',
 	'deviceLine',
 	'paymentNumbers',
-	'taxBreakdown'
+	'taxBreakdown',
+	'zeroTax'
 ] as const;
 
 export type ReceiptShow = Record<(typeof RECEIPT_SHOW_KEYS)[number], boolean>;
@@ -89,7 +92,8 @@ export const DEFAULT_RECEIPT_LAYOUT: ReceiptLayout = Object.freeze({
 		currencyLine: true,
 		deviceLine: true,
 		paymentNumbers: true,
-		taxBreakdown: true
+		taxBreakdown: true,
+		zeroTax: true
 	}),
 	paymentNumbersHeading: null,
 	logo: null

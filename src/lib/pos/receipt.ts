@@ -18,10 +18,13 @@
 // the total: the money module made them add up when the sale was completed.
 //
 // WHAT THE OWNER MAY HIDE is decided here, not by the database (CLAUDE.md
-// "Settings 4"): each of the layout's nine switches removes or replaces ONE
+// "Settings 4"): each of the layout's ten switches removes or replaces ONE
 // line. The restaurant name, the invoice number, the date and time, the items,
 // the subtotal, discount, tax and total, the payment, the COPY marks and the
-// tax registration number when one is set have no switch and always print
+// tax registration number when one is set have no switch and always print —
+// except that a tax line whose stored amount is zero hides with the zeroTax
+// switch, while an exempt bill's "Tax exempt" and "Tax removed" lines never do
+// (tasks/bill-tax-override, amending Settings 4).
 // (spec 33 decision 3 stays open; this layout is the default pending it).
 //
 // RECEIPTS ARE A SEPARATE PROBLEM (CLAUDE.md, design-system §8): 32 or 48 fixed
@@ -393,25 +396,47 @@ export function renderReceipt(input: ReceiptInput, opts: RenderOptions): PrintLi
 	// 7. The totals — never hideable. The tax: one line at the rate every line
 	//    shares; the stored per-rate rows, as stored, when the rates differ, the
 	//    switch is on and the sale stored them; else one line for the mixed rates.
+	//    A tax line whose STORED amount is "0" is left out when the owner turned
+	//    zeroTax off (tasks/bill-tax-override) — a string test on the stored
+	//    figure, never arithmetic.
 	out.push(rule('-', w));
 	out.push(...lines(pair('Subtotal', money(payload.totals.subtotalMinor, cur), w)));
 	if (payload.totals.discountMinor !== '0') {
 		out.push(...lines(pair('Discount', '-' + money(payload.totals.discountMinor, cur), w)));
 	}
 	const mode = payload.taxMode;
-	const shared = sharedRate(sale);
-	const rows = shared === null && show.taxBreakdown ? storedBreakdown(sale) : null;
-	if (shared !== null) {
-		const label = taxLabel(shared.rateBp, shared.name, mode);
-		out.push(...lines(pair(label, money(payload.totals.taxMinor, cur), w)));
-	} else if (rows !== null) {
-		for (const row of rows) {
-			const label = taxLabel(row.rateBp, row.name, mode);
-			out.push(...lines(pair(label, money(row.taxMinor, cur), w)));
+	const prints = (taxMinor: string) => show.zeroTax || taxMinor !== '0';
+	const override = payload.taxOverride ?? null;
+	if (override !== null) {
+		// A TAX-EXEMPT bill (tasks/bill-tax-override): every line was charged the
+		// override's rate. Its label reads as the rate's own name in both modes —
+		// never "Incl. Exempt": nothing is included in an exempt price.
+		if (prints(payload.totals.taxMinor)) {
+			const label = taxLabel(override.rateBp, override.taxRateName, 'exclusive');
+			out.push(...lines(pair(label, money(payload.totals.taxMinor, cur), w)));
 		}
+		// NEVER hideable: the customer sees that the tax was removed, why, and how
+		// much — the check on a cashier who exempts a bill without the owner's PIN.
+		out.push(...lines(wrap(`Tax exempt: ${p(override.reason)}`, w)));
+		out.push(...lines(pair('Tax removed', money(override.taxRemovedMinor, cur), w)));
 	} else {
-		const label = (mode === 'inclusive' ? 'Incl. tax' : 'Tax') + ' (mixed rates)';
-		out.push(...lines(pair(label, money(payload.totals.taxMinor, cur), w)));
+		const shared = sharedRate(sale);
+		const rows = shared === null && show.taxBreakdown ? storedBreakdown(sale) : null;
+		if (shared !== null) {
+			if (prints(payload.totals.taxMinor)) {
+				const label = taxLabel(shared.rateBp, shared.name, mode);
+				out.push(...lines(pair(label, money(payload.totals.taxMinor, cur), w)));
+			}
+		} else if (rows !== null) {
+			for (const row of rows) {
+				if (!prints(row.taxMinor)) continue;
+				const label = taxLabel(row.rateBp, row.name, mode);
+				out.push(...lines(pair(label, money(row.taxMinor, cur), w)));
+			}
+		} else if (prints(payload.totals.taxMinor)) {
+			const label = (mode === 'inclusive' ? 'Incl. tax' : 'Tax') + ' (mixed rates)';
+			out.push(...lines(pair(label, money(payload.totals.taxMinor, cur), w)));
+		}
 	}
 
 	// 8. The total.

@@ -266,6 +266,80 @@ describe('tax settings page', () => {
 		expect((await settingsRow(restaurantId)).defaultTaxRateId).toBeNull();
 	});
 
+	it('offer: a 0% rate is offered and withdrawn, each with one bump and one audit row (bill-tax-override T-10)', async () => {
+		const { restaurantId, ownerId, owner } = await owned();
+		const exempt = await seedRate(restaurantId, ownerId, { name: 'Exempt', rateBp: 0 });
+		const before = await getMenuVersion(db, restaurantId);
+
+		const on = await action(
+			'offer',
+			makeEvent(owner, [
+				['taxRateId', exempt],
+				['offered', 'true'],
+				['name', 'Exempt']
+			])
+		);
+		expect(on).toEqual({ message: 'Exempt is offered for tax-exempt bills.' });
+		expect(await getMenuVersion(db, restaurantId)).toBe(before + 1);
+		const data = (await load(loadEvent(owner))) as {
+			rates: { id: string; offeredForBills: boolean; zeroRate: boolean }[];
+		};
+		expect(data.rates.find((rate) => rate.id === exempt)).toMatchObject({
+			offeredForBills: true,
+			zeroRate: true
+		});
+
+		const again = await action(
+			'offer',
+			makeEvent(owner, [
+				['taxRateId', exempt],
+				['offered', 'true']
+			])
+		);
+		expect(again).toEqual({ message: 'No changes to save.' });
+
+		const off = await action(
+			'offer',
+			makeEvent(owner, [
+				['taxRateId', exempt],
+				['offered', 'false'],
+				['name', 'Exempt']
+			])
+		);
+		expect(off).toEqual({ message: 'Exempt is no longer offered for tax-exempt bills.' });
+		expect(await getMenuVersion(db, restaurantId)).toBe(before + 2);
+		expect(await eventCount(restaurantId, 'tax_rate.updated')).toBe(2);
+	});
+
+	it('offer: an 8.25% rate is refused with the reason in words; nothing is written', async () => {
+		const { restaurantId, ownerId, owner } = await owned();
+		const vat = await seedRate(restaurantId, ownerId, { name: 'VAT', rateBp: 825 });
+		const before = await getMenuVersion(db, restaurantId);
+		const auditBefore = await auditCount(restaurantId);
+
+		const result = await action(
+			'offer',
+			makeEvent(owner, [
+				['taxRateId', vat],
+				['offered', 'true']
+			])
+		);
+		expect(statusCodeOf(result)).toBe(400);
+		expect(messageOf(result)).toBe('Only a 0% rate can be offered for tax-exempt bills.');
+		expect(await getMenuVersion(db, restaurantId)).toBe(before);
+		expect(await auditCount(restaurantId)).toBe(auditBefore);
+
+		const garbled = await action(
+			'offer',
+			makeEvent(owner, [
+				['taxRateId', vat],
+				['offered', 'yes']
+			])
+		);
+		expect(statusCodeOf(garbled)).toBe(400);
+		expect(messageOf(garbled)).toBe(NOT_FOUND_MESSAGE);
+	});
+
 	it('stores 0 as a real 0% rate', async () => {
 		const { restaurantId, owner } = await owned();
 
@@ -613,7 +687,9 @@ describe('tax settings page', () => {
 				label: 'Tax 8.25%',
 				isDefault: true,
 				liveItemCount: 0,
-				archived: false
+				archived: false,
+				offeredForBills: false,
+				zeroRate: false
 			}
 		]);
 	});

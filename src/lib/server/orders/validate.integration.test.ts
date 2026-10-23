@@ -14,6 +14,7 @@ import {
 	createTaxRate,
 	linkModifierGroup,
 	readMenuSnapshot,
+	setTaxRateOffered,
 	updateItem,
 	updateTaxRate,
 	getMenuVersion
@@ -32,7 +33,12 @@ import { posSessions } from '../db/schema/pos-sessions';
 import { validateSale, type SyncContext } from './validate';
 import type { OpEnvelope } from '../../sync-ops';
 import { minor, ROUNDING_RULE } from '../../money';
-import { computeOrderTotals, serializeTotals } from '../../money/order-totals';
+import {
+	computeOrderTotals,
+	serializeTotals,
+	taxRemoved,
+	type TotalsLine
+} from '../../money/order-totals';
 import { changeDue } from '../../money/change';
 
 afterAll(async () => {
@@ -1134,6 +1140,323 @@ describe('validateSale — named methods and rates (settings-tax-payments-receip
 			expect(result.softFlags).toContain('stale_menu_price');
 			expect(result.sale.lines[0].taxRateId).toBeNull();
 			expect(result.sale.lines[0].taxRateName).toBeNull();
+		}
+	});
+});
+
+// THE BILL TAX OVERRIDE (tasks/bill-tax-override T-07). MANDATORY (spec 29 —
+// offline sync; tax in both modes). Every case asserts the outcome exactly: a
+// recorded_flagged result where `accepted` is due would hide the bug, so a clean
+// case checks softFlags is [].
+describe('validateSale — bill tax override (bill-tax-override T-07)', () => {
+	const ownerCtx = (f: Fixture) => ({ actorUserId: f.ownerId, ip: null, userAgent: null });
+	const run = (f: Fixture, env: Payload) =>
+		db.transaction((tx) => validateSale(tx, ctxFor(f, f.cashierId), env));
+	const current = (f: Fixture) => getMenuVersion(testDb(), f.restaurantId);
+
+	/** A live 0% rate, offered for tax-exempt bills (one more version bump). */
+	async function offeredRate(f: Fixture, name = 'Exempt'): Promise<string> {
+		return db.transaction(async (tx) => {
+			const created = await createTaxRate(tx, f.restaurantId, { name, rateBp: 0 }, ownerCtx(f));
+			if (!created.ok) throw new Error(`fixture rate: ${created.reason}`);
+			const offered = await setTaxRateOffered(tx, f.restaurantId, created.id, true, ownerCtx(f));
+			if (!offered.ok) throw new Error(`fixture offer: ${offered.reason}`);
+			return created.id;
+		});
+	}
+
+	type ExemptOptions = {
+		rateId: string;
+		menuVersion: number;
+		rateName?: string;
+		rateBp?: number;
+		taxMode?: 'exclusive' | 'inclusive';
+		reason?: string;
+		removed?: string;
+		lineRateBp?: number;
+		menuRateBp?: number | null;
+	};
+
+	/**
+	 * One Tea (850, the default 'Tax' 10%) on an exempt bill, totalled by the money
+	 * module exactly as the till's cartTotals does: the line charged 0% on its price,
+	 * stripped of the 10% it includes in inclusive mode; taxRemoved against the bill
+	 * at the line's own rate.
+	 */
+	function exemptCash(f: Fixture, o: ExemptOptions): Payload {
+		const taxMode = o.taxMode ?? 'exclusive';
+		const base: TotalsLine = {
+			unitPriceMinor: minor(850n),
+			quantity: 1n,
+			modifierDeltasMinor: [],
+			taxRateBp: 1000,
+			discountMinor: minor(0n)
+		};
+		const actual = computeOrderTotals(
+			{ taxMode, lines: [{ ...base, taxRateBp: 0, includedTaxRateBp: 1000 }] },
+			ROUNDING_RULE
+		);
+		const standard = computeOrderTotals({ taxMode, lines: [base] }, ROUNDING_RULE);
+		const totals = serializeTotals(actual);
+		const tendered = 10_000n;
+		const line: Record<string, unknown> = {
+			lineId: randomUUID(),
+			lineNo: 1,
+			menuItemId: f.teaId,
+			itemName: 'Tea',
+			quantity: 1,
+			unitPriceMinor: '850',
+			taxRateBp: o.lineRateBp ?? 0,
+			taxRateId: o.rateId,
+			taxRateName: o.rateName ?? 'Exempt',
+			discountMinor: '0',
+			modifiers: []
+		};
+		if (o.menuRateBp !== null) line.menuTaxRateBp = o.menuRateBp ?? 1000;
+		return envelope(f, {
+			taxMode,
+			menuVersion: o.menuVersion,
+			lines: [line],
+			totals,
+			taxOverride: {
+				taxRateId: o.rateId,
+				taxRateName: o.rateName ?? 'Exempt',
+				rateBp: o.rateBp ?? 0,
+				reason: o.reason ?? 'UNICEF',
+				taxRemovedMinor: o.removed ?? taxRemoved(standard, actual).toString()
+			},
+			payments: [
+				{
+					paymentId: randomUUID(),
+					method: 'cash',
+					amountMinor: totals.totalMinor,
+					tenderedMinor: tendered.toString(),
+					changeMinor: changeDue(minor(tendered), minor(BigInt(totals.totalMinor))).toString()
+				}
+			]
+		});
+	}
+
+	const invalid = (detail: string) => ({ ok: false, hard: 'invalid_payload', detail });
+
+	it('a pre-plan payload (no taxOverride, no menuTaxRateBp) at the CURRENT version is clean, with no override', async () => {
+		const env = envelope(fx);
+		const payload = env.payload as { lines: Record<string, unknown>[] };
+		expect('taxOverride' in payload).toBe(false);
+		expect('menuTaxRateBp' in payload.lines[0]).toBe(false);
+		expect((env.payload as { menuVersion: number }).menuVersion).toBe(await current(fx));
+
+		const result = await run(fx, env);
+		expect(result.ok).toBe(true);
+		if (result.ok) {
+			expect(result.softFlags).toEqual([]);
+			expect(result.sale.taxOverride).toBeNull();
+			expect(result.sale.lines[0]).toMatchObject({ menuTaxRateBp: 1000, chargedMinor: null });
+		}
+	});
+
+	it('a new payload with no override and menuTaxRateBp = taxRateBp is clean', async () => {
+		const env = envelope(fx);
+		(env.payload as { lines: Record<string, unknown>[] }).lines[0].menuTaxRateBp = 1000;
+		const result = await run(fx, env);
+		expect(result.ok).toBe(true);
+		if (result.ok) expect(result.softFlags).toEqual([]);
+	});
+
+	it('menuTaxRateBp that differs from taxRateBp with no override is invalid_payload menu_tax_rate', async () => {
+		const env = envelope(fx);
+		(env.payload as { lines: Record<string, unknown>[] }).lines[0].menuTaxRateBp = 500;
+		expect(await run(fx, env)).toEqual(invalid('menu_tax_rate'));
+	});
+
+	it('MANDATORY (tax, exclusive): an exempt cash bill at the current version is clean; 850 is paid, 85 removed', async () => {
+		const rateId = await offeredRate(fx);
+		const result = await run(fx, exemptCash(fx, { rateId, menuVersion: await current(fx) }));
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.softFlags).toEqual([]);
+		expect(result.sale.totals).toEqual({
+			subtotalMinor: 850n,
+			discountMinor: 0n,
+			taxMinor: 0n,
+			totalMinor: 850n
+		});
+		expect(result.sale.taxOverride).toEqual({
+			taxRateId: rateId,
+			taxRateName: 'Exempt',
+			rateBp: 0,
+			reason: 'UNICEF',
+			taxRemovedMinor: 85n
+		});
+		expect(result.sale.lines[0]).toMatchObject({
+			taxRateBp: 0,
+			taxRateId: rateId,
+			taxRateName: 'Exempt',
+			menuTaxRateBp: 1000,
+			chargedMinor: null
+		});
+	});
+
+	it('MANDATORY (tax, inclusive): the customer pays the price without its 10%; the line stores its share', async () => {
+		await db.transaction((tx) =>
+			updateSettings(tx, fx.restaurantId, { taxMode: 'inclusive' }, ownerCtx(fx))
+		);
+		const rateId = await offeredRate(fx);
+		const result = await run(
+			fx,
+			exemptCash(fx, { rateId, taxMode: 'inclusive', menuVersion: await current(fx) })
+		);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.softFlags).toEqual([]);
+		// 850 × 10000 / 11000 = 772.72… → 773 (rounded once, on the total).
+		expect(result.sale.totals.totalMinor).toBe(773n);
+		expect(result.sale.totals.taxMinor).toBe(0n);
+		expect(result.sale.totals.discountMinor).toBe(0n);
+		expect(result.sale.taxOverride?.taxRemovedMinor).toBe(77n);
+		expect(result.sale.lines[0].chargedMinor).toBe(773n);
+	});
+
+	it("a rate renamed, un-offered and re-rated after the till cached it is stale_menu_price, keeping the TILL's copy", async () => {
+		const rateId = await offeredRate(fx);
+		const cached = await current(fx);
+		await db.transaction(async (tx) => {
+			const off = await setTaxRateOffered(tx, fx.restaurantId, rateId, false, ownerCtx(fx));
+			if (!off.ok) throw new Error(off.reason);
+			const edit = await updateTaxRate(
+				tx,
+				fx.restaurantId,
+				rateId,
+				{ name: 'Reduced (2027)', rateBp: 600 },
+				ownerCtx(fx)
+			);
+			if (!edit.ok) throw new Error(edit.reason);
+		});
+		expect(await current(fx)).toBeGreaterThan(cached);
+
+		const result = await run(fx, exemptCash(fx, { rateId, menuVersion: cached }));
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.softFlags).toEqual(['stale_menu_price']);
+		expect(result.sale.taxOverride).toMatchObject({ taxRateName: 'Exempt', rateBp: 0 });
+		expect(result.sale.lines[0]).toMatchObject({ taxRateName: 'Exempt', taxRateBp: 0 });
+	});
+
+	it('a 0% rate that was never offered: price_tamper at the current version, stale at an older one', async () => {
+		const quiet = await db.transaction(async (tx) => {
+			const created = await createTaxRate(
+				tx,
+				fx.restaurantId,
+				{ name: 'Quiet', rateBp: 0 },
+				ownerCtx(fx)
+			);
+			if (!created.ok) throw new Error(created.reason);
+			return created.id;
+		});
+		const now = await current(fx);
+		expect(
+			await run(fx, exemptCash(fx, { rateId: quiet, rateName: 'Quiet', menuVersion: now }))
+		).toEqual({ ok: false, hard: 'price_tamper', detail: 'tax_override' });
+
+		const older = await run(
+			fx,
+			exemptCash(fx, { rateId: quiet, rateName: 'Quiet', menuVersion: now - 1 })
+		);
+		expect(older.ok).toBe(true);
+		if (older.ok) expect(older.softFlags).toEqual(['stale_menu_price']);
+	});
+
+	it('the copy must match the row at the current version: a different name is price_tamper', async () => {
+		const rateId = await offeredRate(fx);
+		expect(
+			await run(fx, exemptCash(fx, { rateId, rateName: 'Renamed', menuVersion: await current(fx) }))
+		).toEqual({ ok: false, hard: 'price_tamper', detail: 'tax_override' });
+	});
+
+	it('a payload that disagrees with itself is invalid_payload, whatever the version', async () => {
+		const rateId = await offeredRate(fx);
+		const v = await current(fx);
+		expect(await run(fx, exemptCash(fx, { rateId, menuVersion: v, lineRateBp: 1000 }))).toEqual(
+			invalid('tax_override_lines')
+		);
+		expect(await run(fx, exemptCash(fx, { rateId, menuVersion: v, menuRateBp: null }))).toEqual(
+			invalid('tax_override_lines')
+		);
+		expect(
+			await run(fx, exemptCash(fx, { rateId, menuVersion: v, rateBp: 500, lineRateBp: 500 }))
+		).toEqual(invalid('tax_override_rate'));
+		expect(await run(fx, exemptCash(fx, { rateId: randomUUID(), menuVersion: v }))).toEqual(
+			invalid('unknown_tax_rate')
+		);
+	});
+
+	it("the reason is CLEANED with the till's rule, and refused only when nothing is left", async () => {
+		const rateId = await offeredRate(fx);
+		const v = await current(fx);
+		expect(
+			await run(fx, exemptCash(fx, { rateId, menuVersion: v, reason: '\u001b\u0000 ' }))
+		).toEqual(invalid('tax_override_reason'));
+
+		const messy = await run(fx, exemptCash(fx, { rateId, menuVersion: v, reason: '  NGO\n' }));
+		expect(messy.ok).toBe(true);
+		if (messy.ok) {
+			expect(messy.softFlags).toEqual([]);
+			expect(messy.sale.taxOverride?.reason).toBe('NGO');
+		}
+
+		const long = await run(fx, exemptCash(fx, { rateId, menuVersion: v, reason: 'x'.repeat(300) }));
+		expect(long.ok).toBe(true);
+		if (long.ok) expect(long.sale.taxOverride?.reason).toBe('x'.repeat(80));
+	});
+
+	it('a wrong taxRemovedMinor is a SOFT totals_mismatch; the device number is kept', async () => {
+		const rateId = await offeredRate(fx);
+		const result = await run(
+			fx,
+			exemptCash(fx, { rateId, menuVersion: await current(fx), removed: '1' })
+		);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.softFlags).toEqual(['totals_mismatch']);
+		expect(result.sale.taxOverride?.taxRemovedMinor).toBe(1n);
+	});
+
+	it('validator and snapshot agree on offered rates: billTaxRates validate clean, every other 0% rate does not', async () => {
+		const ngo = await offeredRate(fx, 'NGO');
+		const embassy = await offeredRate(fx, 'Embassy');
+		const gone = await offeredRate(fx, 'Gone');
+		const quiet = await db.transaction(async (tx) => {
+			const archived = await archiveTaxRate(tx, fx.restaurantId, gone, ownerCtx(fx));
+			if (!archived.ok) throw new Error(archived.reason);
+			const created = await createTaxRate(
+				tx,
+				fx.restaurantId,
+				{ name: 'Quiet', rateBp: 0 },
+				ownerCtx(fx)
+			);
+			if (!created.ok) throw new Error(created.reason);
+			return created.id;
+		});
+		const snapshot = await readMenuSnapshot(testDb(), fx.restaurantId);
+		const offered = snapshot.billTaxRates.map((rate) => rate.id).sort();
+		expect(offered).toEqual([ngo, embassy].sort());
+
+		const v = await current(fx);
+		for (const rate of snapshot.billTaxRates) {
+			const result = await run(
+				fx,
+				exemptCash(fx, { rateId: rate.id, rateName: rate.name, menuVersion: v })
+			);
+			expect(result.ok, rate.name).toBe(true);
+			if (result.ok) expect(result.softFlags, rate.name).toEqual([]);
+		}
+		for (const [id, name] of [
+			[gone, 'Gone'],
+			[quiet, 'Quiet']
+		]) {
+			expect(await run(fx, exemptCash(fx, { rateId: id, rateName: name, menuVersion: v }))).toEqual(
+				{ ok: false, hard: 'price_tamper', detail: 'tax_override' }
+			);
 		}
 	});
 });

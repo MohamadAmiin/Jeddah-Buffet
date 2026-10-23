@@ -14,6 +14,12 @@
 // and writes no audit row. Every change audits in the same transaction
 // (invariant 10).
 //
+// OFFERED FOR TAX-EXEMPT BILLS (tasks/bill-tax-override): tax_rates.offered_for_bills
+// marks the 0% rates a cashier may apply to a whole bill. setTaxRateOffered is its
+// only writer; it bumps the menu version like every other rate write, because the
+// offered list travels in the till's snapshot (billTaxRates), and only a 0% rate
+// may be offered (the CHECK tax_rates_offered_zero_rate; refused here first).
+//
 // THE DEFAULT is restaurant_settings.default_tax_rate_id, written only by
 // updateSettings (T-13), never here. Nothing here makes a rate the default — not
 // even a restaurant's first one: no rate is ever seeded or assumed (risk 5).
@@ -48,6 +54,8 @@ export type TaxRateRow = {
 	rateBp: number;
 	sortOrder: number;
 	archivedAt: Date | null;
+	/** Offered at the till for tax-exempt bills (only ever true on a 0% rate). */
+	offeredForBills: boolean;
 	isDefault: boolean;
 	liveItemCount: number;
 };
@@ -134,7 +142,8 @@ export async function listTaxRates(
 			name: taxRates.name,
 			rateBp: taxRates.rateBp,
 			sortOrder: taxRates.sortOrder,
-			archivedAt: taxRates.archivedAt
+			archivedAt: taxRates.archivedAt,
+			offeredForBills: taxRates.offeredForBills
 		})
 		.from(taxRates)
 		.where(eq(taxRates.restaurantId, restaurantId))
@@ -229,7 +238,13 @@ export async function updateTaxRate(
 	| { ok: true; changed: boolean }
 	| {
 			ok: false;
-			reason: 'not_found' | 'archived' | 'invalid_name' | 'invalid_rate' | 'duplicate_name';
+			reason:
+				| 'not_found'
+				| 'archived'
+				| 'invalid_name'
+				| 'invalid_rate'
+				| 'duplicate_name'
+				| 'offered_not_zero';
 	  }
 > {
 	if (!UUID.test(taxRateId)) return { ok: false, reason: 'not_found' };
@@ -247,7 +262,8 @@ export async function updateTaxRate(
 		.select({
 			name: taxRates.name,
 			rateBp: taxRates.rateBp,
-			archivedAt: taxRates.archivedAt
+			archivedAt: taxRates.archivedAt,
+			offeredForBills: taxRates.offeredForBills
 		})
 		.from(taxRates)
 		.where(and(eq(taxRates.id, taxRateId), eq(taxRates.restaurantId, restaurantId)))
@@ -255,6 +271,11 @@ export async function updateTaxRate(
 		.limit(1);
 	if (!current) return { ok: false, reason: 'not_found' };
 	if (current.archivedAt !== null) return { ok: false, reason: 'archived' };
+	// An offered rate stays 0%: the owner stops offering it first (the CHECK
+	// tax_rates_offered_zero_rate would refuse the write anyway).
+	if (current.offeredForBills && rateBp !== undefined && rateBp !== 0) {
+		return { ok: false, reason: 'offered_not_zero' };
+	}
 
 	const set: { name?: string; rateBp?: number } = {};
 	const diff: Record<string, { old: unknown; new: unknown }> = {};
@@ -291,6 +312,64 @@ export async function updateTaxRate(
 		})
 	);
 	if (written === null) return { ok: false, reason: 'duplicate_name' };
+	return { ok: true, changed: true };
+}
+
+/**
+ * Offer a LIVE 0% rate at the till for tax-exempt bills, or stop offering it
+ * (tasks/bill-tax-override). Locked FOR UPDATE, then: a foreign or missing rate is
+ * not_found, an archived one archived, a non-zero one not_zero (only a 0% rate may
+ * be offered). The same value is a no-op — no bump, no audit row. A change bumps
+ * the menu version and audits tax_rate.updated with the offeredForBills diff, in
+ * the caller's transaction (invariant 10).
+ */
+export async function setTaxRateOffered(
+	tx: DbTx,
+	restaurantId: string,
+	taxRateId: string,
+	offered: boolean,
+	ctx: MenuWriteContext
+): Promise<
+	{ ok: true; changed: boolean } | { ok: false; reason: 'not_found' | 'archived' | 'not_zero' }
+> {
+	if (!UUID.test(taxRateId)) return { ok: false, reason: 'not_found' };
+	const [current] = await tx
+		.select({
+			name: taxRates.name,
+			rateBp: taxRates.rateBp,
+			archivedAt: taxRates.archivedAt,
+			offeredForBills: taxRates.offeredForBills
+		})
+		.from(taxRates)
+		.where(and(eq(taxRates.id, taxRateId), eq(taxRates.restaurantId, restaurantId)))
+		.for('update')
+		.limit(1);
+	if (!current) return { ok: false, reason: 'not_found' };
+	if (current.archivedAt !== null) return { ok: false, reason: 'archived' };
+	if (current.offeredForBills === offered) return { ok: true, changed: false };
+	if (offered && current.rateBp !== 0) return { ok: false, reason: 'not_zero' };
+
+	await withMenuVersionBump(tx, restaurantId, async (write) => {
+		await write
+			.update(taxRates)
+			.set({ offeredForBills: offered, updatedAt: new Date() })
+			.where(and(eq(taxRates.id, taxRateId), eq(taxRates.restaurantId, restaurantId)));
+		await writeAudit(write, {
+			restaurantId,
+			actorUserId: ctx.actorUserId,
+			subjectUserId: null,
+			event: 'tax_rate.updated',
+			// Which rate, by id and name: a restaurant may offer several 0% rates, and
+			// offering one is what lets any cashier exempt a bill.
+			details: {
+				taxRateId,
+				name: current.name,
+				changes: { offeredForBills: { old: current.offeredForBills, new: offered } }
+			},
+			ip: ctx.ip,
+			userAgent: ctx.userAgent
+		});
+	});
 	return { ok: true, changed: true };
 }
 

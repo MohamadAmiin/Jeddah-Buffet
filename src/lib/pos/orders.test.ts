@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ROUNDING_RULE, minor } from '../money';
-import { computeOrderTotals } from '../money/order-totals';
+import { computeOrderTotals, serializeTotals } from '../money/order-totals';
 import type { TaxMode } from '../money/tax';
 import { withDb, inTransaction, countUnsynced, type QueueEntry, type LocalOrder } from './store';
 import { readSequence } from './invoice-sequence';
@@ -9,7 +9,12 @@ import type { ResolvedTaxRate } from './menu-view';
 import {
 	abandonSale,
 	addLine,
+	applyTaxOverride,
+	cartStandardTotals,
+	cartTaxRemoved,
 	cartTotals,
+	clearTaxOverride,
+	reconcileTaxOverride,
 	changeQuantity,
 	completeSale,
 	lineAmounts,
@@ -889,5 +894,193 @@ describe('T-33 cart helpers', () => {
 		expect(setOrderType(cart, 'dine_in', '').tableLabel).toBeNull();
 		expect(setOrderType(cart, 'takeaway', '12').tableLabel).toBeNull();
 		expect(() => setOrderType(cart, 'dine_in', 'x'.repeat(33))).toThrow();
+	});
+});
+
+// THE BILL TAX OVERRIDE (tasks/bill-tax-override T-14). MANDATORY (spec 29 — tax
+// in both modes; offline sync: the payload must validate on the server).
+describe('bill tax override on the cart', () => {
+	const EXEMPT = { id: 'rate-exempt', name: 'Exempt', rateBp: 0 };
+	const VAT10: ResolvedTaxRate = { id: 'rate-vat10', name: 'VAT', rateBp: 1000 };
+	const plate: MenuItemForCart = { id: 'item-plate', name: 'Plate', priceMinor: 1000n };
+	const juice: MenuItemForCart = { id: 'item-juice', name: 'Juice', priceMinor: 1100n };
+
+	const args = (cart: Cart, taxMode: TaxMode, employeeId = 'emp-1') => ({
+		cart,
+		payment: {
+			method: 'cash' as const,
+			tenderedMinor: 5000n,
+			paymentMethodId: null,
+			paymentMethodName: null
+		},
+		employeeId,
+		deviceId: 'device-A',
+		deviceCode: 'POS1',
+		posSessionId: 'ses-1',
+		taxMode,
+		currencyCode: 'USD',
+		menuVersion: 4,
+		now: NOW,
+		cashierName: 'Sam',
+		businessDate: '2026-09-28'
+	});
+
+	it('MANDATORY (tax, exclusive): a 1000 plate at 10%, exempt → pays 1000, 100 removed', () => {
+		let cart = addLine(newCart('device-A', 'takeaway', null, NOW), plate, VAT10);
+		expect(cartTotals(cart, 'exclusive').total).toBe(1100n);
+		cart = applyTaxOverride(cart, EXEMPT, 'UNICEF', 'emp-1');
+		expect(cartTotals(cart, 'exclusive')).toMatchObject({ total: 1000n, tax: 0n, discount: 0n });
+		expect(cartStandardTotals(cart, 'exclusive').total).toBe(1100n);
+		expect(cartTaxRemoved(cart, 'exclusive')).toBe(100n);
+		// The line keeps its own rate; removing the override restores the bill.
+		expect(cart.lines[0].taxRateBp).toBe(1000);
+		expect(cartTotals(clearTaxOverride(cart), 'exclusive').total).toBe(1100n);
+		expect(cartTaxRemoved(clearTaxOverride(cart), 'exclusive')).toBeNull();
+	});
+
+	it('MANDATORY (tax, inclusive): an 1100 juice with 10% included, exempt → pays 1000, 100 removed', () => {
+		let cart = addLine(newCart('device-A', 'takeaway', null, NOW), juice, VAT10);
+		expect(cartTotals(cart, 'inclusive').total).toBe(1100n);
+		cart = applyTaxOverride(cart, EXEMPT, 'Embassy', 'emp-1');
+		expect(cartTotals(cart, 'inclusive')).toMatchObject({
+			total: 1000n,
+			tax: 0n,
+			discount: 0n,
+			subtotal: 1000n
+		});
+		expect(cartTaxRemoved(cart, 'inclusive')).toBe(100n);
+	});
+
+	it('applyTaxOverride cleans the reason, and refuses a short one or a non-zero rate', () => {
+		const cart = addLine(newCart('device-A', 'takeaway', null, NOW), plate, VAT10);
+		expect(applyTaxOverride(cart, EXEMPT, '  NGO \n ', 'emp-1').taxOverride).toEqual({
+			rateId: 'rate-exempt',
+			rateName: 'Exempt',
+			rateBp: 0,
+			reason: 'NGO',
+			appliedByEmployeeId: 'emp-1'
+		});
+		expect(() => applyTaxOverride(cart, EXEMPT, ' ab ', 'emp-1')).toThrow(/at least 3/);
+		expect(() => applyTaxOverride(cart, EXEMPT, '\u{1F1FA}\u{1F1F3}', 'emp-1')).toThrow(
+			/at least 3/
+		);
+		expect(() =>
+			applyTaxOverride(cart, { id: 'r', name: 'Reduced', rateBp: 500 }, 'NGO', 'emp-1')
+		).toThrow(/0% rate/);
+	});
+
+	it('reconcileTaxOverride keeps a still-offered rate, drops a changed one or another employee’s', () => {
+		const cart = applyTaxOverride(
+			addLine(newCart('device-A', 'takeaway', null, NOW), plate, VAT10),
+			EXEMPT,
+			'UNICEF',
+			'emp-1'
+		);
+		expect(reconcileTaxOverride(cart, [EXEMPT], 'emp-1')).toEqual({ cart, dropped: null });
+		expect(reconcileTaxOverride(cart, [], 'emp-1').dropped).toBe('not_offered');
+		expect(reconcileTaxOverride(cart, [{ ...EXEMPT, name: 'Diplomatic' }], 'emp-1').dropped).toBe(
+			'not_offered'
+		);
+		const other = reconcileTaxOverride(cart, [EXEMPT], 'emp-2');
+		expect(other.dropped).toBe('other_employee');
+		expect(other.cart.taxOverride).toBeNull();
+		// A cart saved by the previous build: no key at all.
+		const { taxOverride, ...old } = cart;
+		expect(taxOverride).not.toBeNull();
+		expect(reconcileTaxOverride(old as Cart, [EXEMPT], 'emp-1')).toEqual({
+			cart: old,
+			dropped: null
+		});
+	});
+
+	for (const taxMode of ['exclusive', 'inclusive'] as const) {
+		it(`MANDATORY (offline sync, ${taxMode}): the payload re-totals exactly as the server's Step 9 does`, async () => {
+			let cart = newCart('device-A', 'takeaway', null, NOW);
+			cart = addLine(cart, juice, VAT10, [cream], 2);
+			cart = addLine(cart, coffee, REDUCED);
+			cart = applyTaxOverride(cart, EXEMPT, 'UNICEF cert 12', 'emp-1');
+			await completeSale(args(cart, taxMode));
+
+			const [entry] = await readQueue();
+			const payload = entry.envelope.payload as {
+				lines: {
+					unitPriceMinor: string;
+					quantity: number;
+					taxRateBp: number;
+					taxRateId: string;
+					taxRateName: string;
+					menuTaxRateBp: number;
+					modifiers: { priceDeltaMinor: string }[];
+				}[];
+				totals: Record<string, string>;
+				taxOverride: Record<string, unknown>;
+			};
+			for (const line of payload.lines) {
+				expect(line).toMatchObject({
+					taxRateBp: 0,
+					taxRateId: 'rate-exempt',
+					taxRateName: 'Exempt'
+				});
+			}
+			expect(payload.lines.map((l) => l.menuTaxRateBp)).toEqual([1000, 500]);
+
+			const lines = payload.lines.map((l) => ({
+				unitPriceMinor: minor(BigInt(l.unitPriceMinor)),
+				quantity: BigInt(l.quantity),
+				modifierDeltasMinor: l.modifiers.map((m) => minor(BigInt(m.priceDeltaMinor))),
+				discountMinor: minor(0n)
+			}));
+			const recomputed = computeOrderTotals(
+				{
+					taxMode,
+					lines: lines.map((l, i) => ({
+						...l,
+						taxRateBp: payload.lines[i].taxRateBp,
+						includedTaxRateBp: payload.lines[i].menuTaxRateBp
+					}))
+				},
+				ROUNDING_RULE
+			);
+			expect(payload.totals).toEqual(serializeTotals(recomputed));
+			const standard = computeOrderTotals(
+				{
+					taxMode,
+					lines: lines.map((l, i) => ({ ...l, taxRateBp: payload.lines[i].menuTaxRateBp }))
+				},
+				ROUNDING_RULE
+			);
+			expect(payload.taxOverride).toEqual({
+				taxRateId: 'rate-exempt',
+				taxRateName: 'Exempt',
+				rateBp: 0,
+				reason: 'UNICEF cert 12',
+				taxRemovedMinor: (standard.total - recomputed.total).toString()
+			});
+		});
+	}
+
+	it('a cart with no override pays as before: taxOverride null, menuTaxRateBp = taxRateBp', async () => {
+		const cart = addLine(newCart('device-A', 'takeaway', null, NOW), tea, VAT);
+		await completeSale(args(cart, 'exclusive'));
+		const [entry] = await readQueue();
+		const payload = entry.envelope.payload as {
+			taxOverride: unknown;
+			lines: { taxRateBp: number; menuTaxRateBp: number }[];
+		};
+		expect(payload.taxOverride).toBeNull();
+		expect(payload.lines[0]).toMatchObject({ taxRateBp: 825, menuTaxRateBp: 825 });
+	});
+
+	it('another employee cannot complete a sale someone else exempted', async () => {
+		const cart = applyTaxOverride(
+			addLine(newCart('device-A', 'takeaway', null, NOW), plate, VAT10),
+			EXEMPT,
+			'UNICEF',
+			'emp-1'
+		);
+		await expect(completeSale(args(cart, 'exclusive', 'emp-2'))).rejects.toThrow(
+			/applied by someone else/
+		);
+		expect(await readQueue()).toEqual([]);
 	});
 });

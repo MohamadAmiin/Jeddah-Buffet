@@ -29,6 +29,7 @@ export const EVENT_TEXT: Record<AuditEventName, string> = {
 	'pos.session.closed': 'Shift closed and drawer counted',
 	'sale.recorded': 'Sale recorded',
 	'sale.flagged': 'Sale recorded with a flag for review',
+	'sale.tax_override': 'Bill made tax-exempt at the till',
 	'sale.abandoned': 'Sale abandoned; its invoice number was burned',
 	'sync.op_unrecorded': 'A synced operation could not be recorded and needs review',
 	'sync.op_retried': 'Flagged operation retried',

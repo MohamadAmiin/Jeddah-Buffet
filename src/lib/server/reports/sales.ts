@@ -291,10 +291,11 @@ export async function salesReport(
 			${orderLines.menuItemId} as menu_item_id,
 			${orderLines.itemName} as item_name,
 			sum(${orderLines.quantity})::int as quantity,
-			coalesce(sum(
+			coalesce(sum(coalesce(
+				${orderLines.chargedMinor},
 				(${orderLines.unitPriceMinor} + coalesce(m.delta, 0)) * ${orderLines.quantity}
 					- ${orderLines.discountMinor}
-			), 0)::bigint as amount
+			)), 0)::bigint as amount
 		from ${orderLines}
 		inner join ${orders} on ${orders.id} = ${orderLines.orderId}
 		inner join ${posSessions} on ${posSessions.id} = ${orders.posSessionId}
@@ -308,6 +309,10 @@ export async function salesReport(
 		group by ${orderLines.menuItemId}, ${orderLines.itemName}
 		order by amount desc, ${orderLines.itemName} asc
 	`);
+	// A line of an inclusive-mode tax-exempt bill (tasks/bill-tax-override) stores its
+	// share of the bill in charged_minor — its price stripped of the tax it included
+	// — and that stored amount is read instead of unit price × quantity. Every other
+	// line has charged_minor NULL. Read, never recomputed.
 	const byItem: SalesReport['byItem'] = itemRows.rows.map((r) => ({
 		menuItemId: r.menu_item_id,
 		itemName: r.item_name,
@@ -334,10 +339,11 @@ export async function salesReport(
 			c.id as category_id,
 			c.name as name,
 			sum(${orderLines.quantity})::int as quantity,
-			coalesce(sum(
+			coalesce(sum(coalesce(
+				${orderLines.chargedMinor},
 				(${orderLines.unitPriceMinor} + coalesce(m.delta, 0)) * ${orderLines.quantity}
 					- ${orderLines.discountMinor}
-			), 0)::bigint as amount
+			)), 0)::bigint as amount
 		from ${orderLines}
 		inner join ${orders} on ${orders.id} = ${orderLines.orderId}
 		inner join ${posSessions} on ${posSessions.id} = ${orders.posSessionId}

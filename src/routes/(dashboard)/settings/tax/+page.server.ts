@@ -4,7 +4,13 @@ import { requirePermission } from '$lib/server/permissions';
 import { db } from '$lib/server/db/client';
 import type { Principal } from '$lib/server/auth/session';
 import { getRestaurantWithSettings, updateSettings } from '$lib/server/restaurants';
-import { archiveTaxRate, createTaxRate, listTaxRates, updateTaxRate } from '$lib/server/menu';
+import {
+	archiveTaxRate,
+	createTaxRate,
+	listTaxRates,
+	setTaxRateOffered,
+	updateTaxRate
+} from '$lib/server/menu';
 import { requestContext } from '$lib/server/audit';
 import { formatTaxRate, parsePercentToBp, TAX_MODES } from '$lib/money/tax';
 
@@ -21,6 +27,12 @@ import { formatTaxRate, parsePercentToBp, TAX_MODES } from '$lib/money/tax';
 // version and audits inside the action's ONE transaction (spec 5; invariant 10).
 // Editing or archiving a rate changes no past sale: every order line stores the
 // rate it was sold at (spec 17; invariant 2).
+//
+// OFFERED FOR TAX-EXEMPT BILLS (tasks/bill-tax-override T-10): a 0% rate the owner
+// offers here is one a cashier may apply to a whole bill on the till, with a
+// reason. Its own action, `offer`, sets the flag from an explicit field — never
+// from a checkbox's absence on another form — through setTaxRateOffered, which
+// refuses a non-zero rate, bumps the menu version and audits the change.
 
 export const load: ServerLoad = async (event) => {
 	requirePermission(event, 'admin.settings');
@@ -49,7 +61,10 @@ export const load: ServerLoad = async (event) => {
 				label: `${rate.name} ${formatted}`,
 				isDefault: rate.isDefault,
 				liveItemCount: rate.liveItemCount,
-				archived: rate.archivedAt !== null
+				archived: rate.archivedAt !== null,
+				offeredForBills: rate.offeredForBills,
+				// A comparison on a RATE, not money: only a 0% rate may be offered.
+				zeroRate: rate.rateBp === 0
 			};
 		})
 	};
@@ -74,7 +89,9 @@ const MESSAGES: Record<string, string> = {
 	already_archived: 'That rate is archived.',
 	is_default: 'This is the default rate. Make another rate the default first.',
 	invalid_tax_rate: DEFAULT_MESSAGE,
-	invalid_tax_mode: MODE_MESSAGE
+	invalid_tax_mode: MODE_MESSAGE,
+	not_zero: 'Only a 0% rate can be offered for tax-exempt bills.',
+	offered_not_zero: 'Stop offering this rate for tax-exempt bills before changing its percent.'
 };
 
 /** The sentence for a module refusal; `in_use` carries its own count. */
@@ -111,6 +128,7 @@ function scopeOf(event: RequestEvent, user: Principal) {
 
 const modeSchema = z.object({ taxMode: z.enum(TAX_MODES) });
 const rateIdSchema = z.object({ taxRateId: z.uuid() });
+const offerSchema = z.object({ taxRateId: z.uuid(), offered: z.enum(['true', 'false']) });
 // The name's bounds and the percent's shape are checked by the module and by
 // parsePercentToBp: zod only insists that each arrived as a string.
 const createSchema = z.object({ name: z.string().trim(), percent: z.string() });
@@ -225,6 +243,34 @@ export const actions: Actions = {
 		if (!result.ok) return fail(400, { message: messageFor(result) });
 
 		return { message: result.changed ? `${name} saved.` : 'No changes to save.' };
+	},
+
+	offer: async (event) => {
+		const user = requirePermission(event, 'admin.settings');
+		const { restaurantId, ctx } = scopeOf(event, user);
+
+		const form = await event.request.formData();
+		const parsed = offerSchema.safeParse({
+			taxRateId: form.get('taxRateId'),
+			offered: form.get('offered')
+		});
+		if (!parsed.success) return fail(400, { message: NOT_FOUND_MESSAGE });
+
+		const posted = form.get('name');
+		const name = typeof posted === 'string' && posted.trim() !== '' ? posted.trim() : 'Rate';
+		const offered = parsed.data.offered === 'true';
+
+		const result = await db.transaction((tx) =>
+			setTaxRateOffered(tx, restaurantId, parsed.data.taxRateId, offered, ctx)
+		);
+		if (!result.ok) return fail(400, { message: messageFor(result) });
+
+		if (!result.changed) return { message: 'No changes to save.' };
+		return {
+			message: offered
+				? `${name} is offered for tax-exempt bills.`
+				: `${name} is no longer offered for tax-exempt bills.`
+		};
 	},
 
 	archive: async (event) => {

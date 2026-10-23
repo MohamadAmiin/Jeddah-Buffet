@@ -748,18 +748,27 @@ const MENU_VERSION_KEY = 'menuVersion';
 const MENU_RESTAURANT_KEY = 'menuRestaurantId';
 
 /**
- * The format of the cached menu copy (MENU_FORMAT in menu-snapshot.ts): null when
- * there is no copy, the header's `format` when it is a number, and 1 otherwise — a
- * copy written by a build before named tax rates has no `format` key at all.
+ * The shape of the cached menu copy: null when there is no copy; otherwise its
+ * `format` (MENU_FORMAT in menu-snapshot.ts — 1 for a copy written by a build
+ * before named tax rates, which has no `format` key at all) and whether its header
+ * carries `billTaxRates` (tasks/bill-tax-override — a copy written by a build
+ * before that plan has no such key, even at the server's current version and
+ * format).
  */
-async function readCachedMenuFormat(): Promise<number | null> {
+async function readCachedMenuShape(): Promise<{
+	format: number;
+	hasBillTaxRates: boolean;
+} | null> {
 	const row = (await withDb((db) =>
 		valueOf(db.transaction('menu', 'readonly').objectStore('menu').get('snapshot'))
-	)) as { data?: { format?: unknown } } | undefined;
+	)) as { data?: { format?: unknown; billTaxRates?: unknown } } | undefined;
 
 	if (!row) return null;
 
-	return typeof row.data?.format === 'number' ? row.data.format : 1;
+	return {
+		format: typeof row.data?.format === 'number' ? row.data.format : 1,
+		hasBillTaxRates: Array.isArray(row.data?.billTaxRates)
+	};
 }
 
 /**
@@ -807,10 +816,17 @@ export async function syncMenu(fetchFn: typeof fetch = fetch): Promise<'up-to-da
 	// VERSION. Trusting it would send every line without a rate id until the next
 	// menu edit (tasks/settings-tax-payments-receipt, risk 4). compareVersions stays
 	// a pure version comparison: the format is decided here, before it.
+	// The same holds for a copy whose header lacks `billTaxRates`: written by a build
+	// before tasks/bill-tax-override, possibly AT the server's version — trusting it
+	// would hide every offered exempt rate until the next menu edit. The refetch gets
+	// a fresh body because the server's ETag carries a shape marker.
+	const shape = await readCachedMenuShape();
 	const local =
 		localRestaurant === server.restaurantId &&
 		typeof localVersion === 'number' &&
-		(await readCachedMenuFormat()) === MENU_FORMAT
+		shape !== null &&
+		shape.format === MENU_FORMAT &&
+		shape.hasBillTaxRates
 			? localVersion
 			: null;
 
@@ -889,7 +905,10 @@ export function replaceMenu(snapshot: MenuSnapshot, abortForTest = false): Promi
 							currencyExponent: snapshot.currencyExponent,
 							taxMode: snapshot.taxMode,
 							taxRateBp: snapshot.taxRateBp,
-							defaultTaxRate: snapshot.defaultTaxRate
+							defaultTaxRate: snapshot.defaultTaxRate,
+							// ALWAYS written, [] included: syncMenu reads a header without the
+							// key as a copy from an older build (tasks/bill-tax-override).
+							billTaxRates: snapshot.billTaxRates
 						}
 					});
 
@@ -949,6 +968,8 @@ export type LocalMenu = {
 	taxRateBp: number | null;
 	/** The restaurant's named default rate, or null (none picked, or a format-1 copy). */
 	defaultTaxRate: SnapshotTaxRate | null;
+	/** The 0% rates offered for tax-exempt bills; [] on a copy from an older build. */
+	billTaxRates: SnapshotTaxRate[];
 	categories: SnapshotCategory[];
 	items: Array<Omit<SnapshotItem, 'priceMinor'> & { priceMinor: bigint }>;
 	modifierGroups: Array<
@@ -998,6 +1019,7 @@ export async function readMenu(): Promise<LocalMenu | null> {
 		Pick<LocalMenu, 'currency' | 'currencyExponent' | 'taxMode' | 'taxRateBp'> & {
 			format?: unknown;
 			defaultTaxRate?: SnapshotTaxRate | null;
+			billTaxRates?: SnapshotTaxRate[];
 		}
 	>('snapshot')[0];
 
@@ -1011,6 +1033,7 @@ export async function readMenu(): Promise<LocalMenu | null> {
 		...header,
 		format: typeof header.format === 'number' ? header.format : 1,
 		defaultTaxRate: header.defaultTaxRate ?? null,
+		billTaxRates: Array.isArray(header.billTaxRates) ? header.billTaxRates : [],
 		categories: of<SnapshotCategory>('category').sort(bySortOrder),
 		items: of<SnapshotItem>('item')
 			.sort(bySortOrder)

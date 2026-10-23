@@ -4,7 +4,14 @@ import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { onRestaurantCreated, updateSettings } from '../restaurants';
 import { registerDevice } from '../auth/pos-device';
-import { createCategory, createItem, getMenuVersion, updateItem } from '../menu';
+import {
+	createCategory,
+	createItem,
+	createTaxRate,
+	getMenuVersion,
+	setTaxRateOffered,
+	updateItem
+} from '../menu';
 import { seedStaff } from '../db/test/seed';
 import {
 	cashMethodId,
@@ -859,5 +866,98 @@ describe('named methods and rates (settings-tax-payments-receipt T-16)', () => {
 			paymentMethodId: fx.methods.cash.id,
 			paymentMethodName: 'Cash'
 		});
+	});
+});
+
+// THE BILL TAX OVERRIDE (tasks/bill-tax-override T-08). MANDATORY (spec 29 —
+// offline sync: retries never duplicate).
+describe('bill tax override through handleOp (bill-tax-override T-08)', () => {
+	const ownerCtx = (f: Fixture) => ({ actorUserId: f.ownerId, ip: null, userAgent: null });
+	const send = (env: OpEnvelope<OpKind, unknown>) =>
+		handleOp(db, posDeviceCtx(fx), { ip: null, userAgent: null }, env);
+
+	async function zeroRate(name: string, offered: boolean): Promise<string> {
+		return db.transaction(async (tx) => {
+			const created = await createTaxRate(tx, fx.restaurantId, { name, rateBp: 0 }, ownerCtx(fx));
+			if (!created.ok) throw new Error(created.reason);
+			if (offered) {
+				const done = await setTaxRateOffered(tx, fx.restaurantId, created.id, true, ownerCtx(fx));
+				if (!done.ok) throw new Error(done.reason);
+			}
+			return created.id;
+		});
+	}
+
+	/** The one-line Tea sale (850 at 10%) made exempt: 850 paid, 85 removed. */
+	async function exemptEnv(
+		rate: { id: string; name: string },
+		method: 'cash' | 'card' = 'cash'
+	): Promise<OpEnvelope<OpKind, unknown>> {
+		const env = saleEnv(fx, {
+			method,
+			totals: { subtotalMinor: '850', discountMinor: '0', taxMinor: '0', totalMinor: '850' }
+		});
+		const payload = env.payload as { lines: Record<string, unknown>[] } & Record<string, unknown>;
+		payload.menuVersion = await getMenuVersion(testDb(), fx.restaurantId);
+		payload.lines = payload.lines.map((l) => ({
+			...l,
+			taxRateBp: 0,
+			taxRateId: rate.id,
+			taxRateName: rate.name,
+			menuTaxRateBp: 1000
+		}));
+		payload.taxOverride = {
+			taxRateId: rate.id,
+			taxRateName: rate.name,
+			rateBp: 0,
+			reason: 'UNICEF',
+			taxRemovedMinor: '85'
+		};
+		return env;
+	}
+
+	const count = async (table: typeof orders | typeof invoices | typeof journalEntries) =>
+		(
+			await testDb()
+				.select({ c: sql<string>`count(*)::text` })
+				.from(table)
+				.where(eq(table.restaurantId, fx.restaurantId))
+		)[0].c;
+
+	it('MANDATORY (spec 29): an exempt cash sale sent twice is accepted then replayed; one order, ONE override audit row', async () => {
+		const rateId = await zeroRate('Exempt', true);
+		const env = await exemptEnv({ id: rateId, name: 'Exempt' });
+		const first = await send(env);
+		expect(first.http).toBe(200);
+		if (first.http === 200) expect(first.body.status).toBe('accepted');
+		const second = await send(env);
+		expect(second.http).toBe(200);
+		if (second.http === 200) expect(second.body.status).toBe('replayed');
+
+		expect(await count(orders)).toBe('1');
+		expect(await count(invoices)).toBe('1');
+		expect(await count(journalEntries)).toBe('1');
+		const overrides = await testDb()
+			.select({ id: auditLog.id })
+			.from(auditLog)
+			.where(
+				and(eq(auditLog.restaurantId, fx.restaurantId), eq(auditLog.event, 'sale.tax_override'))
+			);
+		expect(overrides).toHaveLength(1);
+		const byOp = await testDb()
+			.select({ event: auditLog.event })
+			.from(auditLog)
+			.where(and(eq(auditLog.deviceId, fx.deviceId), eq(auditLog.clientOpId, env.clientOpId)));
+		expect(byOp).toEqual([{ event: 'sale.recorded' }]);
+	});
+
+	it('an exempt CARD sale on a rate never offered, at the current version, is 422 price_tamper; nothing is stored', async () => {
+		const quiet = await zeroRate('Quiet', false);
+		const env = await exemptEnv({ id: quiet, name: 'Quiet' }, 'card');
+		expect(await send(env)).toEqual({
+			http: 422,
+			body: { error: 'rejected', flag: 'price_tamper' }
+		});
+		expect(await count(orders)).toBe('0');
 	});
 });
