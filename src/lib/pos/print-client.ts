@@ -17,9 +17,11 @@
 // before the owner is signed in waits in MEMORY (stashPairing) — not in any
 // storage — until the Printer screen takes it; a reload simply drops it.
 //
-// `bindDevice` and `forgetDevice` clear the whole settings store, so a
-// re-registered till must be paired again — deliberate: a token for a till that
-// was handed to another restaurant must not survive (T-28 Watch out).
+// The pairing SURVIVES `bindDevice` and `forgetDevice`, which clear the rest of
+// the settings store (decided 2026-10-23, reversing T-28's "a re-registered till
+// pairs again"): the token opens only the agent on this PC, whose own config
+// holds the same token, so a re-registered or revoked till keeps its printer.
+// The two keys are defined in store.ts, which keeps them (KEPT_SETTING_KEYS).
 //
 // A PAIRING SAVED OR FORGOTTEN WITHDRAWS THE RECEIPT-LOGO CONFIRMATION
 // (settings.ts withdrawReceiptLogoConfirmation; settings-tax-payments-receipt
@@ -34,10 +36,14 @@
 // browser itself said `denied`.
 import type { PrintLine } from './receipt';
 import { withdrawReceiptLogoConfirmation } from './settings';
-import { cacheSettings, readCachedSetting } from './store';
+import {
+	PRINT_AGENT_TOKEN_KEY,
+	PRINT_AGENT_URL_KEY,
+	cacheSettings,
+	readCachedSetting
+} from './store';
 
-export const PRINT_AGENT_URL_KEY = 'printAgentUrl';
-export const PRINT_AGENT_TOKEN_KEY = 'printAgentToken';
+export { PRINT_AGENT_TOKEN_KEY, PRINT_AGENT_URL_KEY };
 export const DEFAULT_AGENT_URL = 'http://127.0.0.1:9471';
 
 export type AgentSettings = { url: string; token: string };

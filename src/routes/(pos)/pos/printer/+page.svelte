@@ -1060,7 +1060,7 @@
 				     is not offered. -->
 				<div class="border-line flex flex-wrap items-center justify-between gap-3 border-t pt-4">
 					<p class="text-ink-2">
-						Pairing is stored on this till. Registering the till again clears it.
+						Pairing is stored on this till and kept when the till is registered again.
 					</p>
 					<button
 						type="button"

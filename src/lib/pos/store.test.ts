@@ -28,6 +28,8 @@ import {
 	withDb,
 	inTransaction,
 	valueOf,
+	PRINT_AGENT_TOKEN_KEY,
+	PRINT_AGENT_URL_KEY,
 	type CachedEmployee,
 	type LocalOrder,
 	type LocalSession,
@@ -394,6 +396,62 @@ describe('wipes exempt the four new stores (T-22)', () => {
 		expect(await readAll('session')).toHaveLength(1);
 		expect(await readCachedEmployees()).toEqual([]);
 		expect(await readBoundDeviceId()).toBeNull();
+	});
+});
+
+// The printer is set up once per PC (2026-10-23): the pairing opens only this
+// PC's own agent, so re-registering or revoking the till keeps it. The rest of
+// the settings store still goes — the logo confirmation among it, so the logo is
+// test-printed again before receipts carry it.
+describe('the print-agent pairing survives both wipes (2026-10-23)', () => {
+	const URL = 'http://127.0.0.1:9471';
+	const TOKEN = 'a'.repeat(64);
+
+	async function pairAndConfirm() {
+		await cacheSettings([
+			{ key: PRINT_AGENT_URL_KEY, value: URL },
+			{ key: PRINT_AGENT_TOKEN_KEY, value: TOKEN },
+			{ key: 'receiptLogoConfirmed', value: 'f'.repeat(64) },
+			{ key: 'posIdleLockSeconds', value: 300 }
+		]);
+	}
+
+	it('a re-registration (a new device) keeps the pairing and drops the rest', async () => {
+		await bindDevice('device-A');
+		await pairAndConfirm();
+
+		expect(await bindDevice('device-B')).toBe('bound');
+
+		expect(await readCachedSetting(PRINT_AGENT_URL_KEY)).toBe(URL);
+		expect(await readCachedSetting(PRINT_AGENT_TOKEN_KEY)).toBe(TOKEN);
+		expect(await readBoundDeviceId()).toBe('device-B');
+		expect(await readCachedSetting('receiptLogoConfirmed')).toBeUndefined();
+		expect(await readCachedIdleSeconds()).toBeNull();
+	});
+
+	it('a revocation (forgetDevice) keeps the pairing and drops the rest', async () => {
+		await bindDevice('device-A');
+		await pairAndConfirm();
+
+		await forgetDevice();
+
+		expect(await readCachedSetting(PRINT_AGENT_URL_KEY)).toBe(URL);
+		expect(await readCachedSetting(PRINT_AGENT_TOKEN_KEY)).toBe(TOKEN);
+		expect(await readBoundDeviceId()).toBeNull();
+		expect(await readCachedSetting('receiptLogoConfirmed')).toBeUndefined();
+		expect(await readCachedIdleSeconds()).toBeNull();
+	});
+
+	it('a till that was never paired stays unpaired', async () => {
+		await bindDevice('device-A');
+		await cacheSettings([{ key: 'posIdleLockSeconds', value: 300 }]);
+
+		await bindDevice('device-B');
+		await forgetDevice();
+
+		expect(await readCachedSetting(PRINT_AGENT_URL_KEY)).toBeUndefined();
+		expect(await readCachedSetting(PRINT_AGENT_TOKEN_KEY)).toBeUndefined();
+		expect(await readCachedIdleSeconds()).toBeNull();
 	});
 });
 

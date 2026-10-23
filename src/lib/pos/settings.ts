@@ -25,8 +25,10 @@
 //
 // This module writes ONLY `settings` keys — never `orders`, `sync_queue`,
 // `invoice_sequence`, `session` or `offline_logins` (invariant 5) — and
-// bindDevice / forgetDevice clear the whole `settings` store, these keys
-// included, so a revoked or re-registered device keeps nothing (invariant 12).
+// bindDevice / forgetDevice clear the `settings` store, these keys included, so
+// a revoked or re-registered device keeps nothing of the restaurant's
+// (invariant 12); only the print-agent pairing is kept, because it belongs to
+// the PC (store.ts KEPT_SETTING_KEYS).
 // Card and mobile still fail closed offline; nothing here changes that.
 //
 // Nothing from the server side: this file must work offline, and eslint's
