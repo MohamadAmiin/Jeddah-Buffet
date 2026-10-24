@@ -599,6 +599,10 @@
 					<div role="tablist" aria-label="Menu categories" class="flex flex-wrap gap-2">
 						{#each tabs as tab, i (tab.id)}
 							{@const on = activeTab?.id === tab.id}
+							<!-- A category's photo (2026-10-23): a round thumbnail before the name. A
+							     photo that fails to load drops out like a key's, and the tab keeps
+							     its name: choosing a category never depends on a picture. -->
+							{@const tabPhoto = tab.imageId && !brokenPhotos.has(tab.imageId) ? tab.imageId : null}
 							<button
 								bind:this={tabButtons[i]}
 								type="button"
@@ -607,13 +611,25 @@
 								aria-selected={on}
 								aria-controls="menu-grid"
 								tabindex={on ? 0 : -1}
-								class="min-h-touch-min border-control-line bg-raise aria-selected:border-accent aria-selected:bg-accent aria-selected:text-accent-ink flex items-center gap-2 rounded-full border px-5 font-semibold"
+								class="min-h-touch-min border-control-line bg-raise aria-selected:border-accent aria-selected:bg-accent aria-selected:text-accent-ink flex items-center gap-2 rounded-full border pr-5 font-semibold {tabPhoto
+									? 'pl-2'
+									: 'pl-5'}"
 								onclick={() => {
 									selectedTab = tab.id;
 									panelItem = null;
 								}}
 								onkeydown={(event) => tabKey(event, i)}
 							>
+								{#if tabPhoto}
+									<img
+										src={tillImageUrl(tabPhoto)}
+										alt=""
+										loading="lazy"
+										decoding="async"
+										class="size-10 rounded-full object-cover"
+										onerror={() => markBroken(tabPhoto)}
+									/>
+								{/if}
 								{#if on}<Icon name="check" class="size-5" />{/if}
 								{tab.name}
 							</button>

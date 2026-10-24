@@ -10,7 +10,9 @@
 // serve it offline for as long as it keeps it. This module simply FETCHES every
 // photo in the menu after a sync and reads each body to the end, so the cache
 // entry is complete. It is best effort: a photo missing offline shows the
-// name/initials tile, and selling never depends on a photo.
+// name/initials tile (a category tab, its name alone), and selling never
+// depends on a photo. The caller passes the items AND the categories —
+// anything with an imageId.
 //
 // Bounded concurrency (4 by default) so a 200-item menu does not open 200
 // connections at once on a small till PC. A rejection or a non-OK status counts

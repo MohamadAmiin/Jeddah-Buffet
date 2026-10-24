@@ -1080,7 +1080,10 @@ export async function readMenu(): Promise<LocalMenu | null> {
 		format: typeof header.format === 'number' ? header.format : 1,
 		defaultTaxRate: header.defaultTaxRate ?? null,
 		billTaxRates: Array.isArray(header.billTaxRates) ? header.billTaxRates : [],
-		categories: of<SnapshotCategory>('category').sort(bySortOrder),
+		// A category cached by a build before category photos has no imageId.
+		categories: of<SnapshotCategory>('category')
+			.sort(bySortOrder)
+			.map((category) => ({ ...category, imageId: category.imageId ?? null })),
 		items: of<SnapshotItem>('item')
 			.sort(bySortOrder)
 			.map((item) => ({

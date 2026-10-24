@@ -233,10 +233,11 @@
 		signOut();
 
 		// After EVERY sync answer, warm the browser's HTTP cache with the menu's
-		// photos (best effort — menu-and-printing R2); a failure stays silent.
+		// photos, the category tabs' included (best effort — menu-and-printing R2);
+		// a failure stays silent.
 		const warmPhotos = async () => {
 			const menu = await readMenu();
-			if (menu) void warmMenuPhotos(menu.items);
+			if (menu) void warmMenuPhotos([...menu.categories, ...menu.items]);
 		};
 
 		void loadDirectory()

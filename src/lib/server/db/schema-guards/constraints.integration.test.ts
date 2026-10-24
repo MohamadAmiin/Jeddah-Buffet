@@ -605,6 +605,30 @@ describe('menu photos, optional categories and order types (menu-and-printing T-
 		expect(error.constraint).toBe('menu_items_image_fk');
 	});
 
+	it("rejects another restaurant's photo on a category (2026-10-23)", async () => {
+		const a = await makeRestaurant('Restaurant A');
+		const b = await makeRestaurant('Restaurant B');
+		const photoOfB = await makeImage(b);
+		const error = await expectError(
+			`insert into menu_categories (restaurant_id, name, image_id) values ($1, 'Drinks', $2)`,
+			[a, photoOfB]
+		);
+		expect(error.code).toBe('23503');
+		expect(error.constraint).toBe('menu_categories_image_fk');
+	});
+
+	it('refuses to delete a photo a category still references (ON DELETE RESTRICT)', async () => {
+		const r = await makeRestaurant();
+		const photo = await makeImage(r);
+		await pool.query(
+			`insert into menu_categories (restaurant_id, name, image_id) values ($1, 'Drinks', $2)`,
+			[r, photo]
+		);
+		const error = await expectError('delete from menu_images where id = $1', [photo]);
+		expect(error.code).toBe('23503');
+		expect(error.constraint).toBe('menu_categories_image_fk');
+	});
+
 	it('refuses to delete a photo an item still references (ON DELETE RESTRICT)', async () => {
 		const r = await makeRestaurant();
 		const photo = await makeImage(r);

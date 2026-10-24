@@ -348,7 +348,7 @@ export async function createMenuItem(
 		.getByLabel('Category', { exact: true })
 		.selectOption(item.category === null ? { value: '' } : { label: item.category });
 	if (item.photo) {
-		await page.getByLabel('Photo').setInputFiles(item.photo);
+		await page.getByLabel('Photo', { exact: true }).setInputFiles(item.photo);
 		// The picker resizes first; the object-URL preview is the sign it is ready to
 		// upload (alt="" gives the preview no img role, so locate it by its src).
 		await expect(page.locator('img[src^="blob:"]')).toBeVisible();

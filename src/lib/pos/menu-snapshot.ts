@@ -25,7 +25,13 @@ export const MENU_FORMAT = 2;
 
 export type SnapshotTaxRate = { id: string; name: string; rateBp: number };
 
-export type SnapshotCategory = { id: string; name: string; sortOrder: number };
+export type SnapshotCategory = {
+	id: string;
+	name: string;
+	sortOrder: number;
+	/** The tab's photo id (2026-10-23), or null; bytes from /api/menu/images/[id]. */
+	imageId: string | null;
+};
 
 export type SnapshotItem = {
 	id: string;
@@ -203,7 +209,13 @@ export function parseSnapshot(raw: unknown): MenuSnapshot {
 			return {
 				id: text(category.id, `categories[${i}].id`),
 				name: text(category.name, `categories[${i}].name`),
-				sortOrder: integer(category.sortOrder, `categories[${i}].sortOrder`)
+				sortOrder: integer(category.sortOrder, `categories[${i}].sortOrder`),
+				// A server before category photos sends no imageId on a category: read
+				// that as "no photo", never as malformed (the item precedent below).
+				imageId:
+					category.imageId === undefined
+						? null
+						: nullableText(category.imageId, `categories[${i}].imageId`)
 			};
 		}),
 		items: list(body.items, 'items').map((entry, i) => {

@@ -13,7 +13,9 @@ import {
 	linkModifierGroup,
 	listMenu,
 	listTaxRates,
+	removeCategoryImage,
 	removeItemImage,
+	setCategoryImage,
 	setItemAvailability,
 	setItemImage,
 	unlinkModifierGroup,
@@ -21,7 +23,7 @@ import {
 	updateItem
 } from '$lib/server/menu';
 import { sniffImageType } from '$lib/server/menu/images';
-import { IMAGE_MAX_BYTES, dashboardImageUrl } from '$lib/menu-images';
+import { IMAGE_MAX_BYTES, dashboardImageUrl, type ImageContentType } from '$lib/menu-images';
 import { ROUNDING_RULE, minor, toBigInt } from '$lib/money';
 import { dishMargin } from '$lib/money/costing';
 import { recipeCosts } from '$lib/server/inventory';
@@ -31,6 +33,7 @@ import {
 	archiveCategorySchema,
 	archiveItemSchema,
 	availabilitySchema,
+	categoryIdSchema,
 	createCategorySchema,
 	createItemSchema,
 	createModifierGroupSchema,
@@ -158,7 +161,8 @@ export const load: ServerLoad = async (event) => {
 		categories: menu.categories.map((category) => ({
 			id: category.id,
 			name: category.name,
-			itemCount: menu.items.filter((item) => item.categoryId === category.id).length
+			itemCount: menu.items.filter((item) => item.categoryId === category.id).length,
+			imageUrl: category.imageId ? dashboardImageUrl(category.imageId) : null
 		})),
 		uncategorisedCount: menu.items.filter((item) => item.categoryId === null).length,
 		items: menu.items.map((item) => ({
@@ -492,23 +496,11 @@ export const actions: Actions = {
 		const form = await event.request.formData();
 		const parsed = itemIdSchema.safeParse({ itemId: form.get('itemId') ?? '' });
 		if (!parsed.success) return fail(400, { message: firstMessage(parsed.error) });
-		const file = form.get('image');
-		// File.size is a byte count, not money: compared directly.
-		if (!(file instanceof File) || file.size === 0) {
-			return fail(400, { message: 'Choose a photo.' });
-		}
-		if (file.size > IMAGE_MAX_BYTES) {
-			return fail(400, {
-				message: 'The photo is still larger than 400 KB after resizing. Try another photo.'
-			});
-		}
-		const bytes = new Uint8Array(await file.arrayBuffer());
-		// The type is what the bytes SAY, never what the browser declared.
-		const contentType = sniffImageType(bytes);
-		if (contentType === null) return fail(400, { message: 'Use a JPEG, PNG or WebP photo.' });
+		const photo = await readPhoto(form);
+		if (!photo.ok) return fail(400, { message: photo.message });
 
 		const result = await db.transaction((tx) =>
-			setItemImage(tx, restaurantId, parsed.data.itemId, { bytes, contentType })
+			setItemImage(tx, restaurantId, parsed.data.itemId, photo.image)
 		);
 		if (!result.ok) return fail(400, { message: 'That item no longer exists.' });
 		return { message: 'Photo saved.', imageId: result.imageId };
@@ -527,5 +519,66 @@ export const actions: Actions = {
 		);
 		if (!result.ok) return fail(400, { message: 'That item no longer exists.' });
 		return { message: result.changed ? 'Photo removed.' : 'There was no photo.' };
+	},
+
+	// A category's photo (2026-10-23), shown on the till's category tab: the same
+	// checks as an item's, sent the same way — resized in the browser, then posted
+	// in its own request.
+	setCategoryImage: async (event) => {
+		requirePermission(event, 'admin.menu');
+		const { restaurantId } = await menuScope(event.locals);
+
+		const form = await event.request.formData();
+		const parsed = categoryIdSchema.safeParse({ categoryId: form.get('categoryId') ?? '' });
+		if (!parsed.success) return fail(400, { message: firstMessage(parsed.error) });
+		const photo = await readPhoto(form);
+		if (!photo.ok) return fail(400, { message: photo.message });
+
+		const result = await db.transaction((tx) =>
+			setCategoryImage(tx, restaurantId, parsed.data.categoryId, photo.image)
+		);
+		if (!result.ok) return fail(400, { message: 'That category no longer exists.' });
+		return { message: 'Photo saved.', imageId: result.imageId };
+	},
+
+	removeCategoryImage: async (event) => {
+		requirePermission(event, 'admin.menu');
+		const { restaurantId } = await menuScope(event.locals);
+
+		const form = await event.request.formData();
+		const parsed = categoryIdSchema.safeParse({ categoryId: form.get('categoryId') ?? '' });
+		if (!parsed.success) return fail(400, { message: firstMessage(parsed.error) });
+
+		const result = await db.transaction((tx) =>
+			removeCategoryImage(tx, restaurantId, parsed.data.categoryId)
+		);
+		if (!result.ok) return fail(400, { message: 'That category no longer exists.' });
+		return { message: result.changed ? 'Photo removed.' : 'There was no photo.' };
 	}
 };
+
+/**
+ * The uploaded photo from a multipart form, checked as the menu module requires:
+ * present, at most IMAGE_MAX_BYTES, and JPEG, PNG or WebP by what the bytes SAY,
+ * never by what the browser declared.
+ */
+async function readPhoto(
+	form: FormData
+): Promise<
+	| { ok: true; image: { bytes: Uint8Array; contentType: ImageContentType } }
+	| { ok: false; message: string }
+> {
+	const file = form.get('image');
+	// File.size is a byte count, not money: compared directly.
+	if (!(file instanceof File) || file.size === 0) return { ok: false, message: 'Choose a photo.' };
+	if (file.size > IMAGE_MAX_BYTES) {
+		return {
+			ok: false,
+			message: 'The photo is still larger than 400 KB after resizing. Try another photo.'
+		};
+	}
+	const bytes = new Uint8Array(await file.arrayBuffer());
+	const contentType = sniffImageType(bytes);
+	if (contentType === null) return { ok: false, message: 'Use a JPEG, PNG or WebP photo.' };
+	return { ok: true, image: { bytes, contentType } };
+}

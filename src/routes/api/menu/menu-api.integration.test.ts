@@ -17,6 +17,7 @@ import {
 	createModifier,
 	createModifierGroup,
 	linkModifierGroup,
+	setCategoryImage,
 	setItemAvailability,
 	setItemImage,
 	setTaxRateOffered,
@@ -50,7 +51,7 @@ type Snapshot = {
 	billTaxRates: SnapshotTaxRate[];
 	/** Legacy (pre-format-2 tills): the default's number. */
 	taxRateBp: number | null;
-	categories: Array<{ id: string; name: string; sortOrder: number }>;
+	categories: Array<{ id: string; name: string; sortOrder: number; imageId: string | null }>;
 	items: Array<{
 		id: string;
 		categoryId: string | null;
@@ -437,6 +438,29 @@ describe('GET /api/menu', () => {
 		expect(payload.items.every((item) => 'imageId' in item)).toBe(true);
 		expect(byId.get(plain)!.imageId).toBeNull();
 		expect(byId.get(pictured)!.imageId).toBe(set.imageId);
+	});
+
+	it("ships each category's imageId — null or the photo's id — for the till's tab (2026-10-23)", async () => {
+		const a = await makeRestaurant('Cafe One');
+		const plain = await db.transaction((tx) =>
+			createCategory(tx, a.restaurantId, { name: 'Food' })
+		);
+		const set = await db.transaction((tx) =>
+			setCategoryImage(tx, a.restaurantId, a.categoryId, {
+				bytes: Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0]),
+				contentType: 'image/png'
+			})
+		);
+		if (!set.ok) throw new Error('photo not set');
+
+		const result = await call(GET, '/api/menu', { [DEVICE_COOKIE]: a.token });
+		expect(result.status).toBe(200);
+		expect(result.text).not.toContain('"bytes"');
+		const payload = JSON.parse(result.text) as Snapshot;
+		const byId = new Map(payload.categories.map((category) => [category.id, category]));
+		expect(payload.categories.every((category) => 'imageId' in category)).toBe(true);
+		expect(byId.get(plain.id)!.imageId).toBeNull();
+		expect(byId.get(a.categoryId)!.imageId).toBe(set.imageId);
 	});
 
 	// tasks/inventory-cogs T-34: recipe cost and margin are dashboard-only. The

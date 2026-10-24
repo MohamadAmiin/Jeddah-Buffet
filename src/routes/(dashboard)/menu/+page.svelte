@@ -18,6 +18,7 @@
 	// is saved first, and the photo goes up in its OWN request to ?/setImage —
 	// a failed photo leaves the item saved and says so.
 	import { deserialize, enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import type { SubmitFunction } from '@sveltejs/kit';
@@ -57,6 +58,8 @@
 		setAvailability: 'tile',
 		renameCategory: 'categories',
 		archiveCategory: 'categories',
+		setCategoryImage: 'categories',
+		removeCategoryImage: 'categories',
 		createCategory: 'addCategory',
 		createModifierGroup: 'addGroup',
 		createModifier: 'addModifier'
@@ -230,6 +233,41 @@
 			await update();
 			refreshEditing(editedId);
 		};
+	};
+
+	// A category's photo (2026-10-23): picked, resized and uploaded at once. The
+	// outcome is said beside that category, with its glyph — colour never alone.
+	let categoryPhotoBusy = $state<string | null>(null);
+	let categoryPhotoOutcome = $state<{ categoryId: string; ok: boolean; text: string } | null>(null);
+	async function categoryPhotoChanged(event: Event, categoryId: string) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+		categoryPhotoBusy = categoryId;
+		categoryPhotoOutcome = null;
+		try {
+			const refused = await uploadPhoto(
+				'?/setCategoryImage',
+				{ categoryId },
+				await resizePhoto(file)
+			);
+			if (refused) {
+				categoryPhotoOutcome = { categoryId, ok: false, text: `✕ Photo not saved: ${refused}` };
+			} else {
+				await invalidateAll();
+				categoryPhotoOutcome = { categoryId, ok: true, text: '● Photo saved.' };
+			}
+		} catch (err) {
+			const message = err instanceof Error ? err.message : 'That photo could not be read.';
+			categoryPhotoOutcome = { categoryId, ok: false, text: `✕ ${message}` };
+		} finally {
+			categoryPhotoBusy = null;
+			input.value = '';
+		}
+	}
+	const fromCategoryPhoto: SubmitFunction = () => {
+		categoryPhotoOutcome = null;
+		submitted = { source: 'categories', itemId: null };
 	};
 
 	// The item fields go first; the photo follows in its own request, only once
@@ -663,6 +701,60 @@
 								</div>
 								<Button type="submit" variant="secondary">Rename</Button>
 							</form>
+							<!-- The category's photo (2026-10-23): the till shows it as a round
+							     thumbnail on the category's tab. Choosing a file resizes it here and
+							     uploads it at once, in its own request, as the item panel does. -->
+							<div class="flex flex-wrap items-center gap-3">
+								{#if category.imageUrl}
+									<img
+										src={category.imageUrl}
+										alt=""
+										class="size-12 shrink-0 rounded-full object-cover"
+									/>
+								{:else}
+									<span
+										aria-hidden="true"
+										class="bg-raise-2 text-ink-2 flex size-12 shrink-0 items-center justify-center rounded-full font-semibold"
+										>{initials(category.name)}</span
+									>
+								{/if}
+								<div class="flex min-w-0 grow flex-col gap-1">
+									<label
+										class="text-ink-2 text-sm font-medium"
+										for={`category-photo-${category.id}`}>Photo of {category.name}</label
+									>
+									<input
+										id={`category-photo-${category.id}`}
+										type="file"
+										accept="image/jpeg,image/png,image/webp"
+										class="text-ink"
+										disabled={categoryPhotoBusy === category.id}
+										onchange={(event) => categoryPhotoChanged(event, category.id)}
+									/>
+								</div>
+								{#if category.imageUrl}
+									<form
+										method="POST"
+										action="?/removeCategoryImage"
+										use:enhance={fromCategoryPhoto}
+									>
+										<input type="hidden" name="categoryId" value={category.id} />
+										<Button
+											type="submit"
+											variant="secondary"
+											aria-label={`Remove photo of ${category.name}`}>Remove photo</Button
+										>
+									</form>
+								{/if}
+							</div>
+							{#if categoryPhotoOutcome?.categoryId === category.id}
+								<p
+									role="status"
+									class={categoryPhotoOutcome.ok ? 'text-ok text-sm' : 'text-danger text-sm'}
+								>
+									{categoryPhotoOutcome.text}
+								</p>
+							{/if}
 							<details>
 								<summary class="text-danger cursor-pointer text-sm"
 									>Archive {category.name}…</summary

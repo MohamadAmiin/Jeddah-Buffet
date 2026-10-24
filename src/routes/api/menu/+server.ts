@@ -95,7 +95,10 @@ export const GET: RequestHandler = async (event) => {
 			categories: snapshot.categories.map((category) => ({
 				id: category.id,
 				name: category.name,
-				sortOrder: category.sortOrder
+				sortOrder: category.sortOrder,
+				// The tab's photo (2026-10-23), or null. A till from before it reads a
+				// missing key as no photo, so the menu format is unchanged.
+				imageId: category.imageId
 			})),
 			items: snapshot.items.map((item) => ({
 				id: item.id,
