@@ -18,7 +18,9 @@ import {
 	hasMenuItems,
 	linkModifierGroup,
 	listMenu,
+	removeCategoryImage,
 	removeItemImage,
+	setCategoryImage,
 	setItemAvailability,
 	setItemImage,
 	unlinkModifierGroup,
@@ -520,5 +522,80 @@ describe('photos (menu-and-printing T-07)', () => {
 		);
 		if (!set.ok) throw new Error('photo not set');
 		expect((await listMenu(db, r.restaurantId)).items[0].imageId).toBe(set.imageId);
+	});
+
+	// A category's photo (2026-10-23), shown on the till's category tab.
+	const categoryRow = async (categoryId: string) => {
+		const [row] = await db.select().from(menuCategories).where(eq(menuCategories.id, categoryId));
+		return row;
+	};
+
+	it('sets, replaces and removes a category photo — one row at a time, one bump per change', async () => {
+		const r = await withItem();
+		const v0 = await version(r.restaurantId);
+
+		const first = await db.transaction((tx) =>
+			setCategoryImage(tx, r.restaurantId, r.categoryId, { bytes: PNG, contentType: 'image/png' })
+		);
+		if (!first.ok) throw new Error('photo not set');
+		expect((await categoryRow(r.categoryId)).imageId).toBe(first.imageId);
+		expect((await listMenu(db, r.restaurantId)).categories[0].imageId).toBe(first.imageId);
+		expect(await version(r.restaurantId)).toBe(v0 + 1);
+
+		const second = await db.transaction((tx) =>
+			setCategoryImage(tx, r.restaurantId, r.categoryId, { bytes: JPEG, contentType: 'image/jpeg' })
+		);
+		if (!second.ok) throw new Error('photo not replaced');
+		expect((await photoRows(r.restaurantId)).map((row) => row.id)).toEqual([second.imageId]);
+		expect(await version(r.restaurantId)).toBe(v0 + 2);
+
+		expect(
+			await db.transaction((tx) => removeCategoryImage(tx, r.restaurantId, r.categoryId))
+		).toEqual({ ok: true, changed: true });
+		expect(await photoRows(r.restaurantId)).toHaveLength(0);
+		expect((await categoryRow(r.categoryId)).imageId).toBeNull();
+		expect(await version(r.restaurantId)).toBe(v0 + 3);
+
+		expect(
+			await db.transaction((tx) => removeCategoryImage(tx, r.restaurantId, r.categoryId))
+		).toEqual({ ok: true, changed: false });
+		expect(await version(r.restaurantId)).toBe(v0 + 3);
+	});
+
+	it("keeps an item's photo when its category's photo is replaced, and the reverse", async () => {
+		const r = await withItem();
+		const item = await db.transaction((tx) =>
+			setItemImage(tx, r.restaurantId, r.itemId, { bytes: PNG, contentType: 'image/png' })
+		);
+		const category = await db.transaction((tx) =>
+			setCategoryImage(tx, r.restaurantId, r.categoryId, { bytes: PNG, contentType: 'image/png' })
+		);
+		if (!item.ok || !category.ok) throw new Error('photos not set');
+
+		await db.transaction((tx) => removeCategoryImage(tx, r.restaurantId, r.categoryId));
+		expect((await photoRows(r.restaurantId)).map((row) => row.id)).toEqual([item.imageId]);
+		expect((await itemRow(r.itemId)).imageId).toBe(item.imageId);
+	});
+
+	it("refuses a photo on B's category, and on an archived category, writing nothing", async () => {
+		const a = await withItem();
+		const b = await makeRestaurant('Cafe Two');
+		const before = await version(b.restaurantId);
+
+		expect(
+			await db.transaction((tx) =>
+				setCategoryImage(tx, b.restaurantId, a.categoryId, { bytes: PNG, contentType: 'image/png' })
+			)
+		).toEqual({ ok: false, reason: 'not_found' });
+		expect(await photoRows(b.restaurantId)).toHaveLength(0);
+		expect(await version(b.restaurantId)).toBe(before);
+
+		await db.transaction((tx) => archiveCategory(tx, a.restaurantId, a.categoryId));
+		expect(
+			await db.transaction((tx) =>
+				setCategoryImage(tx, a.restaurantId, a.categoryId, { bytes: PNG, contentType: 'image/png' })
+			)
+		).toEqual({ ok: false, reason: 'not_found' });
+		expect(await photoRows(a.restaurantId)).toHaveLength(0);
 	});
 });

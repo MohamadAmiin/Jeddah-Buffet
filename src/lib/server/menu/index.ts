@@ -427,10 +427,40 @@ export async function setItemAvailability(
 //
 // A photo row is NEVER updated: a new photo is a new row and a new id (which is
 // what lets the routes serve it as immutable). The one DELETE here drops a
-// photo row that no item references any more — menu configuration, never a
-// posted record, and never referenced by an order line (invariant 2 holds).
+// photo row that no item and no category references any more — menu
+// configuration, never a posted record, and never referenced by an order line
+// (invariant 2 holds). An item and a category each get their own row: nothing
+// here shares one, and deleteOrphanImage checks both tables regardless.
 
-/** Drop `imageId` if, and only if, no item still points at it. */
+type Photo = { bytes: Uint8Array; contentType: ImageContentType };
+
+/**
+ * The route validates first (size, sniffed type); a caller that gets it wrong
+ * has a programming error, hence TypeError rather than a result value.
+ */
+function assertPhoto(image: Photo, writer: string): void {
+	if (image.bytes.byteLength === 0 || image.bytes.byteLength > IMAGE_MAX_BYTES) {
+		throw new TypeError(`a photo is 1..${IMAGE_MAX_BYTES} bytes; got ${image.bytes.byteLength}`);
+	}
+	if (sniffImageType(image.bytes) !== image.contentType) {
+		throw new TypeError(`the bytes are not ${image.contentType} — sniff before calling ${writer}`);
+	}
+}
+
+async function insertPhoto(write: DbTx, restaurantId: string, image: Photo): Promise<string> {
+	const [photo] = await write
+		.insert(menuImages)
+		.values({
+			restaurantId,
+			contentType: image.contentType,
+			byteSize: image.bytes.byteLength,
+			bytes: image.bytes
+		})
+		.returning({ id: menuImages.id });
+	return photo.id;
+}
+
+/** Drop `imageId` if, and only if, no item and no category still points at it. */
 async function deleteOrphanImage(write: DbTx, restaurantId: string, imageId: string) {
 	await write.delete(menuImages).where(
 		and(
@@ -441,49 +471,36 @@ async function deleteOrphanImage(write: DbTx, restaurantId: string, imageId: str
 					.select({ one: sql`1` })
 					.from(menuItems)
 					.where(eq(menuItems.imageId, imageId))
+			),
+			notExists(
+				write
+					.select({ one: sql`1` })
+					.from(menuCategories)
+					.where(eq(menuCategories.imageId, imageId))
 			)
 		)
 	);
 }
 
-/**
- * Attach a photo to a live item, replacing any previous one, in ONE version
- * bump. The route validates first (size, sniffed type); a caller that gets it
- * wrong has a programming error, hence TypeError rather than a result value.
- */
+/** Attach a photo to a live item, replacing any previous one, in ONE version bump. */
 export async function setItemImage(
 	tx: DbTx,
 	restaurantId: string,
 	itemId: string,
-	image: { bytes: Uint8Array; contentType: ImageContentType }
+	image: Photo
 ): Promise<{ ok: true; imageId: string } | NotFound> {
 	const current = await liveItem(tx, restaurantId, itemId, true);
 	if (!current) return NOT_FOUND;
-	if (image.bytes.byteLength === 0 || image.bytes.byteLength > IMAGE_MAX_BYTES) {
-		throw new TypeError(`a photo is 1..${IMAGE_MAX_BYTES} bytes; got ${image.bytes.byteLength}`);
-	}
-	if (sniffImageType(image.bytes) !== image.contentType) {
-		throw new TypeError(
-			`the bytes are not ${image.contentType} — sniff before calling setItemImage`
-		);
-	}
+	assertPhoto(image, 'setItemImage');
 
 	return withMenuVersionBump(tx, restaurantId, async (write) => {
-		const [photo] = await write
-			.insert(menuImages)
-			.values({
-				restaurantId,
-				contentType: image.contentType,
-				byteSize: image.bytes.byteLength,
-				bytes: image.bytes
-			})
-			.returning({ id: menuImages.id });
+		const imageId = await insertPhoto(write, restaurantId, image);
 		await write
 			.update(menuItems)
-			.set({ imageId: photo.id, updatedAt: new Date() })
+			.set({ imageId, updatedAt: new Date() })
 			.where(and(eq(menuItems.restaurantId, restaurantId), eq(menuItems.id, itemId)));
 		if (current.imageId !== null) await deleteOrphanImage(write, restaurantId, current.imageId);
-		return { ok: true as const, imageId: photo.id };
+		return { ok: true as const, imageId };
 	});
 }
 
@@ -503,6 +520,53 @@ export async function removeItemImage(
 			.update(menuItems)
 			.set({ imageId: null, updatedAt: new Date() })
 			.where(and(eq(menuItems.restaurantId, restaurantId), eq(menuItems.id, itemId)));
+		await deleteOrphanImage(write, restaurantId, previous);
+	});
+	return CHANGED;
+}
+
+/**
+ * Attach a photo to a live category — shown on the till's category tab —
+ * replacing any previous one, in ONE version bump (2026-10-23). An archived
+ * category keeps its photo row, as an archived item does: it is history.
+ */
+export async function setCategoryImage(
+	tx: DbTx,
+	restaurantId: string,
+	categoryId: string,
+	image: Photo
+): Promise<{ ok: true; imageId: string } | NotFound> {
+	const current = await liveCategory(tx, restaurantId, categoryId, true);
+	if (!current) return NOT_FOUND;
+	assertPhoto(image, 'setCategoryImage');
+
+	return withMenuVersionBump(tx, restaurantId, async (write) => {
+		const imageId = await insertPhoto(write, restaurantId, image);
+		await write
+			.update(menuCategories)
+			.set({ imageId, updatedAt: new Date() })
+			.where(and(eq(menuCategories.restaurantId, restaurantId), eq(menuCategories.id, categoryId)));
+		if (current.imageId !== null) await deleteOrphanImage(write, restaurantId, current.imageId);
+		return { ok: true as const, imageId };
+	});
+}
+
+/** Detach (and drop) a live category's photo; nothing to remove is a no-op, no bump. */
+export async function removeCategoryImage(
+	tx: DbTx,
+	restaurantId: string,
+	categoryId: string
+): Promise<Changed | NotFound> {
+	const current = await liveCategory(tx, restaurantId, categoryId, true);
+	if (!current) return NOT_FOUND;
+	if (current.imageId === null) return UNCHANGED;
+	const previous = current.imageId;
+
+	await withMenuVersionBump(tx, restaurantId, async (write) => {
+		await write
+			.update(menuCategories)
+			.set({ imageId: null, updatedAt: new Date() })
+			.where(and(eq(menuCategories.restaurantId, restaurantId), eq(menuCategories.id, categoryId)));
 		await deleteOrphanImage(write, restaurantId, previous);
 	});
 	return CHANGED;
@@ -792,7 +856,8 @@ export async function listMenu(database: Executor, restaurantId: string) {
 		.select({
 			id: menuCategories.id,
 			name: menuCategories.name,
-			sortOrder: menuCategories.sortOrder
+			sortOrder: menuCategories.sortOrder,
+			imageId: menuCategories.imageId
 		})
 		.from(menuCategories)
 		.where(and(eq(menuCategories.restaurantId, restaurantId), isNull(menuCategories.archivedAt)))

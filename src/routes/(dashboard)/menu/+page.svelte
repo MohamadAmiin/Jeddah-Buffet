@@ -18,6 +18,7 @@
 	// is saved first, and the photo goes up in its OWN request to ?/setImage —
 	// a failed photo leaves the item saved and says so.
 	import { deserialize, enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import type { SubmitFunction } from '@sveltejs/kit';
@@ -57,6 +58,8 @@
 		setAvailability: 'tile',
 		renameCategory: 'categories',
 		archiveCategory: 'categories',
+		setCategoryImage: 'categories',
+		removeCategoryImage: 'categories',
 		createCategory: 'addCategory',
 		createModifierGroup: 'addGroup',
 		createModifier: 'addModifier'
@@ -175,6 +178,98 @@
 		}
 	}
 
+	// One photo upload, in its own request, to the named action: null when it was
+	// saved, else the sentence to show.
+	async function uploadPhoto(
+		action: string,
+		fields: Record<string, string>,
+		blob: Blob
+	): Promise<string | null> {
+		const upload = new FormData();
+		for (const [name, value] of Object.entries(fields)) upload.set(name, value);
+		upload.set(
+			'image',
+			new File([blob], blob.type === 'image/webp' ? 'photo.webp' : 'photo.jpg', {
+				type: blob.type
+			})
+		);
+		let response: Response;
+		try {
+			response = await fetch(action, {
+				method: 'POST',
+				body: upload,
+				headers: { 'x-sveltekit-action': 'true' }
+			});
+		} catch {
+			return 'the upload failed. Check the connection and try again.';
+		}
+		// The Node server's body limit, or a proxy in front of it, refuses an
+		// oversized body before the action runs: there is no action result to read.
+		if (response.status === 413) return 'the server refused it as too large. Try a smaller photo.';
+		try {
+			// A manual fetch to an action needs deserialize: the body is devalue-encoded.
+			const photo = deserialize(await response.text());
+			if (photo.type === 'success') return null;
+			return photo.type === 'failure' && typeof photo.data?.message === 'string'
+				? photo.data.message
+				: 'the upload failed.';
+		} catch {
+			return 'the upload failed.';
+		}
+	}
+
+	// `editing` is a copy taken when Edit was pressed, and every form in the panel
+	// reloads the page data: read the item again afterwards, or the panel goes on
+	// showing a removed photo, a detached group or an archived item.
+	function refreshEditing(editedId: string | null) {
+		if (mode !== 'edit' || !editedId) return;
+		editing = data.items.find((item: Item) => item.id === editedId) ?? null;
+		if (!editing) mode = 'add';
+	}
+	const fromPanel: SubmitFunction = () => {
+		submitted = { source: 'panel', itemId: null };
+		const editedId = editing?.id ?? null;
+		return async ({ update }) => {
+			await update();
+			refreshEditing(editedId);
+		};
+	};
+
+	// A category's photo (2026-10-23): picked, resized and uploaded at once. The
+	// outcome is said beside that category, with its glyph — colour never alone.
+	let categoryPhotoBusy = $state<string | null>(null);
+	let categoryPhotoOutcome = $state<{ categoryId: string; ok: boolean; text: string } | null>(null);
+	async function categoryPhotoChanged(event: Event, categoryId: string) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+		categoryPhotoBusy = categoryId;
+		categoryPhotoOutcome = null;
+		try {
+			const refused = await uploadPhoto(
+				'?/setCategoryImage',
+				{ categoryId },
+				await resizePhoto(file)
+			);
+			if (refused) {
+				categoryPhotoOutcome = { categoryId, ok: false, text: `✕ Photo not saved: ${refused}` };
+			} else {
+				await invalidateAll();
+				categoryPhotoOutcome = { categoryId, ok: true, text: '● Photo saved.' };
+			}
+		} catch (err) {
+			const message = err instanceof Error ? err.message : 'That photo could not be read.';
+			categoryPhotoOutcome = { categoryId, ok: false, text: `✕ ${message}` };
+		} finally {
+			categoryPhotoBusy = null;
+			input.value = '';
+		}
+	}
+	const fromCategoryPhoto: SubmitFunction = () => {
+		categoryPhotoOutcome = null;
+		submitted = { source: 'categories', itemId: null };
+	};
+
 	// The item fields go first; the photo follows in its own request, only once
 	// the server has answered success and given (or confirmed) the item's id.
 	const submitItem: SubmitFunction = ({ formData }) => {
@@ -192,40 +287,16 @@
 							: null
 						: editedId;
 				if (itemId) {
-					const upload = new FormData();
-					upload.set('itemId', itemId);
-					upload.set(
-						'image',
-						new File([held], held.type === 'image/webp' ? 'photo.webp' : 'photo.jpg', {
-							type: held.type
-						})
-					);
-					try {
-						const response = await fetch('?/setImage', {
-							method: 'POST',
-							body: upload,
-							headers: { 'x-sveltekit-action': 'true' }
-						});
-						// A manual fetch to an action needs deserialize: the body is devalue-encoded.
-						const photo = deserialize(await response.text());
-						if (photo.type !== 'success') {
-							const message =
-								photo.type === 'failure' && typeof photo.data?.message === 'string'
-									? photo.data.message
-									: 'the upload failed.';
-							photoOutcome = `Item saved, but the photo was not: ${message}`;
-						}
-					} catch {
-						photoOutcome = 'Item saved, but the photo was not: the upload failed.';
-					}
+					const refused = await uploadPhoto('?/setImage', { itemId }, held);
+					if (refused) photoOutcome = `Item saved, but the photo was not: ${refused}`;
+					// Only the photo changed: say that, not "No change to save." update()
+					// below applies this same result object to the page's form.
+					else if (result.data?.unchanged === true) result.data.message = 'Photo saved.';
 				}
 			}
 			if (result.type === 'success') resetPhoto();
 			await update();
-			if (mode === 'edit' && editedId) {
-				editing = data.items.find((item: Item) => item.id === editedId) ?? null;
-				if (!editing) mode = 'add';
-			}
+			refreshEditing(editedId);
 		};
 	};
 
@@ -533,7 +604,7 @@
 					{#if mode === 'edit' && editing}
 						<div class="border-line mt-4 flex flex-col gap-4 border-t pt-4">
 							{#if editing.imageUrl}
-								<form method="POST" action="?/removeImage" use:enhance={from('panel')}>
+								<form method="POST" action="?/removeImage" use:enhance={fromPanel}>
 									<input type="hidden" name="itemId" value={editing.id} />
 									<Button type="submit" variant="secondary">Remove photo</Button>
 								</form>
@@ -548,7 +619,7 @@
 									{#each editing.groupIds as groupId (groupId)}
 										<li class="flex items-center justify-between gap-2">
 											<span class="text-ink-2 text-sm">{groupName(groupId)}</span>
-											<form method="POST" action="?/unlinkGroup" use:enhance={from('panel')}>
+											<form method="POST" action="?/unlinkGroup" use:enhance={fromPanel}>
 												<input type="hidden" name="itemId" value={editing.id} />
 												<input type="hidden" name="groupId" value={groupId} />
 												<Button type="submit" variant="ghost" disabled={!ready}>Detach</Button>
@@ -561,7 +632,7 @@
 										method="POST"
 										action="?/linkGroup"
 										class="flex flex-wrap items-end gap-2"
-										use:enhance={from('panel')}
+										use:enhance={fromPanel}
 									>
 										<input type="hidden" name="itemId" value={editing.id} />
 										<label class="text-ink-2 text-sm" for="panel-link">Modifier group</label>
@@ -583,7 +654,7 @@
 									<p class="text-ink-2 text-sm">
 										It leaves the till and this page, and stays on past receipts and reports.
 									</p>
-									<form method="POST" action="?/archiveItem" use:enhance={from('panel')}>
+									<form method="POST" action="?/archiveItem" use:enhance={fromPanel}>
 										<input type="hidden" name="itemId" value={editing.id} />
 										<Button type="submit" variant="danger" disabled={!ready}>Archive item</Button>
 									</form>
@@ -630,6 +701,60 @@
 								</div>
 								<Button type="submit" variant="secondary">Rename</Button>
 							</form>
+							<!-- The category's photo (2026-10-23): the till shows it as a round
+							     thumbnail on the category's tab. Choosing a file resizes it here and
+							     uploads it at once, in its own request, as the item panel does. -->
+							<div class="flex flex-wrap items-center gap-3">
+								{#if category.imageUrl}
+									<img
+										src={category.imageUrl}
+										alt=""
+										class="size-12 shrink-0 rounded-full object-cover"
+									/>
+								{:else}
+									<span
+										aria-hidden="true"
+										class="bg-raise-2 text-ink-2 flex size-12 shrink-0 items-center justify-center rounded-full font-semibold"
+										>{initials(category.name)}</span
+									>
+								{/if}
+								<div class="flex min-w-0 grow flex-col gap-1">
+									<label
+										class="text-ink-2 text-sm font-medium"
+										for={`category-photo-${category.id}`}>Photo of {category.name}</label
+									>
+									<input
+										id={`category-photo-${category.id}`}
+										type="file"
+										accept="image/jpeg,image/png,image/webp"
+										class="text-ink"
+										disabled={categoryPhotoBusy === category.id}
+										onchange={(event) => categoryPhotoChanged(event, category.id)}
+									/>
+								</div>
+								{#if category.imageUrl}
+									<form
+										method="POST"
+										action="?/removeCategoryImage"
+										use:enhance={fromCategoryPhoto}
+									>
+										<input type="hidden" name="categoryId" value={category.id} />
+										<Button
+											type="submit"
+											variant="secondary"
+											aria-label={`Remove photo of ${category.name}`}>Remove photo</Button
+										>
+									</form>
+								{/if}
+							</div>
+							{#if categoryPhotoOutcome?.categoryId === category.id}
+								<p
+									role="status"
+									class={categoryPhotoOutcome.ok ? 'text-ok text-sm' : 'text-danger text-sm'}
+								>
+									{categoryPhotoOutcome.text}
+								</p>
+							{/if}
 							<details>
 								<summary class="text-danger cursor-pointer text-sm"
 									>Archive {category.name}…</summary

@@ -19,7 +19,8 @@ import {
 } from './fixtures';
 
 // MENU WITH PHOTOS, OPTIONAL CATEGORIES AND THE DELIVERY ORDER TYPE — milestone 1
-// of tasks/menu-and-printing (spec 4, 5, 6, 13, 26).
+// of tasks/menu-and-printing (spec 4, 5, 6, 13, 26), plus a category's photo on
+// its till tab (2026-10-23).
 //
 // The owner builds a menu with one categorised item and one photographed item
 // with no category; the till shows both (the photo loaded), defaults to Dine in,
@@ -94,6 +95,41 @@ test('menu photos, optional categories and a Delivery sale, online and offline',
 	expect(photos[0].byte_size).toBeLessThanOrEqual(409_600);
 	expect(['image/webp', 'image/jpeg']).toContain(photos[0].content_type);
 
+	// 2b. A photo alone on an existing item says "Photo saved." (not "No change to
+	//     save."), and Remove photo leaves the panel showing no photo and no Remove
+	//     key — the panel re-reads the item after each of its forms.
+	const teaTile = page.getByRole('listitem').filter({ hasText: 'Tea' }).first();
+	await teaTile.getByRole('button', { name: 'Edit' }).click();
+	await expect(page.getByRole('heading', { name: 'Edit Tea' })).toBeVisible();
+	await page
+		.getByLabel('Photo', { exact: true })
+		.setInputFiles({ name: 'tea.png', mimeType: 'image/png', buffer: PNG_1X1 });
+	await expect(page.locator('img[src^="blob:"]')).toBeVisible();
+	await page.getByRole('button', { name: 'Save item' }).click();
+	await expect(page.getByRole('alert')).toContainText('Photo saved.');
+	await expect(teaTile.locator('img')).toBeVisible();
+	expect(await dbRows('select id from menu_images')).toHaveLength(2);
+	const removePhoto = page.getByRole('button', { name: 'Remove photo', exact: true });
+	await removePhoto.click();
+	await expect(page.getByRole('alert')).toContainText('Photo removed.');
+	await expect(removePhoto).toHaveCount(0);
+	await expect(page.getByRole('heading', { name: 'Edit Tea' })).toBeVisible();
+	await expect(teaTile.locator('img')).toHaveCount(0);
+	expect(await dbRows('select id from menu_images')).toHaveLength(1);
+	await page.getByRole('button', { name: 'Cancel' }).click();
+
+	// 2c. A photo on the Drinks category (2026-10-23), uploaded as it is chosen;
+	//     the till shows it on the Drinks tab (step 4).
+	await page
+		.getByLabel('Photo of Drinks')
+		.setInputFiles({ name: 'drinks.png', mimeType: 'image/png', buffer: PNG_1X1 });
+	await expect(page.getByRole('status').filter({ hasText: 'Photo saved.' })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Remove photo of Drinks' })).toBeVisible();
+	expect(await dbRows('select id from menu_images')).toHaveLength(2);
+	expect(await dbRows('select name from menu_categories where image_id is not null')).toEqual([
+		{ name: 'Drinks' }
+	]);
+
 	// 3. A cashier, the registered till, a PIN, an open session.
 	await createCashier(page, { displayName: 'The Cashier', pin: '4321' });
 	const till = await browser.newContext();
@@ -112,6 +148,12 @@ test('menu photos, optional categories and a Delivery sale, online and offline',
 	//    Dine in pressed before anything is chosen.
 	await expect(tillPage.getByRole('tab', { name: 'Drinks' })).toBeVisible();
 	await expect(tillPage.getByRole('tab', { name: 'Other' })).toBeVisible();
+	//    The Drinks tab carries its photo; Other has none.
+	const drinksTabPhoto = tillPage.getByRole('tab', { name: 'Drinks' }).locator('img');
+	await expect
+		.poll(() => drinksTabPhoto.evaluate((img) => (img as HTMLImageElement).naturalWidth))
+		.toBeGreaterThan(0);
+	await expect(tillPage.getByRole('tab', { name: 'Other' }).locator('img')).toHaveCount(0);
 	await expect(tillPage.getByRole('radio', { name: 'Dine in', exact: true })).toHaveAttribute(
 		'aria-checked',
 		'true'

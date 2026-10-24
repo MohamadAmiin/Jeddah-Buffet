@@ -129,8 +129,8 @@ describe('itemsByCategory', () => {
 	it('orders tabs and items by sortOrder and keeps an empty category', () => {
 		const m = menu({
 			categories: [
-				{ id: 'c2', name: 'Two', sortOrder: 1 },
-				{ id: 'c1', name: 'One', sortOrder: 0 }
+				{ id: 'c2', name: 'Two', sortOrder: 1, imageId: null },
+				{ id: 'c1', name: 'One', sortOrder: 0, imageId: null }
 			],
 			items: [
 				item({ id: 'late', categoryId: 'c1', sortOrder: 2 }),
@@ -146,7 +146,7 @@ describe('itemsByCategory', () => {
 
 	it('puts an orphaned item under a final Other tab', () => {
 		const m = menu({
-			categories: [{ id: 'c1', name: 'One', sortOrder: 0 }],
+			categories: [{ id: 'c1', name: 'One', sortOrder: 0, imageId: null }],
 			items: [item({ id: 'lost', categoryId: 'ghost' })]
 		});
 		const tabs = itemsByCategory(m);
@@ -157,13 +157,29 @@ describe('itemsByCategory', () => {
 	// menu-and-printing T-16: a category is optional on the dashboard now.
 	it('puts an item with no category under Other', () => {
 		const m = menu({
-			categories: [{ id: 'c1', name: 'One', sortOrder: 0 }],
+			categories: [{ id: 'c1', name: 'One', sortOrder: 0, imageId: null }],
 			items: [item({ id: 'water', categoryId: null }), item({ id: 'tea', categoryId: 'c1' })]
 		});
 		const tabs = itemsByCategory(m);
 		expect(tabs.map((t) => t.id)).toEqual(['c1', 'other']);
 		expect(tabs[0].items.map((i) => i.id)).toEqual(['tea']);
 		expect(tabs[1].items.map((i) => i.id)).toEqual(['water']);
+	});
+
+	// 2026-10-23: a category's photo rides on its tab; Other never has one.
+	it("carries each category's imageId onto its tab, and none onto Other", () => {
+		const m = menu({
+			categories: [
+				{ id: 'c1', name: 'One', sortOrder: 0, imageId: 'photo-1' },
+				{ id: 'c2', name: 'Two', sortOrder: 1, imageId: null }
+			],
+			items: [item({ id: 'water', categoryId: null })]
+		});
+		expect(itemsByCategory(m).map((t) => [t.id, t.imageId])).toEqual([
+			['c1', 'photo-1'],
+			['c2', null],
+			['other', null]
+		]);
 	});
 
 	it('returns exactly one tab when no category exists', () => {

@@ -58,7 +58,7 @@ async function encodeUnder(canvas: HTMLCanvasElement, type: string): Promise<Blo
 
 /**
  * Decode a photo, scale it to at most IMAGE_MAX_EDGE on the longer side, and
- * re-encode it under IMAGE_MAX_BYTES as WebP, else JPEG. If nothing fits at the
+ * re-encode it under IMAGE_MAX_BYTES as WebP, else JPEG on a white ground. If nothing fits at the
  * first size, halve the dimensions ONCE and try again; then give up with a
  * message the panel shows as it is.
  */
@@ -78,9 +78,18 @@ export async function resizePhoto(file: File): Promise<Blob> {
 			const context = canvas.getContext('2d');
 			if (!context) throw new Error(UNREADABLE);
 			context.drawImage(bitmap, 0, 0, size.width, size.height);
-			const blob =
-				(await encodeUnder(canvas, 'image/webp')) ?? (await encodeUnder(canvas, 'image/jpeg'));
-			if (blob) return blob;
+			const webp = await encodeUnder(canvas, 'image/webp');
+			if (webp) return webp;
+			// JPEG has no transparency: the encoder flattens a transparent pixel onto
+			// BLACK, so a cut-out PNG would come back on a black square. Paint white
+			// BEHIND what is drawn first. This is the photo's pixel data, not a screen
+			// colour — tokens.css governs the UI, not the bytes of an uploaded photo.
+			context.globalCompositeOperation = 'destination-over';
+			context.fillStyle = 'white';
+			context.fillRect(0, 0, size.width, size.height);
+			context.globalCompositeOperation = 'source-over';
+			const jpeg = await encodeUnder(canvas, 'image/jpeg');
+			if (jpeg) return jpeg;
 			size = targetSize(size.width / 2, size.height / 2);
 		}
 	} finally {

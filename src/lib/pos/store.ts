@@ -410,6 +410,48 @@ export async function readMenuSyncError(): Promise<string | null> {
 const BOUND_DEVICE_KEY = 'deviceId';
 
 /**
+ * The print-agent pairing (print-client.ts): the agent's loopback address and its
+ * token. These two keys SURVIVE bindDevice and forgetDevice — decided 2026-10-23,
+ * reversing menu-and-printing T-28's "a re-registered till pairs again", so the
+ * printer is set up once per PC. The token opens only the print agent on THIS PC
+ * (saveAgentSettings stores a loopback address only, and the agent listens on
+ * 127.0.0.1 alone), and that agent's own config file holds the same token: it
+ * belongs to the PC, not to the registration. Every other setting still goes —
+ * the receipt-logo confirmation among them, so a re-registered till test-prints
+ * the logo again before receipts carry it.
+ */
+export const PRINT_AGENT_URL_KEY = 'printAgentUrl';
+export const PRINT_AGENT_TOKEN_KEY = 'printAgentToken';
+const KEPT_SETTING_KEYS = [PRINT_AGENT_URL_KEY, PRINT_AGENT_TOKEN_KEY];
+
+/**
+ * Clear the settings store inside the caller's transaction, putting the pairing
+ * back, then run `then`. The reads are issued first and the clear only once they
+ * have answered; requests in one transaction run in the order they are issued,
+ * so whatever `then` puts lands after the clear.
+ */
+function clearSettingsKeepingPairing(settings: IDBObjectStore, then?: () => void): void {
+	const kept: Array<{ key: string; value: unknown }> = [];
+	let pending = KEPT_SETTING_KEYS.length;
+
+	for (const key of KEPT_SETTING_KEYS) {
+		const request = settings.get(key);
+
+		request.onsuccess = () => {
+			const row = request.result as { key: string; value: unknown } | undefined;
+
+			if (row !== undefined) kept.push(row);
+			pending -= 1;
+			if (pending > 0) return;
+
+			settings.clear();
+			for (const entry of kept) settings.put(entry);
+			then?.();
+		};
+	}
+}
+
+/**
  * Bind this browser's cache to the registered device the server just named — the
  * pos_devices uuid from GET /api/pos/employees. A device CODE (POS1) repeats in
  * every restaurant, so it cannot bind anything.
@@ -418,7 +460,8 @@ const BOUND_DEVICE_KEY = 'deviceId';
  * again — everything cached for the old device is dropped in the SAME transaction
  * that records the new binding: the employees, whose cached PIN hashes would
  * otherwise sign the old restaurant's staff in on the new till offline, and the
- * settings (the idle lock, and the menu version kept there). offline_logins is
+ * settings (the idle lock, and the menu version kept there) except the
+ * print-agent pairing, which belongs to the PC (KEPT_SETTING_KEYS). offline_logins is
  * NEVER touched: each row carries the device it was recorded on, and an unsynced
  * record is kept, never deleted (invariant 5). `orders`, `sync_queue`,
  * `invoice_sequence` and `session` are NEVER touched here, for the same reason
@@ -451,8 +494,9 @@ export function bindDevice(deviceId: string): Promise<'unchanged' | 'bound'> {
 				// restaurant the tablet no longer serves.
 				tx.objectStore('menu').clear();
 
-				settings.clear();
-				settings.put({ key: BOUND_DEVICE_KEY, value: deviceId });
+				clearSettingsKeepingPairing(settings, () => {
+					settings.put({ key: BOUND_DEVICE_KEY, value: deviceId });
+				});
 			};
 		});
 
@@ -469,8 +513,10 @@ export async function readBoundDeviceId(): Promise<string | null> {
 
 /**
  * Forget the device: clear the cached employees and their PIN hashes, the settings
- * (the bound device id among them, the idle lock, the menu version) and the menu,
- * in ONE transaction. Called whenever the server answers 403 to a device-guarded
+ * (the bound device id among them, the idle lock, the menu version — all but the
+ * print-agent pairing, KEPT_SETTING_KEYS) and the menu, in ONE transaction. The
+ * pairing cannot sign anyone in or sell anything, so a revoked till keeping it
+ * keeps nothing invariant 12 takes away. Called whenever the server answers 403 to a device-guarded
  * request, meaning the device is unknown or REVOKED. A till the owner revoked
  * (invariant 12) must not go on signing staff in offline from hashes it still
  * holds once the server has told it so. With no bound device, the PIN screen's
@@ -486,7 +532,7 @@ export function forgetDevice(): Promise<void> {
 	return withDb((db) =>
 		inTransaction(db, ['employees', 'settings', 'menu'], 'readwrite', (tx) => {
 			tx.objectStore('employees').clear();
-			tx.objectStore('settings').clear();
+			clearSettingsKeepingPairing(tx.objectStore('settings'));
 			tx.objectStore('menu').clear();
 		})
 	);
@@ -1034,7 +1080,10 @@ export async function readMenu(): Promise<LocalMenu | null> {
 		format: typeof header.format === 'number' ? header.format : 1,
 		defaultTaxRate: header.defaultTaxRate ?? null,
 		billTaxRates: Array.isArray(header.billTaxRates) ? header.billTaxRates : [],
-		categories: of<SnapshotCategory>('category').sort(bySortOrder),
+		// A category cached by a build before category photos has no imageId.
+		categories: of<SnapshotCategory>('category')
+			.sort(bySortOrder)
+			.map((category) => ({ ...category, imageId: category.imageId ?? null })),
 		items: of<SnapshotItem>('item')
 			.sort(bySortOrder)
 			.map((item) => ({

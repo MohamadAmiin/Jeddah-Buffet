@@ -193,6 +193,33 @@ describe('parseSnapshot — optional category and photo id (menu-and-printing T-
 		expect(thrown).toBeInstanceOf(SnapshotError);
 		expect((thrown as Error).message).toMatch(/items\[0\]\.imageId/);
 	});
+
+	// 2026-10-23: a category's photo. The fixture's category has no imageId key —
+	// the shape a server before category photos sends.
+	it("reads a category's missing imageId as null and a string as itself", () => {
+		expect(parseSnapshot(payload()).categories[0].imageId).toBeNull();
+		const category = { id: 'c1', name: 'Drinks', sortOrder: 0 };
+		expect(
+			parseSnapshot(payload({ categories: [{ ...category, imageId: 'img-2' }] })).categories[0]
+				.imageId
+		).toBe('img-2');
+		expect(
+			parseSnapshot(payload({ categories: [{ ...category, imageId: null }] })).categories[0].imageId
+		).toBeNull();
+	});
+
+	it('refuses a numeric category imageId with a SnapshotError naming categories[0].imageId', () => {
+		let thrown: unknown;
+		try {
+			parseSnapshot(
+				payload({ categories: [{ id: 'c1', name: 'Drinks', sortOrder: 0, imageId: 5 }] })
+			);
+		} catch (error) {
+			thrown = error;
+		}
+		expect(thrown).toBeInstanceOf(SnapshotError);
+		expect((thrown as Error).message).toMatch(/categories\[0\]\.imageId/);
+	});
 });
 
 // A structural tripwire on store.ts (the idiom route-guards.test.ts and

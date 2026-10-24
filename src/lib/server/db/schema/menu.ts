@@ -61,8 +61,9 @@ import { taxRates } from './tax-rates';
 // owns that number). A photo row is NEVER edited: a new photo is a new row and
 // a new id, which is what lets the routes serve it as immutable. It is read
 // ONLY through a restaurant-scoped lookup (readImage in
-// src/lib/server/menu/images.ts) and referenced by menu_items.image_id through
-// the composite FK below.
+// src/lib/server/menu/images.ts) and referenced by menu_items.image_id and,
+// since 2026-10-23, menu_categories.image_id, each through a composite FK below
+// (a category's photo shows on the till's category tab).
 //
 // NO RECIPE COLUMN, deliberately. Spec 15's recipes link items to ingredients in
 // numeric(12,3) base units and belong to the inventory plan, which has no tables
@@ -91,28 +92,6 @@ const createdAt = () => timestamp('created_at', { withTimezone: true }).notNull(
 const updatedAt = () => timestamp('updated_at', { withTimezone: true }).notNull().defaultNow();
 const archivedAt = () => timestamp('archived_at', { withTimezone: true });
 
-export const menuCategories = pgTable(
-	'menu_categories',
-	{
-		id: uuid('id').primaryKey().defaultRandom(),
-		restaurantId: tenant(),
-		name: text('name').notNull(),
-		sortOrder: integer('sort_order').notNull().default(0),
-		archivedAt: archivedAt(),
-		createdAt: createdAt(),
-		updatedAt: updatedAt()
-	},
-	(table) => [
-		index('menu_categories_restaurant_id_idx').on(table.restaurantId),
-		// Two LIVE categories called "Drinks" and "drinks" are a data-entry accident;
-		// an archived one frees its name. users_email_lower_unique is the idiom.
-		uniqueIndex('menu_categories_name_unique')
-			.on(table.restaurantId, sql`lower(${table.name})`)
-			.where(sql`${table.archivedAt} is null`),
-		unique('menu_categories_id_restaurant_unique').on(table.id, table.restaurantId)
-	]
-);
-
 // bytea has no builder in drizzle-orm 0.45 (pg-core/columns holds none), so the
 // column is a customType: the pg driver hands bytea back as a Buffer and takes
 // one on the way in; the module boundary is a plain Uint8Array.
@@ -122,9 +101,11 @@ const byteaColumn = customType<{ data: Uint8Array; driverData: Buffer }>({
 	fromDriver: (value) => new Uint8Array(value)
 });
 
-// A menu item's photo. No updated_at and no archived_at: a row is never edited
-// or archived — a replaced photo's row is deleted by the menu module once no
-// item references it (menu configuration, never referenced by an order line).
+// A menu item's or a category's photo. No updated_at and no archived_at: a row
+// is never edited or archived — a replaced photo's row is deleted by the menu
+// module once no item and no category references it (menu configuration, never
+// referenced by an order line). Declared BEFORE menu_categories, whose image FK
+// names it.
 export const menuImages = pgTable(
 	'menu_images',
 	{
@@ -137,7 +118,7 @@ export const menuImages = pgTable(
 	},
 	(table) => [
 		index('menu_images_restaurant_id_idx').on(table.restaurantId),
-		// Target of menu_items_image_fk.
+		// Target of menu_items_image_fk and menu_categories_image_fk.
 		unique('menu_images_id_restaurant_unique').on(table.id, table.restaurantId),
 		check(
 			'menu_images_content_type_valid',
@@ -145,6 +126,37 @@ export const menuImages = pgTable(
 		),
 		check('menu_images_byte_size_range', sql`${table.byteSize} between 1 and 409600`),
 		check('menu_images_byte_size_matches', sql`octet_length(${table.bytes}) = ${table.byteSize}`)
+	]
+);
+
+export const menuCategories = pgTable(
+	'menu_categories',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		restaurantId: tenant(),
+		name: text('name').notNull(),
+		sortOrder: integer('sort_order').notNull().default(0),
+		// NULL = no photo (the till's tab shows the name alone). Same rules as an
+		// item's photo: a row is never edited; a new photo is a new id.
+		imageId: uuid('image_id'),
+		archivedAt: archivedAt(),
+		createdAt: createdAt(),
+		updatedAt: updatedAt()
+	},
+	(table) => [
+		index('menu_categories_restaurant_id_idx').on(table.restaurantId),
+		// Two LIVE categories called "Drinks" and "drinks" are a data-entry accident;
+		// an archived one frees its name. users_email_lower_unique is the idiom.
+		uniqueIndex('menu_categories_name_unique')
+			.on(table.restaurantId, sql`lower(${table.name})`)
+			.where(sql`${table.archivedAt} is null`),
+		unique('menu_categories_id_restaurant_unique').on(table.id, table.restaurantId),
+		foreignKey({
+			columns: [table.restaurantId, table.imageId],
+			foreignColumns: [menuImages.restaurantId, menuImages.id],
+			name: 'menu_categories_image_fk'
+		}).onDelete('restrict'),
+		index('menu_categories_image_idx').on(table.imageId)
 	]
 );
 

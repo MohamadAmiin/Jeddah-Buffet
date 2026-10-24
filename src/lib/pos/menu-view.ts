@@ -8,7 +8,13 @@ import type { LocalMenu } from './store';
 
 export type MenuItem = LocalMenu['items'][number];
 export type MenuGroup = LocalMenu['modifierGroups'][number];
-export type CategoryTab = { id: string; name: string; items: MenuItem[] };
+export type CategoryTab = {
+	id: string;
+	name: string;
+	/** The category's photo, or null; the synthetic "Other" tab never has one. */
+	imageId: string | null;
+	items: MenuItem[];
+};
 
 const bySortOrder = <T extends { sortOrder: number }>(a: T, b: T) => a.sortOrder - b.sortOrder;
 
@@ -21,12 +27,13 @@ export function itemsByCategory(menu: LocalMenu): CategoryTab[] {
 	const tabs: CategoryTab[] = [...menu.categories].sort(bySortOrder).map((c) => ({
 		id: c.id,
 		name: c.name,
+		imageId: c.imageId,
 		items: menu.items.filter((i) => i.categoryId === c.id).sort(bySortOrder)
 	}));
 	const orphans = menu.items
 		.filter((i) => i.categoryId === null || !known.has(i.categoryId))
 		.sort(bySortOrder);
-	if (orphans.length > 0) tabs.push({ id: 'other', name: 'Other', items: orphans });
+	if (orphans.length > 0) tabs.push({ id: 'other', name: 'Other', imageId: null, items: orphans });
 	return tabs;
 }
 

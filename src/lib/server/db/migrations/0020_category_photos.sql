@@ -1,0 +1,3 @@
+ALTER TABLE "menu_categories" ADD COLUMN "image_id" uuid;--> statement-breakpoint
+ALTER TABLE "menu_categories" ADD CONSTRAINT "menu_categories_image_fk" FOREIGN KEY ("restaurant_id","image_id") REFERENCES "public"."menu_images"("restaurant_id","id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "menu_categories_image_idx" ON "menu_categories" USING btree ("image_id");

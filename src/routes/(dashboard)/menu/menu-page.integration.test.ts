@@ -309,7 +309,10 @@ describe('the /menu page', () => {
 		});
 
 		// Saving the form again with Default still chosen writes and audits nothing.
-		expect(await act('updateItem', form(''))).toEqual({ message: 'No change to save.' });
+		expect(await act('updateItem', form(''))).toEqual({
+			message: 'No change to save.',
+			unchanged: true
+		});
 		expect(await rateChangeAudits()).toHaveLength(1);
 	});
 
@@ -663,6 +666,77 @@ describe('the /menu page — optional categories, availability, photos (menu-and
 		expect(await act('removeImage', makeEvent(r.asOwner, { itemId }))).toEqual({
 			message: 'There was no photo.'
 		});
+	});
+
+	// A category's photo (2026-10-23): the same checks and the same one-row rule as
+	// an item's, shown to the owner on the Categories card.
+	it('stores, replaces and removes a category photo, and refuses SVG bytes and an empty file', async () => {
+		const r = await owner();
+		const categoryId = r.categoryId;
+		type Saved = { message: string; imageId?: string };
+
+		const first = (await act(
+			'setCategoryImage',
+			makeEvent(r.asOwner, { categoryId, image: pngFile() })
+		)) as Saved;
+		expect(first.message).toBe('Photo saved.');
+		const data = (await load(makeEvent(r.asOwner) as never)) as {
+			categories: { id: string; imageUrl: string | null }[];
+		};
+		expect(data.categories.find((c) => c.id === categoryId)?.imageUrl).toBe(
+			`/menu/images/${first.imageId}`
+		);
+
+		// A new photo is a new row, and the replaced one is dropped.
+		const second = (await act(
+			'setCategoryImage',
+			makeEvent(r.asOwner, { categoryId, image: pngFile() })
+		)) as Saved;
+		expect(second.imageId).not.toBe(first.imageId);
+		expect(await photoRows(r.restaurantId)).toHaveLength(1);
+
+		const svg = new File(['<svg xmlns="http://www.w3.org/2000/svg"></svg>'], 'x.png', {
+			type: 'image/png'
+		});
+		expect(
+			await act('setCategoryImage', makeEvent(r.asOwner, { categoryId, image: svg }))
+		).toMatchObject({ status: 400, data: { message: 'Use a JPEG, PNG or WebP photo.' } });
+		const empty = new File([], 'empty.png', { type: 'image/png' });
+		expect(
+			await act('setCategoryImage', makeEvent(r.asOwner, { categoryId, image: empty }))
+		).toMatchObject({ status: 400, data: { message: 'Choose a photo.' } });
+		expect(await photoRows(r.restaurantId)).toHaveLength(1);
+
+		expect(await act('removeCategoryImage', makeEvent(r.asOwner, { categoryId }))).toEqual({
+			message: 'Photo removed.'
+		});
+		expect(await photoRows(r.restaurantId)).toHaveLength(0);
+		expect(await act('removeCategoryImage', makeEvent(r.asOwner, { categoryId }))).toEqual({
+			message: 'There was no photo.'
+		});
+	});
+
+	it("refuses a photo for another restaurant's category, and stores nothing", async () => {
+		const r = await owner();
+		// The other restaurant needs no owner (owner@cafe.com is taken): its settings
+		// row, which the category's version bump writes, is enough.
+		const [other] = await db.insert(restaurants).values({ name: 'Cafe Two' }).returning();
+		await db.transaction((tx) =>
+			onRestaurantCreated(tx, other.id, {
+				restaurantName: 'Cafe Two',
+				timeZone: 'Africa/Mogadishu'
+			})
+		);
+		const theirs = await db.transaction((tx) => createCategory(tx, other.id, { name: 'Food' }));
+
+		expect(
+			await act(
+				'setCategoryImage',
+				makeEvent(r.asOwner, { categoryId: theirs.id, image: pngFile() })
+			)
+		).toMatchObject({ status: 400, data: { message: 'That category no longer exists.' } });
+		expect(await photoRows(r.restaurantId)).toHaveLength(0);
+		expect(await photoRows(other.id)).toHaveLength(0);
 	});
 
 	it('refuses a 121-character item name, and stores nothing', async () => {

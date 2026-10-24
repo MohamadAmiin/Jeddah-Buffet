@@ -140,6 +140,7 @@ const choices = z.coerce
 export const createCategorySchema = z.object({ name });
 export const renameCategorySchema = z.object({ categoryId: id, name });
 export const archiveCategorySchema = z.object({ categoryId: id });
+export const categoryIdSchema = z.object({ categoryId: id });
 export const createItemSchema = z.object({ categoryId: optionalCategory, name, price: z.string() });
 /** A blank price on the edit form keeps the current one; a blank category moves the item to none. */
 export const updateItemSchema = z.object({

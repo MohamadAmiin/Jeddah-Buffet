@@ -84,6 +84,7 @@ import {
 	createModifierGroup,
 	createTaxRate,
 	linkModifierGroup,
+	setCategoryImage,
 	setItemImage,
 	updateTaxRate
 } from '$lib/server/menu';
@@ -426,6 +427,17 @@ const VALID: Record<PageKey, Record<string, ActionCase>> = {
 				);
 			},
 			form: (s) => ({ itemId: s.itemId })
+		},
+		setCategoryImage: { form: (s) => ({ categoryId: s.categoryId, image: pngFile() }) },
+		removeCategoryImage: {
+			// A photo to remove, as for removeImage.
+			before: async (s) => {
+				const bytes = Uint8Array.from(Buffer.from(PNG_BASE64, 'base64'));
+				await db.transaction((tx) =>
+					setCategoryImage(tx, s.restaurantId, s.categoryId, { bytes, contentType: 'image/png' })
+				);
+			},
+			form: (s) => ({ categoryId: s.categoryId })
 		}
 	}
 };
@@ -437,6 +449,7 @@ const RATE_NOT_FOUND = 'That rate no longer exists. Reload the page.';
 const RATE_NOT_LIVE = 'Choose a live rate of this restaurant.';
 const METHOD_NOT_FOUND = 'That payment method no longer exists. Reload the page.';
 const ITEM_RATE_GONE = 'That tax rate is no longer available.';
+const CATEGORY_GONE = 'That category no longer exists.';
 const NAME_REFUSED = 'Enter a name of 1 to 40 characters with no control characters.';
 const NUMBER_REFUSED = 'The merchant number is up to 40 characters with no control characters.';
 const LINE_REFUSED = 'Each line is up to 120 characters of plain text.';
@@ -655,6 +668,18 @@ describe('cross-tenant: B’s owner can never reach A’s rows', () => {
 				taxRateId: a.spareRateId
 			}),
 			message: ITEM_RATE_GONE
+		},
+		{
+			key: 'menu',
+			action: 'setCategoryImage',
+			form: (a) => ({ categoryId: a.categoryId, image: pngFile() }),
+			message: CATEGORY_GONE
+		},
+		{
+			key: 'menu',
+			action: 'removeCategoryImage',
+			form: (a) => ({ categoryId: a.categoryId }),
+			message: CATEGORY_GONE
 		}
 	];
 
