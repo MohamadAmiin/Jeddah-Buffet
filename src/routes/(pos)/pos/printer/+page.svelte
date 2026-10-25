@@ -500,9 +500,9 @@
 	function explainRefusal(reason: PairingRefusal): string {
 		switch (reason) {
 			case 'closed':
-				return '○ Pairing is closed on the print agent. On this PC, run the matcami print agent file again and press Open pairing for a till, then press Pair this till again';
+				return '○ Pairing is closed on the print agent. On this PC, run the matcami print agent file again (download it below), then press Pair this till again';
 			case 'claimed':
-				return '✕ Pairing was already used. On this PC, run the matcami print agent file again and press Open pairing for a till, then press Pair this till. If you did not pair a till since installing it, something else on this PC took the pairing: choose Advanced → Reset the pairing key there';
+				return '✕ Pairing was already used. On this PC, run the matcami print agent file again (download it below), then press Pair this till. If that says "already used" again at once, something else on this PC took the pairing: on the agent\'s setup page choose Advanced → Reset the pairing key, then press Pair this till';
 			case 'blocked':
 				return "✕ Pairing blocked by Chrome — open Chrome's site settings for this address and allow local network access, then try again";
 			case 'unreachable':

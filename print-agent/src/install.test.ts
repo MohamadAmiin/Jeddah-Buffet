@@ -67,9 +67,13 @@ describe('planInstall — what running the downloaded file does', () => {
 		]);
 	});
 
-	it('an update (same origin, agent running): stops it first and KEEPS the settings and the pairing', () => {
+	// 2026-10-25: a till that lost its pairing (Forget pairing, a cleared browser)
+	// is told to run this file again, so every run must reopen pairing — the
+	// settings and the token stay, so a paired till is unaffected.
+	it('an update (same origin, agent running): stops it first, KEEPS the settings and the token, and reopens pairing', () => {
 		const steps = kinds(plan({ config: installed(), agentAnswering: true }));
 		expect(steps).toEqual([
+			'open-pairing',
 			'stop-agent',
 			'copy-exe',
 			'register-autostart',
@@ -77,7 +81,6 @@ describe('planInstall — what running the downloaded file does', () => {
 			'open-setup'
 		]);
 		expect(steps).not.toContain('create-config');
-		expect(steps).not.toContain('open-pairing');
 	});
 
 	it('a download from another address: takes the baked origin and opens pairing for it', () => {
@@ -98,16 +101,16 @@ describe('planInstall — what running the downloaded file does', () => {
 		expect(kinds(plan({ config: installed(), exeIsInstalled: true }))).not.toContain('copy-exe');
 	});
 
-	// Found running the real Linux installer twice (T-18): an update said
-	// "Pair this till" although the till stayed paired.
-	it('asks for "Pair this till" only when the run opened pairing', () => {
+	// Found running the real Linux installer twice (T-18): an update must not
+	// tell a paired till to pair. It says so, and names the key for a till that is not.
+	it('tells a fresh install to pair, and an update that a paired till stays paired', () => {
 		const pair = 'Next: on the till, sign in as the owner → Printer → Pair this till.';
 		expect(closingLine(plan({ config: 'missing' }))).toBe(pair);
 		expect(closingLine(plan({ config: installed({ origin: 'https://old.example.com' }) }))).toBe(
 			pair
 		);
 		expect(closingLine(plan({ config: installed(), agentAnswering: true }))).toBe(
-			'The till stays paired: nothing to do there.'
+			'A paired till stays paired. A till that is not paired: sign in as the owner → Printer → Pair this till.'
 		);
 	});
 });

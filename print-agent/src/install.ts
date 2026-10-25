@@ -90,16 +90,22 @@ export function planInstall(input: InstallInput): Step[] {
 	}
 	const steps: Step[] = [];
 	if (input.config === 'missing') {
-		steps.push({ kind: 'create-config' }, { kind: 'open-pairing' });
+		steps.push({ kind: 'create-config' });
 	} else {
 		if (input.config.origin !== input.baked.origin) {
-			steps.push(
-				{ kind: 'update-origin', from: input.config.origin, to: input.baked.origin },
-				{ kind: 'open-pairing' }
-			);
+			steps.push({ kind: 'update-origin', from: input.config.origin, to: input.baked.origin });
 		}
 		if (input.config.setupSecret === null) steps.push({ kind: 'add-setup-secret' });
 	}
+	// EVERY run opens pairing (2026-10-25). The till's own recovery sentence
+	// ("run the matcami print agent file again") is what an owner follows after
+	// Forget pairing, a cleared browser or a new browser profile, and pairing
+	// has been single-use since 2026-10-01: a run that kept it closed sent them
+	// in a circle (a live Windows till, 2026-10-25). An open claim that no till
+	// takes costs nothing a first install did not already accept (pairing.ts,
+	// THE TRADE), and a till that stayed paired is simply not asked to press
+	// anything (closingLine).
+	steps.push({ kind: 'open-pairing' });
 	if (input.agentAnswering) steps.push({ kind: 'stop-agent' });
 	if (!input.exeIsInstalled) steps.push({ kind: 'copy-exe' });
 	steps.push({ kind: 'register-autostart' }, { kind: 'wait-ready' }, { kind: 'open-setup' });
@@ -300,14 +306,16 @@ function reportAutostart(result: AutostartResult, say: (line: string) => void): 
 }
 
 /**
- * The installer's last line. "Pair this till" only when this run opened
- * pairing (a first install, or a new app address): an update keeps the
- * pairing, and pressing the key then would only answer "Pairing is closed".
+ * The installer's last line. A first install, or a new app address, has no
+ * paired till yet: "Pair this till" is the next step. An update keeps the
+ * settings and the pairing, so a till that was paired has nothing to do — but
+ * pairing is open now (plan), so a till that lost its pairing can press the key.
  */
 export function closingLine(steps: readonly Step[]): string {
-	return steps.some((step) => step.kind === 'open-pairing')
+	const fresh = steps.some((s) => s.kind === 'create-config' || s.kind === 'update-origin');
+	return fresh
 		? 'Next: on the till, sign in as the owner → Printer → Pair this till.'
-		: 'The till stays paired: nothing to do there.';
+		: 'A paired till stays paired. A till that is not paired: sign in as the owner → Printer → Pair this till.';
 }
 
 /** `install` — what running the downloaded file does. Resolves the exit code. */
