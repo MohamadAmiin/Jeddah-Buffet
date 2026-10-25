@@ -21,6 +21,7 @@ import { writeAudit } from '../audit';
 import { posSessions } from '../db/schema/pos-sessions';
 import { orders, payments } from '../db/schema/orders';
 import { restaurantSettings } from '../db/schema/restaurant-settings';
+import { users } from '../db/schema/users';
 
 /** Structurally identical to SyncContext in orders/validate.ts. Declared here
  * so this module never imports orders/. T-21 passes its SyncContext to these
@@ -303,7 +304,6 @@ export async function closeSession(
 // them as values.
 void orders;
 void payments;
-void asc;
 
 /** The device's currently OPEN session, or null. T-05's partial unique index
  * pos_sessions_one_open_per_device makes .limit(1) exact. */
@@ -336,4 +336,28 @@ export async function openSessionForDevice(
 		)
 		.limit(1);
 	return rows[0] ?? null;
+}
+
+/** Every OPEN session of the restaurant — at most one per device — with who
+ * opened it, oldest first. Read by the dashboard's /device page so the owner can
+ * see a shift left open: every sale on that till still lands on its business
+ * date (invariant 11), and only that till can close it. */
+export async function openSessionsForRestaurant(
+	database: Executor,
+	restaurantId: string
+): Promise<
+	Array<{ id: string; deviceId: string; businessDate: string; openedAt: Date; openedBy: string }>
+> {
+	return database
+		.select({
+			id: posSessions.id,
+			deviceId: posSessions.deviceId,
+			businessDate: posSessions.businessDate,
+			openedAt: posSessions.openedAt,
+			openedBy: users.displayName
+		})
+		.from(posSessions)
+		.innerJoin(users, eq(users.id, posSessions.openedByUserId))
+		.where(and(eq(posSessions.restaurantId, restaurantId), eq(posSessions.status, 'open')))
+		.orderBy(asc(posSessions.openedAt));
 }

@@ -38,6 +38,8 @@
 		today,
 		session,
 		employee,
+		mayManageShift,
+		onSignOut,
 		current
 	}: {
 		restaurantName: string | null;
@@ -51,6 +53,12 @@
 		today: string;
 		session: TillBarSession | null;
 		employee: TillBarEmployee | null;
+		/** Whether the signed-in employee holds pos.payment — the key the SERVER
+		 * demands of session.open and session.close (decision (d)). Hiding the shift
+		 * controls from a waiter is UX; the server's 403 is the control. */
+		mayManageShift: boolean;
+		/** Sign the employee out. The SHIFT stays as it is: it belongs to the till. */
+		onSignOut: () => void;
 		current: 'order' | 'sales' | 'other';
 	} = $props();
 
@@ -61,6 +69,12 @@
 	const sessionBusy = $derived(
 		session?.state === 'opening' ? 'Opening…' : session?.state === 'closing' ? 'Closing…' : null
 	);
+	// The employee menu's shift item: the one thing the shift needs next.
+	const shiftItem = $derived(
+		session === null ? 'Open shift…' : sessionBusy !== null ? 'Shift…' : 'Close shift…'
+	);
+	const SHIFT_KEY =
+		'min-h-touch-min min-w-touch-min rounded-control border-rail-line bg-rail-raise hidden shrink-0 items-center justify-center gap-2 border px-3 font-semibold sm:flex';
 
 	const PILL = 'inline-flex h-10 items-center gap-1.5 rounded-full px-2.5 text-body sm:px-3';
 	const OFFLINE_PAIR = 'bg-st-offline-bg text-st-offline font-semibold';
@@ -222,21 +236,40 @@
 		<span class="text-body text-rail-ink-2 leading-tight">{today}</span>
 	</p>
 
+	<!-- THE SHIFT: a real key whenever the signed-in employee may act on it — open
+	     one when there is none, close the one there is — and static words otherwise.
+	     Its icon is a CLOCK, never a lock: a lock on a till reads as "sign out", and
+	     a cashier who tapped it for that closed the shift and was signed out. The
+	     shift belongs to the till (spec 10): signing out does not touch it. -->
 	{#if session === null}
-		<p class="hidden shrink-0 flex-col leading-tight md:flex">
-			<span class="font-semibold"><span aria-hidden="true" class="font-mono">○</span> No shift</span
-			>
-			<span class="text-body text-rail-ink-2 hidden xl:block">Open one to start selling</span>
-		</p>
-	{:else if employee !== null}
+		{#if employee !== null && mayManageShift}
+			<a href={resolve('/pos/session')} aria-label="No shift · Open shift" class={SHIFT_KEY}>
+				<Icon name="clock" class="text-rail-ink-2 size-5" />
+				<span class="hidden flex-col leading-tight md:flex">
+					<span><span aria-hidden="true" class="font-mono">○</span> No shift</span>
+					<span class="text-body text-rail-ink-2 hidden font-normal xl:block">Open shift</span>
+				</span>
+				<Icon name="chevron-right" class="text-rail-ink-2 hidden size-4 md:block" />
+			</a>
+		{:else}
+			<p class="hidden shrink-0 flex-col leading-tight md:flex">
+				<span class="font-semibold"
+					><span aria-hidden="true" class="font-mono">○</span> No shift</span
+				>
+				<span class="text-body text-rail-ink-2 hidden xl:block"
+					>{employee === null ? 'Sign in to open one' : 'A cashier opens one'}</span
+				>
+			</p>
+		{/if}
+	{:else if employee !== null && mayManageShift}
 		<a
 			href={resolve('/pos/session')}
 			aria-label={sessionBusy
 				? `Shift · ${sessionBusy}`
 				: `Shift · business date ${businessDate} · Close shift`}
-			class="min-h-touch-min min-w-touch-min rounded-control border-rail-line bg-rail-raise hidden shrink-0 items-center justify-center gap-2 border px-3 font-semibold sm:flex"
+			class={SHIFT_KEY}
 		>
-			<Icon name="lock" class="text-rail-ink-2 size-5" />
+			<Icon name="clock" class="text-rail-ink-2 size-5" />
 			<span class="hidden flex-col leading-tight md:flex">
 				{#if sessionBusy}
 					<span><span aria-hidden="true" class="font-mono">◐</span> {sessionBusy}</span>
@@ -273,14 +306,10 @@
 				<Icon name="chevron-down" class="text-rail-ink-2 hidden size-4 sm:block" />
 			</summary>
 			<div data-panel class={PANEL}>
-				<a href={resolve('/pos')} class={MENU_ITEM}>
-					<Icon name="user-plus" class="text-ink-2 size-5" />
-					Switch employee
-				</a>
-				{#if session !== null}
+				{#if mayManageShift}
 					<a href={resolve('/pos/session')} class={MENU_ITEM}>
-						<Icon name="lock" class="text-ink-2 size-5" />
-						Close shift…
+						<Icon name="clock" class="text-ink-2 size-5" />
+						{shiftItem}
 					</a>
 				{/if}
 				<a href={resolve('/pos/sales')} class="{MENU_ITEM} 2xl:hidden">
@@ -294,6 +323,22 @@
 						Printer
 					</a>
 				{/if}
+				<!-- SIGN OUT, in those words. It ends this employee's turn at the till
+				     and nothing else: an open shift stays open for whoever signs in next,
+				     and closing a shift is the separate item above (spec 10 keeps the two
+				     apart). The sign-in screen's mount signs out too, so a bookmark or a
+				     back button cannot leave anyone signed in. -->
+				<div class="border-line mt-1 border-t pt-1">
+					<button type="button" onclick={onSignOut} class="{MENU_ITEM} w-full text-left">
+						<Icon name="log-out" class="text-ink-2 size-5" />
+						<span class="flex flex-col leading-tight">
+							<span>Sign out</span>
+							{#if session !== null}
+								<span class="text-body text-ink-2 font-normal">The shift stays open</span>
+							{/if}
+						</span>
+					</button>
+				</div>
 			</div>
 		</details>
 	{:else}

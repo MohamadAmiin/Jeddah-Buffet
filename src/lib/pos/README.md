@@ -72,6 +72,11 @@ invariant 5).
   `foreign_device` parks; a device 403 stops the flush and forgets the device.
 - `employee.svelte.ts` — the signed-in state; its mirror lives in `sessionStorage` with
   `lastActiveAt` and refuses to restore past the idle limit — NEVER `localStorage`.
+- `session.ts` — the local shift lifecycle (open, close, adopt the server's) and `staleShiftDate`: a
+  shift open for more than 24 hours cannot belong to one business date (spec 10), so the bar's
+  warnings chip and the shift screen name its date. The shift belongs to the TILL: **Sign out** in the
+  employee menu leaves it open; closing it signs the cashier out; both controls are offered only to an
+  employee holding `pos.payment`, the key the server demands of both ops.
 - `idle.ts` — the idle watch; `null` seconds is inert, never a default.
 - `menu-snapshot.ts` — parses the full menu snapshot; amounts stay decimal strings until
   `readMenu` converts them with `BigInt`; format 2 carries each item's resolved named rate and

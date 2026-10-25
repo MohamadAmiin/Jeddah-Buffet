@@ -8,7 +8,9 @@ import {
 	markSessionOpened,
 	openLocalSession,
 	readLocalSession,
-	readSessionRow
+	readSessionRow,
+	SHIFT_STALE_AFTER_MS,
+	staleShiftDate
 } from './session';
 
 const NOW = new Date('2026-09-28T08:00:00.000Z');
@@ -160,5 +162,40 @@ describe('adoptServerSession', () => {
 		const closed = await adoptServerSession('device-A', null);
 		expect(closed).toBe('closed');
 		expect(await readLocalSession('device-A')).toBeNull();
+	});
+});
+
+describe('staleShiftDate — a shift that has outlived its business date', () => {
+	const opened = new Date('2026-10-01T05:45:09.736Z');
+	const base = {
+		state: 'open' as const,
+		openedAt: opened.toISOString(),
+		businessDate: '2026-10-01'
+	};
+
+	it('says nothing for a day: 18:00 to 01:30 is spec 10 own example', () => {
+		expect(staleShiftDate(base, new Date(opened.getTime() + 7 * 3_600_000))).toBeNull();
+		expect(staleShiftDate(base, new Date(opened.getTime() + SHIFT_STALE_AFTER_MS))).toBeNull();
+	});
+
+	it('names the business date once a full day has passed', () => {
+		expect(staleShiftDate(base, new Date(opened.getTime() + SHIFT_STALE_AFTER_MS + 1))).toBe(
+			'2026-10-01'
+		);
+		expect(staleShiftDate(base, new Date('2026-10-16T10:00:00Z'))).toBe('2026-10-01');
+	});
+
+	it('falls back to the opened day while the server date has not arrived', () => {
+		expect(
+			staleShiftDate({ ...base, businessDate: undefined }, new Date('2026-10-16T10:00:00Z'))
+		).toBe('2026-10-01');
+	});
+
+	it('is silent for a shift that is not open, or whose openedAt is unreadable', () => {
+		const later = new Date('2026-10-16T10:00:00Z');
+		expect(staleShiftDate({ ...base, state: 'opening' }, later)).toBeNull();
+		expect(staleShiftDate({ ...base, state: 'closing' }, later)).toBeNull();
+		expect(staleShiftDate({ ...base, state: 'closed' }, later)).toBeNull();
+		expect(staleShiftDate({ ...base, openedAt: 'not a date' }, later)).toBeNull();
 	});
 });
