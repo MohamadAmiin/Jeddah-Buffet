@@ -62,7 +62,7 @@
 		logoForAgent,
 		logoGate
 	} from '$lib/pos/printing';
-	import { renderTestPage } from '$lib/pos/receipt';
+	import { renderArabicTestPage, renderTestPage } from '$lib/pos/receipt';
 	import {
 		confirmArabicPrinter,
 		confirmReceiptLogo,
@@ -701,6 +701,67 @@
 		}
 	}
 
+	/**
+	 * "Test Arabic" (2026-10-25): a page of nothing but Arabic in every form a
+	 * receipt uses — on each printer the agent can draw it on — so the owner judges
+	 * the printer in one look. It offers the same answers as the ordinary test page.
+	 */
+	async function testArabic() {
+		if (busy || !paired) return;
+		busy = true;
+		failure = '';
+		results = [];
+		arabicSentTo = [];
+		try {
+			status = await agentStatus();
+			if (status.state !== 'ready') {
+				results = [explain(status)];
+				return;
+			}
+			const printers = status.status.printers;
+			const roles: Array<'receipt' | 'kitchen'> = printers.kitchen
+				? ['receipt', 'kitchen']
+				: ['receipt'];
+			const now = new Date().toISOString();
+			for (const role of roles) {
+				const width = (role === 'kitchen' ? printers.kitchen : printers.receipt)!.width;
+				const arabic = await arabicForAgent(status.status, role, 'test');
+				if (!arabic.supported) {
+					results = [
+						...results,
+						'◆ Arabic prints as ? — update the print agent on this PC to print it'
+					];
+					break;
+				}
+				const sent = await submitJob({
+					id: `test-arabic:${crypto.randomUUID()}`,
+					printer: role,
+					lines: await forPaper(
+						renderArabicTestPage({
+							width,
+							restaurantName,
+							deviceCode,
+							now,
+							timeZone,
+							printer: role
+						}),
+						width,
+						true
+					),
+					cut: true
+				});
+				results = [...results, describe(role, sent).replace('Test page', 'Arabic test page')];
+				if ((sent === 'queued' || sent === 'duplicate') && arabic.printerKey) {
+					arabicSentTo = [...arabicSentTo, { role, key: arabic.printerKey }];
+				}
+			}
+		} catch (err) {
+			failure = `✕ ${err instanceof Error ? err.message : 'The Arabic test page could not be sent'}`;
+		} finally {
+			busy = false;
+		}
+	}
+
 	/** "Arabic printed correctly" on one printer: its receipts and tickets draw Arabic from now on. */
 	async function arabicPrinted(sent: { role: 'receipt' | 'kitchen'; key: string }) {
 		if (busy) return;
@@ -991,6 +1052,23 @@
 				>
 					{busy ? 'Working…' : 'Test print'}
 				</button>
+				{#if arabic?.supported}
+					<!-- Arabic on paper (2026-10-25): a page of Arabic alone, with the same
+					     "printed correctly" answers. Offered only when the agent can draw it. -->
+					<button
+						type="button"
+						class={secondary}
+						disabled={busy}
+						data-testid="test-arabic"
+						onclick={() => void testArabic()}
+					>
+						Test Arabic
+					</button>
+					<p class="text-ink-2 text-sm">
+						Prints a page of Arabic only — your name, an item line, bold and tall text — to check
+						this printer before receipts use it.
+					</p>
+				{/if}
 			{:else}
 				<p class="bg-raise-2 text-ink-2 rounded-control px-3 py-2" data-testid="pairing-help">
 					This till is not paired yet. Install the matcami print agent on this PC — download it
