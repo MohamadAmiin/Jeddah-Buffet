@@ -127,6 +127,20 @@ test('a full shift: online sale, offline sale, one sync each, two closes, the re
 		{ status: 'open', opening_cash_minor: '50000', business_date: businessDate }
 	]);
 
+	// 7b. Sign out, in those words, from the employee menu. The SHIFT stays open —
+	// it belongs to the till (spec 10) — and the next sign-in lands on the order
+	// screen, not on a second "Open a shift".
+	await tillPage.getByTestId('till-employee').click();
+	await tillPage.getByRole('button', { name: /^Sign out/ }).click();
+	await expect(tillPage).toHaveURL(/\/pos$/);
+	await expect(tillPage.getByTestId('till-employee')).toContainText('Nobody signed in');
+	await expect(tillPage.getByRole('banner')).toContainText('● Shift');
+	await pickEmployee(tillPage, 'The Cashier');
+	await enterPin(tillPage, '4321');
+	await expect(tillPage).toHaveURL(/\/pos\/order$/);
+	await expect(sessionKey).toBeVisible();
+	expect(await dbRows('select status from pos_sessions')).toEqual([{ status: 'open' }]);
+
 	// 8. The first sale, online: Burger + Drink, takeaway, 20.00 tendered.
 	await addItem(tillPage, 'Burger');
 	await addItem(tillPage, 'Drink');
