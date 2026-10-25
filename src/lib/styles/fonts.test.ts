@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PAPER_ARABIC_FAMILY, PAPER_LATIN_FAMILY } from '../pos/text-image';
 
 // src/lib/styles/ is three levels below the repository root.
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
@@ -21,7 +22,8 @@ const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const FONT_PACKAGES = [
 	'@fontsource-variable/archivo',
 	'@fontsource-variable/ibm-plex-sans',
-	'@fontsource/ibm-plex-mono'
+	'@fontsource/ibm-plex-mono',
+	'@fontsource/ibm-plex-sans-arabic'
 ] as const;
 
 // Each package's CSS entry point, and the token stack whose first name must match
@@ -147,5 +149,25 @@ describe('every stack degrades to a readable generic', () => {
 			`${token} is "${stack(token)}" and does not end in ${generic}. If the webfont fails ` +
 				'to download there must still be a sensible face to fall back to.'
 		).toBe(generic);
+	});
+});
+
+describe('the faces the till draws a line of Arabic in (2026-10-25)', () => {
+	// The same silent failure on paper: a canvas font naming a family no
+	// @font-face declares draws in a fallback face, every test still green.
+	const textImage = readFileSync(join(ROOT, 'src/lib/pos/text-image.ts'), 'utf8');
+
+	it.each([
+		'@fontsource/ibm-plex-sans-arabic/arabic-500.css',
+		'@fontsource/ibm-plex-sans-arabic/arabic-700.css'
+	])('text-image.ts imports %s, and it declares PAPER_ARABIC_FAMILY', (entry) => {
+		expect(textImage.includes(`'${entry}'`), `text-image.ts does not import '${entry}'`).toBe(true);
+		expect(declaredFamilies(readInstalled(entry))).toEqual([PAPER_ARABIC_FAMILY]);
+	});
+
+	it('PAPER_LATIN_FAMILY is the family the root layout loads for --font-mono', () => {
+		expect(declaredFamilies(readInstalled('@fontsource/ibm-plex-mono/400.css'))).toEqual([
+			PAPER_LATIN_FAMILY
+		]);
 	});
 });

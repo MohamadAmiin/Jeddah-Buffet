@@ -14,10 +14,17 @@ import {
 	type Cart,
 	type MenuItemForCart
 } from './orders';
-import { clearAgentSettings, saveAgentSettings, type AgentStatus } from './print-client';
 import {
+	clearAgentSettings,
+	saveAgentSettings,
+	type AgentState,
+	type AgentStatus
+} from './print-client';
+import {
+	arabicGate,
 	CATCH_UP_WINDOW_MS,
 	catchUp,
+	forPaper,
 	listRecentSales,
 	logoForAgent,
 	onAutoPrint,
@@ -31,13 +38,16 @@ import {
 } from './printing';
 import { flush } from './queue';
 import {
+	confirmArabicPrinter,
 	confirmReceiptLogo,
 	PAYMENT_METHODS_SETTING,
+	readArabicConfirmedPrinters,
 	RECEIPT_LAYOUT_SETTING,
 	refreshReceiptLogo,
+	withdrawArabicConfirmation,
 	withdrawReceiptLogoConfirmation
 } from './settings';
-import { cacheSettings, withDb, type LocalOrder } from './store';
+import { bindDevice, cacheSettings, forgetDevice, withDb, type LocalOrder } from './store';
 import { DEFAULT_RECEIPT_LAYOUT, type ReceiptLayout } from '../receipt-layout';
 
 function deleteDatabase(): Promise<void> {
@@ -88,20 +98,31 @@ function stubAgent(
 		receiptHost?: string;
 		/** Answering, but no printer address set yet. */
 		noPrinter?: boolean;
+		/** Arabic as pictures (2026-10-25): `text-images` in the features. */
+		textImages?: boolean;
+		/** The kitchen printer's host, so it has a key of its own. */
+		kitchenHost?: string;
 	} = {}
 ) {
 	const sent: Sent[] = [];
 	const receipt = over.receiptHost
 		? { host: over.receiptHost, port: 9100, width: 48, reachable: true, queued: 0 }
 		: { width: 48, reachable: true, queued: 0 };
+	const kitchenPrinter = over.kitchenHost
+		? { host: over.kitchenHost, port: 9100, width: 32, reachable: true, queued: 0 }
+		: { width: 32, reachable: true, queued: 0 };
+	const features = [
+		...(over.receiptHost || over.noPrinter ? ['printers', 'setup'] : []),
+		...(over.textImages ? ['text-images'] : [])
+	];
 	const status = {
 		agentVersion: over.agentVersion ?? 1,
-		...(over.receiptHost || over.noPrinter ? { features: ['printers', 'setup'] } : {}),
+		...(features.length > 0 ? { features } : {}),
 		printers: over.noPrinter
 			? { receipt: null, kitchen: null }
 			: {
 					receipt,
-					kitchen: over.kitchen === false ? null : { width: 32, reachable: true, queued: 0 }
+					kitchen: over.kitchen === false ? null : kitchenPrinter
 				}
 	};
 	const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -150,11 +171,16 @@ function acceptingServer(): typeof fetch {
 
 async function sell(
 	method: 'cash' | 'card' | 'mobile',
-	over: { now?: Date; deviceId?: string; orderType?: 'dine_in' | 'takeaway' | 'delivery' } = {}
+	over: {
+		now?: Date;
+		deviceId?: string;
+		orderType?: 'dine_in' | 'takeaway' | 'delivery';
+		item?: MenuItemForCart;
+	} = {}
 ) {
 	const deviceId = over.deviceId ?? 'device-A';
 	let cart = newCart(deviceId, over.orderType ?? 'takeaway', null, over.now ?? new Date(NOW_MS));
-	cart = addLine(cart, tea, { id: null, name: null, rateBp: 1000 });
+	cart = addLine(cart, over.item ?? tea, { id: null, name: null, rateBp: 1000 });
 	return completeSale({
 		cart,
 		payment: {
@@ -717,6 +743,198 @@ describe('the logo (T-24)', () => {
 		const gate = await logoForAgent(unnamed, 'receipt');
 		expect(gate.confirmed).toBe(false);
 		expect(gate.logo).toBeNull();
+	});
+});
+
+// ── Arabic on paper (2026-10-25) ────────────────────────────────────────────
+
+describe('Arabic on paper (2026-10-25)', () => {
+	const RECEIPT_KEY = '10.0.0.5:9100:48';
+	const KITCHEN_KEY = '10.0.0.6:9100:32';
+	const shay: MenuItemForCart = { id: 'item-shay', name: 'شاي بالنعناع', priceMinor: 850n };
+	const ARABIC = /[\u0600-\u06ff]/;
+	const PICTURE = { widthDots: 576, heightDots: 32, bitmap: 'A'.repeat(4 * Math.ceil(2304 / 3)) };
+	/** A stub drawing: records each line it was asked to draw. */
+	function drawing() {
+		const drawn: string[] = [];
+		const drawText = async (line: { text: string }) => {
+			drawn.push(line.text);
+			return PICTURE;
+		};
+		return { drawn, drawText };
+	}
+	const arabicHeader = () => cacheSettings([{ key: 'restaurantName', value: 'مطعم جدة' }]);
+	const pictures = (job: Sent) => linesOf(job).filter((l) => 'image' in l);
+
+	it('an agent without text-images prints every Arabic letter as ?, never a picture, never Arabic as text', async () => {
+		await arabicHeader();
+		await confirmArabicPrinter(RECEIPT_KEY);
+		const agent = stubAgent({ agentVersion: 2, receiptHost: '10.0.0.5' });
+		const { drawn, drawText } = drawing();
+		const { orderId } = await sell('cash', { item: shay });
+		await printOriginals(orderId, { drawer: false, fetchFn: agent.fetchFn, drawText });
+		const [receipt, kitchen] = agent.jobs();
+		expect(pictures(receipt!)).toEqual([]);
+		expect(textOf(receipt!)).toContain('???? ???');
+		expect(textOf(receipt!)).not.toMatch(ARABIC);
+		expect(textOf(kitchen!)).not.toMatch(ARABIC);
+		expect(drawn).toEqual([]);
+	});
+
+	it('text-images but this printer unconfirmed: still ? — a picture goes only where the owner watched one print', async () => {
+		await arabicHeader();
+		const agent = stubAgent({ agentVersion: 2, receiptHost: '10.0.0.5', textImages: true });
+		const { drawn, drawText } = drawing();
+		const { orderId } = await sell('cash', { item: shay });
+		await printOriginals(orderId, { drawer: false, fetchFn: agent.fetchFn, drawText });
+		expect(agent.jobs().flatMap(pictures)).toEqual([]);
+		expect(drawn).toEqual([]);
+	});
+
+	it('confirmed: each line that holds Arabic is a picture carrying its ? text; ASCII lines stay text; an unconfirmed kitchen printer gets ?', async () => {
+		await arabicHeader();
+		await confirmArabicPrinter(RECEIPT_KEY);
+		const agent = stubAgent({
+			agentVersion: 2,
+			receiptHost: '10.0.0.5',
+			kitchenHost: '10.0.0.6',
+			textImages: true
+		});
+		const { drawn, drawText } = drawing();
+		const { orderId } = await sell('cash', { item: shay });
+		await printOriginals(orderId, { drawer: false, fetchFn: agent.fetchFn, drawText });
+		const [receipt, kitchen] = agent.jobs();
+		const drawnLines = pictures(receipt!);
+		expect(drawnLines.length).toBeGreaterThanOrEqual(2); // the name and the item
+		for (const line of drawnLines) {
+			expect(line.image).toEqual(PICTURE);
+			const fallback = line.fallback as { text: string };
+			expect(fallback.text).toMatch(/^[\x20-\x7e]+$/);
+			expect(fallback.text).toContain('?');
+		}
+		expect(drawn.some((t) => t.includes('مطعم جدة'))).toBe(true);
+		expect(drawn.some((t) => t.includes('شاي بالنعناع'))).toBe(true);
+		expect(drawn.every((t) => ARABIC.test(t))).toBe(true);
+		// The totals stayed text, and no Arabic reached the agent as text.
+		expect(textOf(receipt!)).toMatch(/TOTAL/);
+		expect(textOf(receipt!)).not.toMatch(ARABIC);
+		// The kitchen printer has its own key, not confirmed: its Arabic is ?.
+		expect(pictures(kitchen!)).toEqual([]);
+		expect(textOf(kitchen!)).toContain('??? ???????');
+
+		// Confirmed too, the kitchen ticket draws its Arabic line.
+		await confirmArabicPrinter(KITCHEN_KEY);
+		await reprint(orderId, 'kitchen', 'Amina', { fetchFn: agent.fetchFn, drawText });
+		expect(pictures(agent.jobs().at(-1)!).length).toBeGreaterThanOrEqual(1);
+	});
+
+	it('a job the agent refuses because of its pictures is sent again under the SAME id with each Arabic line as its text — no line lost', async () => {
+		await arabicHeader();
+		await confirmArabicPrinter(RECEIPT_KEY);
+		const agent = stubAgent({
+			agentVersion: 2,
+			receiptHost: '10.0.0.5',
+			textImages: true,
+			refuseImages: true
+		});
+		const { drawText } = drawing();
+		const { orderId } = await sell('cash', { item: shay });
+		const result = await printOriginals(orderId, {
+			drawer: false,
+			fetchFn: agent.fetchFn,
+			drawText
+		});
+		expect(result.receipt).toBe('queued');
+		const receipts = agent.jobs().filter((j) => j.body.printer === 'receipt');
+		expect(receipts.map((j) => j.body.id)).toEqual([
+			`${orderId}:receipt:0`,
+			`${orderId}:receipt:0`
+		]);
+		expect(pictures(receipts[1]!)).toEqual([]);
+		// As many lines as before: each picture became its fallback text.
+		expect(linesOf(receipts[1]!)).toHaveLength(linesOf(receipts[0]!).length);
+		expect(textOf(receipts[1]!)).toContain('???? ???');
+	});
+
+	it('a drawing that fails prints the line as its ? text', async () => {
+		await arabicHeader();
+		await confirmArabicPrinter(RECEIPT_KEY);
+		const agent = stubAgent({ agentVersion: 2, receiptHost: '10.0.0.5', textImages: true });
+		const drawText = async () => {
+			throw new Error('no canvas');
+		};
+		const { orderId } = await sell('cash', { item: shay });
+		await printOriginals(orderId, { drawer: false, fetchFn: agent.fetchFn, drawText });
+		const [receipt] = agent.jobs();
+		expect(pictures(receipt!)).toEqual([]);
+		expect(textOf(receipt!)).toContain('???? ???');
+	});
+
+	it('"It did not print correctly" takes back only that printer', async () => {
+		await confirmArabicPrinter(RECEIPT_KEY);
+		await confirmArabicPrinter(KITCHEN_KEY);
+		await confirmArabicPrinter(RECEIPT_KEY);
+		expect(await readArabicConfirmedPrinters()).toEqual([RECEIPT_KEY, KITCHEN_KEY]);
+		await withdrawArabicConfirmation(RECEIPT_KEY);
+		expect(await readArabicConfirmedPrinters()).toEqual([KITCHEN_KEY]);
+		expect(() => confirmArabicPrinter('')).toThrow(TypeError);
+	});
+
+	it('the confirmation is kept through a re-registration and a revocation, like the pairing', async () => {
+		await bindDevice('device-A');
+		await confirmArabicPrinter(RECEIPT_KEY);
+		await bindDevice('device-B');
+		expect(await readArabicConfirmedPrinters()).toEqual([RECEIPT_KEY]);
+		await forgetDevice();
+		expect(await readArabicConfirmedPrinters()).toEqual([RECEIPT_KEY]);
+	});
+
+	it('arabicGate: in use only when the cache holds Arabic; confirmed only when every printer in use is', async () => {
+		const ready = (kitchen: boolean): AgentState => ({
+			state: 'ready',
+			status: {
+				agentVersion: 2,
+				features: ['printers', 'setup', 'text-images'],
+				printers: {
+					receipt: { host: '10.0.0.5', port: 9100, width: 48, reachable: true, queued: 0 },
+					kitchen: kitchen
+						? { host: '10.0.0.6', port: 9100, width: 32, reachable: true, queued: 0 }
+						: null
+				}
+			}
+		});
+		expect(await arabicGate(ready(false))).toEqual({
+			inUse: false,
+			supported: true,
+			confirmed: false
+		});
+		await arabicHeader();
+		await confirmArabicPrinter(RECEIPT_KEY);
+		expect(await arabicGate(ready(false))).toEqual({
+			inUse: true,
+			supported: true,
+			confirmed: true
+		});
+		expect(await arabicGate(ready(true))).toEqual({
+			inUse: true,
+			supported: true,
+			confirmed: false
+		});
+		await confirmArabicPrinter(KITCHEN_KEY);
+		expect(await arabicGate(ready(true))).toEqual({
+			inUse: true,
+			supported: true,
+			confirmed: true
+		});
+		expect(await arabicGate(null)).toEqual({ inUse: true, supported: false, confirmed: false });
+	});
+
+	it('forPaper passes ASCII and image lines as they are', async () => {
+		const logo = { image: LOGO_IMAGE };
+		expect(await forPaper([logo, { text: 'TOTAL 8.80', bold: true }], 48, true)).toEqual([
+			logo,
+			{ text: 'TOTAL 8.80', bold: true }
+		]);
 	});
 });
 

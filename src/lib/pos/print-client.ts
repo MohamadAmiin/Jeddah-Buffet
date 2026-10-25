@@ -88,10 +88,19 @@ export function agentPrintsImages(status: AgentStatus): boolean {
 	return typeof status.agentVersion === 'number' && status.agentVersion >= IMAGE_AGENT_VERSION;
 }
 
-/** The agent offers this (`features` in its status) — e.g. 'printers' = PUT /printers, 'local-printers' = GET /local-printers. */
+/**
+ * The agent prints lines of Arabic as pictures (2026-10-25): up to 200 image
+ * lines a job, each with a plain-text `fallback` (print-agent server.ts).
+ */
+export const TEXT_IMAGES_FEATURE = 'text-images';
+
+/**
+ * The agent offers this (`features` in its status) — e.g. 'printers' = PUT /printers,
+ * 'local-printers' = GET /local-printers, 'text-images' = pictures of Arabic.
+ */
 export function agentSupports(
 	status: AgentStatus,
-	feature: 'printers' | 'setup' | 'local-printers'
+	feature: 'printers' | 'setup' | 'local-printers' | typeof TEXT_IMAGES_FEATURE
 ): boolean {
 	return Array.isArray(status.features) && status.features.includes(feature);
 }
@@ -613,6 +622,12 @@ export type PrinterChipOptions = {
 	logoCached?: boolean;
 	/** The owner confirmed that logo's test print on /pos/printer (readConfirmedLogoSha). */
 	logoConfirmed?: boolean;
+	/**
+	 * Arabic on paper (2026-10-25, printing.ts arabicGate): the till's menu or
+	 * receipt holds Arabic; the agent can print it as pictures; and every
+	 * printer in use was confirmed for it on /pos/printer.
+	 */
+	arabic?: { inUse: boolean; supported: boolean; confirmed: boolean };
 };
 
 /**
@@ -639,6 +654,21 @@ export function printerChip(state: AgentState, opts: PrinterChipOptions = {}): P
 				return {
 					glyph: '◆',
 					text: `Test-print the logo before receipts use it${suffix}`,
+					tone: 'offline'
+				};
+			}
+			// Arabic prints as '?' until both are true — receipts still print.
+			if (opts.arabic?.inUse && !opts.arabic.supported) {
+				return {
+					glyph: '◆',
+					text: `Update the print agent to print Arabic${suffix}`,
+					tone: 'offline'
+				};
+			}
+			if (opts.arabic?.inUse && opts.arabic.supported && !opts.arabic.confirmed) {
+				return {
+					glyph: '◆',
+					text: `Test-print Arabic before receipts use it${suffix}`,
 					tone: 'offline'
 				};
 			}

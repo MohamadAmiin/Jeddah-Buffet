@@ -4,9 +4,10 @@
 // per-line amounts, the stored per-rate tax rows, cashier, time) plus what the
 // CALLER passes in — the owner's receipt layout, the payment numbers and the
 // logo, which src/lib/pos/printing.ts reads from the till's cache — and returns
-// lines for the print agent to encode: printable ASCII text lines and, on a
-// receipt or on the receipt printer's test page, at most one image line. It
-// reads no setting and computes nothing.
+// lines for the print agent to encode: text lines — printable ASCII, plus any
+// Arabic (2026-10-25), which printing.ts draws as pictures on the way out —
+// and, on a receipt or on the receipt printer's test page, at most one logo
+// image line. It reads no setting and computes nothing.
 // It runs on the till, so it works offline.
 //
 // EVERY AMOUNT ON PAPER IS A STORED STRING FORMATTED, NEVER RECOMPUTED
@@ -32,9 +33,13 @@
 // control bytes and misprints anything outside 0x20–0x7E, so toPrintable maps
 // the money formatter's U+2212 minus and U+00A0 space, curly quotes, dashes and
 // accents to ASCII, turns control characters (an ESC pasted into a table label)
-// into spaces, and every other character into '?' — BEFORE any width is measured.
-// Every owner-written text — a header or footer line, the heading, a method or
-// rate name — goes through it the same way.
+// into spaces, KEEPS Arabic (2026-10-25: one column per letter, vowel marks and
+// invisible direction marks dropped so the columns still add up), and turns
+// every other character into '?' — BEFORE any width is measured. Every
+// owner-written text — a header or footer line, the heading, a method or rate
+// name — goes through it the same way. Arabic never reaches the agent as text:
+// printing.ts draws each line that holds it as a picture (text-image.ts), or
+// prints it as '?' where a picture may not go (paper-script.ts asciiFallback).
 import { formatAmount, moneyFormatFor } from '../money/format';
 import { minor } from '../money';
 // Aliased on import: the plan's tripwire greps every file this plan added for a
@@ -42,6 +47,7 @@ import { minor } from '../money';
 import { parseInvoiceNumber as parseInvoice, type OrderType } from '../sync-ops';
 import type { ReceiptLayout, ReceiptPaymentNumber } from '../receipt-layout';
 import { formatTaxRate } from './menu-view';
+import { isArabicChar } from './paper-script';
 import type { SaleSnapshot } from './store';
 
 /** One line of text for the agent to encode. */
@@ -54,11 +60,18 @@ export type TextLine = {
 };
 
 /**
- * The logo as plain 1-bit pixel data — the width in dots (a multiple of 8), the
+ * A picture as plain 1-bit pixel data — the width in dots (a multiple of 8), the
  * height in dots and the packed rows as standard base64 — for a print agent of
- * version 2 or later to validate and encode itself (T-25). Never any other key.
+ * version 2 or later to validate and encode itself (T-25). The logo carries
+ * nothing else. A line of Arabic drawn as a picture (printing.ts, 2026-10-25)
+ * also carries `fallback`, the same line as plain text, which an agent with the
+ * `text-images` feature prints instead should the printer change while the job
+ * waits; it is never sent to an agent without that feature.
  */
-export type ImageLine = { image: { widthDots: number; heightDots: number; bitmap: string } };
+export type ImageLine = {
+	image: { widthDots: number; heightDots: number; bitmap: string };
+	fallback?: TextLine;
+};
 
 export type PrintLine = TextLine | ImageLine;
 
@@ -108,16 +121,35 @@ const ASCII_MAP: [RegExp, string][] = [
 	[/×/g, 'x']
 ];
 
-/** Printable ASCII (0x20–0x7E) only. Idempotent. */
+/**
+ * Invisible marks that would each take a column: zero-width spaces and joiners,
+ * the left-to-right and right-to-left marks, embeddings, overrides and
+ * isolates, the Arabic letter mark and a stray byte-order mark.
+ */
+const INVISIBLE = /[\u200b-\u200f\u202a-\u202e\u2066-\u2069\u061c\ufeff]/g;
+/**
+ * Arabic vowel and Quranic marks (tashkeel). Each is a combining mark that
+ * takes no column of its own on screen but would take one in the receipt's
+ * character grid, so they are dropped on paper — modern menus seldom carry them.
+ */
+const ARABIC_MARKS = /[\u064b-\u065f\u0670\u06d6-\u06ed]/g;
+
+/**
+ * Printable ASCII (0x20–0x7E) and Arabic letters only, one column each.
+ * Idempotent.
+ */
 export function toPrintable(value: string): string {
 	let text = value;
 	for (const [pattern, replacement] of ASCII_MAP) text = text.replace(pattern, replacement);
-	// Decompose accents (é → e + U+0301) and drop the combining marks.
-	text = text.normalize('NFKD').replace(/[̀-ͯ]/g, '');
+	// Decompose accents (é → e + U+0301) and drop the combining marks — then
+	// recompose, which puts back the Arabic letters NFKD split (أ → ا + hamza)
+	// and folds Arabic presentation forms to the letters they show.
+	text = text.normalize('NFKD').replace(/[̀-ͯ]/g, '').normalize('NFC');
+	text = text.replace(INVISIBLE, '').replace(ARABIC_MARKS, '');
 	// Control characters would COMMAND the printer: a space, never the byte.
 	text = text.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ');
-	// Whatever is left outside printable ASCII prints as a question mark.
-	return text.replace(/[^\x20-\x7e]/g, '?');
+	// Whatever is left outside printable ASCII and Arabic prints as a question mark.
+	return [...text].map((ch) => (/[\x20-\x7e]/.test(ch) || isArabicChar(ch) ? ch : '?')).join('');
 }
 
 /** A stored decimal string of minor units → the money formatter's text, printable. */
@@ -588,7 +620,16 @@ export type TestPageInput = {
 	 * any receipt carries it. Absent or null: text only.
 	 */
 	logo?: ImageLine['image'] | null;
+	/**
+	 * An Arabic sample line (2026-10-25), for an agent that prints Arabic as
+	 * pictures: the owner sees on paper that this printer draws it before any
+	 * receipt carries Arabic, and confirms it on /pos/printer.
+	 */
+	arabicSample?: boolean;
 };
+
+/** The test page's Arabic line: "Arabic printing test". */
+export const ARABIC_SAMPLE = 'اختبار الطباعة العربية';
 
 /**
  * What the owner prints from /pos/printer to prove pairing works: the name,
@@ -613,7 +654,14 @@ export function renderTestPage(input: TestPageInput): PrintLine[] {
 		line(ruler),
 		rule('-', w),
 		...lines(center('IF YOU CAN READ THIS,', w), { align: 'center' }),
-		...lines(center('PRINTING WORKS', w), { align: 'center' })
+		...lines(center('PRINTING WORKS', w), { align: 'center' }),
+		...(input.arabicSample
+			? [
+					rule('-', w),
+					...lines(center('THE NEXT LINE IS ARABIC:', w), { align: 'center' }),
+					...lines(center(ARABIC_SAMPLE, w), { bold: true, align: 'center' })
+				]
+			: [])
 	];
 	// toPrintable maps the text lines only; the image line is passed on exactly.
 	const textLines: TextLine[] = out.map((l) => ({ ...l, text: toPrintable(l.text) }));

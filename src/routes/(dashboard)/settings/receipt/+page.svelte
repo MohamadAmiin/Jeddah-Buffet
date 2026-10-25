@@ -28,6 +28,7 @@
 		type PrintLine,
 		type ReceiptWidth
 	} from '$lib/pos/receipt';
+	import { hasArabic } from '$lib/pos/paper-script';
 	import { settingsSections, SETTINGS_SECTION_LINK } from '../sections';
 
 	// THE RECEIPT PAGE (tasks/settings-tax-payments-receipt T-31): the header
@@ -242,6 +243,9 @@
 			return { lines: [], error: PREVIEW_ERROR };
 		}
 	});
+	const previewHasArabic = $derived(
+		preview.lines.some((line) => !isImageLine(line) && hasArabic(line.text))
+	);
 
 	// A printer column is 12 dots wide (384 dots at 32 columns, 576 at 48), so a
 	// logo's share of the paper is widthDots / 12 character cells — the `ch` unit
@@ -537,6 +541,14 @@
 					<p class="text-body text-ink-2">
 						A sample sale through the till's own formatter, with what the form holds now.
 					</p>
+					{#if previewHasArabic}
+						<!-- Arabic on paper (2026-10-25): the till draws it, the printer must be checked. -->
+						<p class="text-body text-ink-2" data-testid="arabic-note">
+							◇ The till prints Arabic as a picture. On each till PC, install the latest print agent
+							(POS page), then on the till open Printer, press Test print and confirm the Arabic
+							line. Until then Arabic prints as ?.
+						</p>
+					{/if}
 				</div>
 
 				<div class="flex flex-wrap gap-2" role="group" aria-label="Preview width">

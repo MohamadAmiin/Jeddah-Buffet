@@ -422,7 +422,14 @@ const BOUND_DEVICE_KEY = 'deviceId';
  */
 export const PRINT_AGENT_URL_KEY = 'printAgentUrl';
 export const PRINT_AGENT_TOKEN_KEY = 'printAgentToken';
-const KEPT_SETTING_KEYS = [PRINT_AGENT_URL_KEY, PRINT_AGENT_TOKEN_KEY];
+/**
+ * The printers the owner watched print Arabic correctly (settings.ts
+ * confirmArabicPrinter, 2026-10-25): printer keys, which name the PC's own
+ * printers, so they are kept with the pairing — a re-registered till does not
+ * test-print Arabic again. The logo confirmation is NOT kept (above).
+ */
+export const ARABIC_CONFIRMED_KEY = 'arabicConfirmedPrinters';
+const KEPT_SETTING_KEYS = [PRINT_AGENT_URL_KEY, PRINT_AGENT_TOKEN_KEY, ARABIC_CONFIRMED_KEY];
 
 /**
  * Clear the settings store inside the caller's transaction, putting the pairing

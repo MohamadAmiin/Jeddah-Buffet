@@ -490,6 +490,36 @@ describe('agentPrintsImages (T-24)', () => {
 });
 
 describe('printerChip', () => {
+	// 2026-10-25: Arabic prints as '?' until the agent can draw it and the printer is confirmed.
+	it('says what Arabic needs, only when the till holds Arabic', () => {
+		const v2: ReadyStatus = {
+			agentVersion: 2,
+			printers: { receipt: { width: 48, reachable: true, queued: 0 }, kitchen: null }
+		};
+		const chip = (arabic: { inUse: boolean; supported: boolean; confirmed: boolean }) =>
+			printerChip({ state: 'ready', status: v2 }, { arabic });
+		expect(chip({ inUse: true, supported: false, confirmed: false })).toEqual({
+			glyph: '◆',
+			text: 'Update the print agent to print Arabic',
+			tone: 'offline'
+		});
+		expect(chip({ inUse: true, supported: true, confirmed: false })).toEqual({
+			glyph: '◆',
+			text: 'Test-print Arabic before receipts use it',
+			tone: 'offline'
+		});
+		const ready = { glyph: '●', text: 'Printer ready', tone: 'ok' };
+		expect(chip({ inUse: true, supported: true, confirmed: true })).toEqual(ready);
+		expect(chip({ inUse: false, supported: false, confirmed: false })).toEqual(ready);
+		// The logo's warning comes first.
+		expect(
+			printerChip(
+				{ state: 'ready', status: v2 },
+				{ logoCached: true, arabic: { inUse: true, supported: false, confirmed: false } }
+			).text
+		).toBe('Test-print the logo before receipts use it');
+	});
+
 	it('says when a ready agent is too old to print the cached logo, or the logo still needs its test print (T-24)', () => {
 		const v1: ReadyStatus = {
 			agentVersion: 1,

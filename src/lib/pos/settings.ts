@@ -35,7 +35,14 @@
 // no-restricted-imports rule for src/lib/pos enforces that boundary. The receipt
 // contract is the isomorphic src/lib/receipt-layout.ts (T-12).
 
-import { cacheSettings, forgetDevice, inTransaction, readCachedSetting, withDb } from './store';
+import {
+	ARABIC_CONFIRMED_KEY,
+	cacheSettings,
+	forgetDevice,
+	inTransaction,
+	readCachedSetting,
+	withDb
+} from './store';
 import { PAYMENT_METHODS, type PaymentMethod } from '../sync-ops';
 import {
 	DEFAULT_RECEIPT_LAYOUT,
@@ -411,6 +418,77 @@ export function withdrawReceiptLogoConfirmation(sha256?: string): Promise<void> 
 					store.delete(LOGO_CONFIRMED_KEY);
 					store.delete(LOGO_PRINTER_KEY);
 				}
+			};
+		})
+	);
+}
+
+// ── Arabic on paper (2026-10-25) ────────────────────────────────────────────
+//
+// THE ARABIC CONFIRMATION. The till draws each line that holds Arabic as a
+// 1-bit picture (text-image.ts), which a printer receives exactly as it
+// receives the logo: and a printer that does not implement `GS v 0` reads the
+// raster as ordinary data, which could by chance hold the drawer pulse (the
+// logo's Risk 6; invariant 9). So a receipt or kitchen ticket carries Arabic
+// pictures only to a printer the owner has watched print the test page's
+// Arabic line correctly, pressing "Arabic printed correctly" on /pos/printer;
+// until then its Arabic prints as '?' (printing.ts arabicForAgent). The
+// confirmation is a list of printer keys (print-client.ts printerKeyFor), one
+// per printer, and unlike the logo's it is KEPT through a re-registration with
+// the pairing (store.ts KEPT_SETTING_KEYS): it describes the PC's printers, not
+// the registration. "It did not print correctly" takes that printer's key back.
+
+const PRINTER_KEY_MAX = 300;
+
+/** The printer keys confirmed for Arabic, or [] when unset or garbled. */
+export async function readArabicConfirmedPrinters(): Promise<string[]> {
+	const value = await readCachedSetting(ARABIC_CONFIRMED_KEY);
+	if (!Array.isArray(value)) return [];
+
+	return value.filter(
+		(key): key is string =>
+			typeof key === 'string' && key.length > 0 && key.length <= PRINTER_KEY_MAX
+	);
+}
+
+/**
+ * Record that the owner saw the Arabic test line print correctly on the
+ * printer `printerKey` names. Refuses an empty or overlong key with a
+ * TypeError before any write. One readwrite transaction reads and writes, so
+ * two confirmations never lose each other.
+ */
+export function confirmArabicPrinter(printerKey: string): Promise<void> {
+	if (
+		typeof printerKey !== 'string' ||
+		printerKey.length === 0 ||
+		printerKey.length > PRINTER_KEY_MAX
+	) {
+		throw new TypeError(
+			'confirmArabicPrinter takes the key of the printer the test page printed on'
+		);
+	}
+	return updateArabicConfirmed((keys) =>
+		keys.includes(printerKey) ? keys : [...keys, printerKey]
+	);
+}
+
+/** "It did not print correctly": that printer's Arabic prints as '?' until a test print is confirmed again. */
+export function withdrawArabicConfirmation(printerKey: string): Promise<void> {
+	return updateArabicConfirmed((keys) => keys.filter((key) => key !== printerKey));
+}
+
+function updateArabicConfirmed(change: (keys: string[]) => string[]): Promise<void> {
+	return withDb((db) =>
+		inTransaction(db, ['settings'], 'readwrite', (tx) => {
+			const store = tx.objectStore('settings');
+			const current = store.get(ARABIC_CONFIRMED_KEY);
+
+			current.onsuccess = () => {
+				const stored = (current.result as { value?: unknown } | undefined)?.value;
+				const keys = Array.isArray(stored)
+					? stored.filter((key): key is string => typeof key === 'string')
+					: [];
+				store.put({ key: ARABIC_CONFIRMED_KEY, value: change(keys) });
 			};
 		})
 	);
