@@ -34,6 +34,7 @@ import {
 	type DrawerOutcome,
 	type DrawerRequest,
 	type Job,
+	type PrintLine,
 	type PrinterStatus,
 	type SubmitOutcome
 } from './server.ts';
@@ -45,19 +46,31 @@ export type QueuedJob = {
 	bytesBase64: string;
 	enqueuedAt: string;
 	/**
-	 * Only on a job that carries the logo: the printer (`host:port`) its image
-	 * was laid out for, and the same job encoded WITHOUT the image. The logo
-	 * confirmation vouches for one printer, and a printer that does not
-	 * implement `GS v 0` reads the raster as ordinary bytes — which could hold
-	 * the drawer pulse — so a job whose printer has changed since it was
-	 * queued goes out without its logo (bytesFor). Written at submit, never
-	 * re-encoded at send time.
+	 * Only on a job that carries an image — the logo, or a line of Arabic drawn
+	 * as a picture: the printer (`host:port`) its images were laid out for, and
+	 * the same job encoded WITHOUT them, each Arabic picture replaced by its
+	 * `fallback` text line (plainLines). A confirmation vouches for one printer,
+	 * and a printer that does not implement `GS v 0` reads the raster as
+	 * ordinary bytes — which could hold the drawer pulse — so a job whose
+	 * printer has changed since it was queued goes out without its pictures
+	 * (bytesFor), every line still on it. Written at submit, never re-encoded at
+	 * send time.
 	 */
 	imagePrinter?: string;
 	plainBase64?: string;
 };
 
 const printerId = (printer: PrinterConfig) => printerLabel(printer);
+
+/**
+ * The job's lines with no picture left: a line of Arabic becomes its fallback
+ * text, and the logo — which has none — goes.
+ */
+export function plainLines(lines: readonly PrintLine[]): PrintLine[] {
+	return lines.flatMap((line) =>
+		'image' in line ? (line.fallback ? [line.fallback] : []) : [line]
+	);
+}
 
 /**
  * The bytes to send to `printer`: the job as queued, or — when it carries a
@@ -327,7 +340,7 @@ export function createQueue(options: QueueOptions): Queue {
 				seen.record(head.job.id);
 				log(
 					withoutLogo
-						? `printed ${head.job.id} without its logo: the receipt printer changed`
+						? `printed ${head.job.id} without its pictures (Arabic as text): the printer changed`
 						: `printed ${head.job.id}`
 				);
 				discard(head.file);
@@ -416,13 +429,10 @@ export function createQueue(options: QueueOptions): Queue {
 				enqueuedAt: isoAt(now)
 			};
 			if (job.lines.some((line) => 'image' in line)) {
-				// Bound to this printer: elsewhere it prints without the logo (bytesFor).
+				// Bound to this printer: elsewhere it prints without its pictures (bytesFor).
 				queued.imagePrinter = printerId(printer);
 				queued.plainBase64 = Buffer.from(
-					encodeJob(
-						job.lines.filter((line) => !('image' in line)),
-						{ cut: job.cut, columns: printer.width }
-					)
+					encodeJob(plainLines(job.lines), { cut: job.cut, columns: printer.width })
 				).toString('base64');
 			}
 			writeAtomic(file, JSON.stringify(queued) + '\n');

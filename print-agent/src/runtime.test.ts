@@ -118,7 +118,7 @@ describe('a runtime with no receipt printer', () => {
 		const { runtime, dataDir } = setUp({ receipt: null, kitchen: null });
 		expect(await runtime.deps.status()).toEqual({
 			agentVersion: 2,
-			features: ['printers', 'setup', 'local-printers'],
+			features: ['printers', 'setup', 'local-printers', 'text-images'],
 			printers: { receipt: null, kitchen: null }
 		});
 		expect(await runtime.deps.submitJob(job('a', 'Tea'))).toBe('no_printer');
@@ -178,7 +178,10 @@ describe('setPrinters re-wires the queue and the drawer', () => {
 		const logged = () =>
 			existsSync(join(dataDir, 'agent.log')) && readFileSync(join(dataDir, 'agent.log'), 'utf8');
 		await until(
-			() => (logged() || '').includes('printed l1 without its logo: the receipt printer changed'),
+			() =>
+				(logged() || '').includes(
+					'printed l1 without its pictures (Arabic as text): the printer changed'
+				),
 			4000,
 			'the log line'
 		);
