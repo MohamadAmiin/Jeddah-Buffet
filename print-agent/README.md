@@ -131,12 +131,14 @@ The agent must be running — the installer starts it, and it starts at every si
    (section 3, step 4).
 
 **Pairing is open from the install until one till pairs** — the first to ask — and then it closes;
-there is no time limit. If the screen says `○ Pairing is closed`, run the print agent file again
-and press **Open pairing for a till** on its setup page, then press **Pair this till** once more.
+there is no time limit. **Running the print agent file again reopens pairing** — a till that
+lost its pairing (**Forget pairing**, a cleared browser, a new browser profile) runs the file and
+presses **Pair this till**; a till that is still paired is not affected, because the update keeps
+the settings and the key. So if the screen says `○ Pairing is closed` or `✕ Pairing was already
+used`, run the file again, then press **Pair this till**.
 
-If the screen says `✕ Pairing was already used` and you did **not** pair a till since the agent was
-installed, something else on this PC asked first and now holds the secret: on the setup page choose
-**Advanced → Reset the pairing key**, then open pairing and pair again. That is the trade this button
+If it says `✕ Pairing was already used` again at once, something else on this PC asked first and
+now holds the secret: on the setup page choose **Advanced → Reset the pairing key**, then pair again. That is the trade this button
 makes — while pairing is open, any program on the till PC can ask before the till does, and pairing
 that is opened and never used stays open — which is why it is single-use and tells you when it was
 taken. Pair the till soon after opening pairing.
