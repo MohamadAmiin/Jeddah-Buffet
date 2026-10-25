@@ -11,9 +11,9 @@
 // the same columns as on the printed text lines around it:
 // - an ASCII character is drawn centred in its own column, in IBM Plex Mono;
 // - an Arabic run (paper-script.ts runs: a phrase, spaces between its words
-//   included) is drawn right to left from the left edge of the columns it
-//   owns, in IBM Plex Sans Arabic, and squeezed sideways only if it would be
-//   wider than those columns.
+//   included) is drawn right to left in the columns it owns — from their left
+//   edge, or centred in them on a centred line — in IBM Plex Sans Arabic, and
+//   squeezed sideways only if it would be wider than those columns.
 // `tall` doubles the height; `double` doubles both, with half the columns —
 // the printer's own GS ! sizes. A centred line is placed as the printer
 // centres a text line (ESC a 1): the whole string, leading spaces included.
@@ -103,8 +103,10 @@ export const drawTextLine: DrawText = async (line, width) => {
 			const room = [...run.text].length * columnDots;
 			const natural = ctx.measureText(run.text).width;
 			const squeeze = natural > room ? room / natural : 1;
+			// Arabic is narrower than its columns: a centred line centres it in them.
+			const inset = line.align === 'center' ? Math.floor((room - natural * squeeze) / 2) : 0;
 			ctx.save();
-			ctx.translate(x, baseline);
+			ctx.translate(x + inset, baseline);
 			ctx.scale(squeeze, stretch);
 			ctx.fillText(run.text, 0, 0);
 			ctx.restore();

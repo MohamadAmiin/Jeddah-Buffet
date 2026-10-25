@@ -176,16 +176,18 @@ rule is needed for it.
 
 The till shows one chip for printing, always with a glyph so colour never carries the meaning alone:
 
-| Chip                                                           | Meaning                                                                                                                                            | Fix                                                                                                                                                                             |
-| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `● Printer ready` (· _n_ waiting)                              | The agent answers and the printer accepts connections; _n_ jobs are queued.                                                                        | —                                                                                                                                                                               |
-| `◆ Update the print agent to print the logo` (· _n_ waiting)   | The owner set a receipt logo, but this agent is version 1. Every receipt still prints in full, without the logo.                                   | Section 9 (update the agent).                                                                                                                                                   |
-| `◆ Test-print the logo before receipts use it` (· _n_ waiting) | The agent is version 2, but this logo's test print is not confirmed on this till at present. Every receipt still prints in full, without the logo. | Section 10.                                                                                                                                                                     |
-| `◆ Printer address not set — open Printer`                     | The agent answers, but no receipt printer has been entered yet.                                                                                    | Printer → enter the address and paper width → **Save printers** (section 3, step 4).                                                                                            |
-| `◆ Printer unreachable`                                        | The agent is not running, or the printer is off, unplugged, has a different IP, or (USB) the PC's print service has stopped it.                    | Run the downloaded file again (it starts the agent), then check the printer's power and cable; for a USB printer, open the PC's printer settings and resume it if it is paused. |
-| `✕ Printing blocked by Chrome`                                 | Chrome denied local network access for the till's address.                                                                                         | Section 5, Chrome paragraph.                                                                                                                                                    |
-| `✕ Printer pairing is wrong`                                   | The pairing key was reset on the agent (setup page → Advanced), or the agent was set up again, after this till was paired.                         | Printer → **Forget pairing**, then pair again (section 5).                                                                                                                      |
-| `○ Printer not set up`                                         | The till has never been paired.                                                                                                                    | Section 5.                                                                                                                                                                      |
+| Chip                                                           | Meaning                                                                                                                                                               | Fix                                                                                                                                                                             |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `● Printer ready` (· _n_ waiting)                              | The agent answers and the printer accepts connections; _n_ jobs are queued.                                                                                           | —                                                                                                                                                                               |
+| `◆ Update the print agent to print the logo` (· _n_ waiting)   | The owner set a receipt logo, but this agent is version 1. Every receipt still prints in full, without the logo.                                                      | Section 9 (update the agent).                                                                                                                                                   |
+| `◆ Update the print agent to print Arabic` (· _n_ waiting)     | The till's menu or receipt holds Arabic, but this agent cannot print it as pictures. Every receipt still prints in full, with `?` for each Arabic letter. Section 11. |
+| `◆ Test-print Arabic before receipts use it` (· _n_ waiting)   | The agent can print Arabic, but a printer in use has not had its Arabic test print confirmed on this till. Section 11.                                                |
+| `◆ Test-print the logo before receipts use it` (· _n_ waiting) | The agent is version 2, but this logo's test print is not confirmed on this till at present. Every receipt still prints in full, without the logo.                    | Section 10.                                                                                                                                                                     |
+| `◆ Printer address not set — open Printer`                     | The agent answers, but no receipt printer has been entered yet.                                                                                                       | Printer → enter the address and paper width → **Save printers** (section 3, step 4).                                                                                            |
+| `◆ Printer unreachable`                                        | The agent is not running, or the printer is off, unplugged, has a different IP, or (USB) the PC's print service has stopped it.                                       | Run the downloaded file again (it starts the agent), then check the printer's power and cable; for a USB printer, open the PC's printer settings and resume it if it is paused. |
+| `✕ Printing blocked by Chrome`                                 | Chrome denied local network access for the till's address.                                                                                                            | Section 5, Chrome paragraph.                                                                                                                                                    |
+| `✕ Printer pairing is wrong`                                   | The pairing key was reset on the agent (setup page → Advanced), or the agent was set up again, after this till was paired.                                            | Printer → **Forget pairing**, then pair again (section 5).                                                                                                                      |
+| `○ Printer not set up`                                         | The till has never been paired.                                                                                                                                       | Section 5.                                                                                                                                                                      |
 
 ## 8. Paper out and outages
 
@@ -266,7 +268,36 @@ one does, so receipts carry the logo only after the owner has checked it:
    the logo on **Settings → Receipt** is still how to take it off every till, and off this till's
    test pages; then bring each till back to the employee screen while it is online (step 2).
 
-## 11. Logs
+## 11. Printing Arabic
+
+A thermal printer prints one fixed shape per byte, so it cannot join Arabic letters or run them
+right to left — even in its own Arabic code page. The till therefore draws every line that holds
+Arabic (the restaurant name, a header or footer line, an item, a modifier, a cashier, a note) as a
+small black-and-white picture, exactly as the screen shows it, and the agent prints it the way it
+prints the logo. Lines without Arabic print as ordinary text. The labels the till writes itself
+(Subtotal, Tax, TOTAL) stay in English, and the columns stay where they are.
+
+1. Update the agent on each till PC: download the file for that PC from **POS** on the dashboard
+   (`/device`) and run it (section 9). The agent must offer `text-images`; an older agent prints
+   every Arabic letter as `?`, and the printer chip reads `◆ Update the print agent to print Arabic`.
+2. On the till, sign in as the owner, open **Printer** and press **Test print**. Each printer's test
+   page ends with the line `اختبار الطباعة العربية` ("Arabic printing test"), and the results say
+   `● The Arabic line was sent — it should print at the bottom of the receipt test page.`
+3. If the line printed correctly — the letters joined, reading right to left — press **Arabic
+   printed correctly on the receipt printer** (and the same for a separate kitchen printer). From
+   then on that printer's receipts and tickets print Arabic. The confirmation belongs to that
+   printer on this PC: it is kept when the till is registered again, and a new printer needs a new
+   test print.
+4. If the paper shows garbage or nothing where the line should be, press **It did not print
+   correctly**: that printer keeps printing Arabic as `?`, which is safe — a printer that cannot
+   print pictures may read a picture's bytes as commands, the drawer pulse included, which is why
+   nothing prints a picture before this check.
+
+Until both steps are done the printer chip reads `◆ Test-print Arabic before receipts use it`
+whenever the till's menu or receipt holds Arabic, and every receipt still prints in full, with `?`
+in place of each Arabic letter.
+
+## 12. Logs
 
 `data/agent.log` (in the folder of section 3) holds one line per printed job and per drawer pulse,
 for example:
@@ -280,7 +311,7 @@ for example:
 Retries are logged too (`retry receipt in 2000 ms: …`). Request bodies, the pairing secret and the
 setup key are never written to the log.
 
-## 12. Uninstall
+## 13. Uninstall
 
 Run the downloaded file with `uninstall` — from a terminal or a Windows Command Prompt, for example
 `matcami-print-agent-windows-x64.exe uninstall` in the Downloads folder, or the installed
@@ -289,7 +320,7 @@ and keeps the settings folder of section 3 (the settings, the pairing and any wa
 later install picks up where this one left off. Delete that folder to remove everything; every till
 must then pair again.
 
-## 13. For developers: running from source
+## 14. For developers: running from source
 
 The repository's `print-agent/src/` is the same program, run by Node **24.21.0** (the version
 `.nvmrc` pins) with no dependencies and no build step. It is what the vitest `print-agent` project

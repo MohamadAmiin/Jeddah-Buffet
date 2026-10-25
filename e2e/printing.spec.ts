@@ -15,6 +15,7 @@ import {
 	writeAgentConfig
 } from './print-agent-harness';
 import {
+	addItem,
 	chooseOrderType,
 	closeDbRows,
 	completeSettings,
@@ -26,7 +27,8 @@ import {
 	payCash,
 	pickEmployee,
 	registerDevice,
-	registerRestaurant
+	registerRestaurant,
+	signIn
 } from './fixtures';
 
 // RECEIPTS, KITCHEN TICKETS AND THE DRAWER, END TO END — milestone 2 of
@@ -650,6 +652,123 @@ test('an agent with no printer is set up from the till', async ({ browser }) => 
 	} finally {
 		await stopAgent(setupAgent);
 		await printer.close();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+// ARABIC ON PAPER (2026-10-25). The same restaurant as above — the e2e sign-up
+// budget is spent — with its own agent and two fresh fake printers. A thermal
+// printer cannot join Arabic letters, so the till draws each line of Arabic as a
+// picture (GS v 0): only once the owner has watched the test page draw it on
+// that printer and said so; until then, and before, it is '?' as it always was.
+const RASTER = Buffer.from([0x1d, 0x76, 0x30, 0x00]);
+const ARABIC_TOKEN = 'a1ab1c00'.repeat(8);
+
+/**
+ * The tape with every GS v 0 block cut out: its header fixes its own length
+ * ((xL + 256·xH) × (yL + 256·yH) bytes), and a picture's bytes may be 0x3F —
+ * the byte of '?' — by chance, so only the text around the pictures is searched.
+ */
+function textOutsidePictures(tape: Buffer): Buffer {
+	const parts: Buffer[] = [];
+	let at = 0;
+	for (let i = tape.indexOf(RASTER); i !== -1; i = tape.indexOf(RASTER, at)) {
+		parts.push(tape.subarray(at, i));
+		const x = tape[i + 4]! + 256 * tape[i + 5]!;
+		const y = tape[i + 6]! + 256 * tape[i + 7]!;
+		at = i + 8 + x * y;
+	}
+	parts.push(tape.subarray(at));
+	return Buffer.concat(parts);
+}
+
+/** How many bytes inside the tape's GS v 0 blocks print any dot — a blank picture has none. */
+function pictureInk(tape: Buffer): number {
+	let ink = 0;
+	for (let i = tape.indexOf(RASTER); i !== -1; i = tape.indexOf(RASTER, i + 8)) {
+		const x = tape[i + 4]! + 256 * tape[i + 5]!;
+		const y = tape[i + 6]! + 256 * tape[i + 7]!;
+		for (const byte of tape.subarray(i + 8, i + 8 + x * y)) if (byte !== 0) ink += 1;
+	}
+	return ink;
+}
+
+test('Arabic prints as a picture once the owner confirms the test print', async ({
+	page,
+	browser
+}) => {
+	test.setTimeout(300_000);
+	const arReceipt = await startFakePrinter();
+	const arKitchen = await startFakePrinter();
+	const dir = mkdtempSync(join(tmpdir(), 'matcami-arabic-e2e-'));
+	const port = await freePort();
+	const config = writeAgentConfig(dir, {
+		agentPort: port,
+		receiptPort: arReceipt.port,
+		kitchenPort: arKitchen.port,
+		token: ARABIC_TOKEN
+	});
+	const arAgent = await startAgent(config);
+	try {
+		// 1. The owner writes an Arabic header line; the preview says how Arabic prints.
+		await signIn(page, OWNER);
+		await page.goto('/settings/receipt');
+		await page.getByLabel('Header line 1').fill('أهلاً وسهلاً');
+		await page.getByRole('button', { name: 'Save receipt' }).click();
+		await expect(page.getByRole('alert')).toContainText('Receipt saved.');
+		await expect(page.getByTestId('arabic-note')).toBeVisible();
+		// An item named in Arabic: its line on the receipt holds a price too.
+		await createMenuItem(page, { category: null, name: 'شاي بالنعناع', priceMinor: 350n });
+
+		// 2. A new till, paired with this agent; it holds Arabic, unconfirmed.
+		const till = await browser.newContext();
+		const tillPage = await till.newPage();
+		await registerDevice(tillPage, OWNER, 'Arabic PC');
+		await tillPage.goto(agentPairingLink(config));
+		await expect(tillPage.getByTestId('pairing-waiting')).toBeVisible();
+		await pickEmployee(tillPage, 'The Owner');
+		await enterPin(tillPage, OWNER_PIN);
+		await expect(tillPage).toHaveURL(/\/pos\/printer$/);
+		const chip = tillPage.getByTestId('printer-chip');
+		await expect(chip).toContainText('Test-print Arabic before receipts use it');
+
+		// 3. Test print: both pages end with the Arabic line, drawn as a picture —
+		//    and no '?' anywhere on either tape.
+		const results = tillPage.getByTestId('test-results');
+		await tillPage.getByTestId('test-print').click();
+		await expect(results).toContainText('● The Arabic line was sent', { timeout: 15_000 });
+		await arReceipt.waitFor(RASTER);
+		await arKitchen.waitFor(RASTER);
+		expect(textOutsidePictures(arReceipt.bytes()).includes('?')).toBe(false);
+		// The picture has letters in it: the Arabic font drew, not a blank strip.
+		expect(pictureInk(arReceipt.bytes())).toBeGreaterThan(100);
+		expect(textOutsidePictures(arKitchen.bytes()).includes('?')).toBe(false);
+		await tillPage.getByTestId('arabic-printed-receipt').click();
+		await expect(results).toContainText('● The receipt printer will print Arabic');
+		await tillPage.getByTestId('arabic-printed-kitchen').click();
+		await expect(results).toContainText('● The kitchen printer will print Arabic');
+		await expect(chip).toContainText('Printer ready');
+
+		// 4. A cash sale: the receipt's Arabic header line is a picture, never '?'.
+		const before = arReceipt.bytes().length;
+		await signInOnTill(tillPage, 'The Owner', OWNER_PIN);
+		await openSession(tillPage, 10000n);
+		await addBurger(tillPage);
+		await addItem(tillPage, 'شاي بالنعناع');
+		await payCash(tillPage);
+		await arReceipt.waitFor('TOTAL', { from: before, timeoutMs: 15_000 });
+		const tape = arReceipt.bytes().subarray(before);
+		expect(tape.includes(RASTER)).toBe(true);
+		expect(textOutsidePictures(tape).includes('?')).toBe(false);
+		// The header line and the item line: at least two pictures on this receipt.
+		expect(
+			tape.toString('latin1').split(RASTER.toString('latin1')).length - 1
+		).toBeGreaterThanOrEqual(2);
+		await till.close();
+	} finally {
+		await stopAgent(arAgent);
+		await arReceipt.close();
+		await arKitchen.close();
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
