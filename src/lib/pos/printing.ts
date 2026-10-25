@@ -23,18 +23,32 @@
 // THE LOGO (T-24) goes through logoForAgent, below: only to an agent reporting
 // a version that validates and encodes image lines, and onto a RECEIPT only
 // after the owner confirmed its test print on /pos/printer. A receipt the agent
-// refuses because of its image is sent once more without it (submitReceipt),
+// refuses because of its image is sent once more without it (submitWithFallback),
 // so a logo never costs the customer a receipt. None of it touches the drawer
 // clause, and the till never composes a printer byte.
+//
+// ARABIC (2026-10-25) is the last step before any job goes (forPaper): a line
+// that holds Arabic is drawn as a 1-bit picture (text-image.ts) carrying the
+// same line as plain text, or — for an agent without `text-images`, or a
+// printer the owner has not confirmed for Arabic on /pos/printer — printed as
+// that plain text, each Arabic letter a '?' as before (arabicForAgent). The
+// gate is the logo's, for the logo's reason: a printer that does not implement
+// `GS v 0` could read a picture's bytes as the drawer pulse. A job the agent
+// refuses because of its pictures is sent once more with each Arabic picture
+// as its text and the logo left off (submitWithFallback), so no line is lost.
 import { paymentNumbersFrom } from '../receipt-layout';
 import { canPrint, type CanPrint } from './can-print';
 import type { Cart } from './orders';
+import { asciiFallback, hasArabic, isPlainAscii } from './paper-script';
 import {
 	agentPrintsImages,
 	agentStatus,
+	agentSupports,
+	printerKeyFor,
 	printerKeyOf,
 	pulseDrawer,
 	submitJob,
+	TEXT_IMAGES_FEATURE,
 	type AgentState,
 	type AgentStatus,
 	type PrintJob,
@@ -46,12 +60,15 @@ import {
 	renderKitchenTicket,
 	renderReceipt,
 	type ImageLine,
+	type PrintLine,
 	type ReceiptHeader,
 	type ReceiptInput,
-	type ReceiptWidth
+	type ReceiptWidth,
+	type TextLine
 } from './receipt';
 import { readSessionRow } from './session';
 import {
+	readArabicConfirmedPrinters,
 	readConfirmedLogoPrinter,
 	readConfirmedLogoSha,
 	readPaymentMethods,
@@ -60,13 +77,16 @@ import {
 } from './settings';
 import {
 	inTransaction,
+	readCachedEmployees,
 	readCachedSetting,
+	readMenu,
 	valueOf,
 	withDb,
 	type LocalOrder,
 	type PrintedMarks,
 	type QueueEntry
 } from './store';
+import { drawTextLine, type DrawText } from './text-image';
 
 export type PrintRefusal = Extract<CanPrint, { ok: false }>['reason'];
 
@@ -94,6 +114,8 @@ export type OriginalsResult = {
 export type PrintOptions = {
 	fetchFn?: typeof fetch;
 	now?: () => number;
+	/** How a line of Arabic becomes a picture — text-image.ts in the browser; a stub in tests. */
+	drawText?: DrawText;
 };
 
 /** The drawer opens only for a sale completed this many milliseconds ago or less. */
@@ -246,6 +268,142 @@ export async function logoGate(
 	return { cached: logo !== null, confirmed: false };
 }
 
+// ── Arabic on paper (2026-10-25) ────────────────────────────────────────────
+
+/** The printer a target's jobs reach: the kitchen's own, else the receipt printer (assumption 7). */
+function printerFor(status: AgentStatus, target: 'receipt' | 'kitchen') {
+	return target === 'kitchen'
+		? (status.printers.kitchen ?? status.printers.receipt)
+		: status.printers.receipt;
+}
+
+export type ArabicForAgent = {
+	/** The agent prints image lines and has `text-images`. */
+	supported: boolean;
+	/** The owner watched this printer print the test page's Arabic line (settings.ts). */
+	confirmed: boolean;
+	/** Lines of Arabic go to this printer as pictures. */
+	draw: boolean;
+	/** The printer's key (print-client.ts printerKeyFor), or null when it reports no address. */
+	printerKey: string | null;
+};
+
+/**
+ * THE ARABIC GATE — the logo gate's rule (logoForAgent), per printer. Lines of
+ * Arabic reach a printer as pictures only when the agent can take them
+ * (`text-images`, version 2 or later) and, on a receipt or a kitchen ticket,
+ * only once the owner has confirmed that printer on /pos/printer; a test page
+ * draws them whenever the agent can — that one unconfirmed print happens in
+ * front of the owner. A printer that reports no address has no key and is
+ * never confirmed: fail closed, Arabic as '?'.
+ */
+export async function arabicForAgent(
+	status: AgentStatus,
+	target: 'receipt' | 'kitchen',
+	purpose: 'print' | 'test'
+): Promise<ArabicForAgent> {
+	const printer = printerFor(status, target);
+	const printerKey = printer ? printerKeyFor(printer) : null;
+	const supported = agentPrintsImages(status) && agentSupports(status, TEXT_IMAGES_FEATURE);
+	const confirmed =
+		printerKey !== null &&
+		(await readArabicConfirmedPrinters().catch(() => [] as string[])).includes(printerKey);
+	return { supported, confirmed, draw: supported && (purpose === 'test' || confirmed), printerKey };
+}
+
+/**
+ * The last step before a job goes to the agent. A text line of printable ASCII
+ * and every image line pass as they are. A line that holds Arabic becomes a
+ * picture carrying the same line as plain text (`fallback`) when `draw`, else
+ * that plain text alone — each Arabic letter a '?', the columns unchanged. A
+ * drawing that fails is the plain text too: Arabic never costs a line.
+ */
+export async function forPaper(
+	lines: readonly PrintLine[],
+	width: ReceiptWidth,
+	draw: boolean,
+	drawText: DrawText = drawTextLine
+): Promise<PrintLine[]> {
+	const out: PrintLine[] = [];
+	for (const line of lines) {
+		if (isImageLine(line) || isPlainAscii(line.text)) {
+			out.push(line);
+			continue;
+		}
+		// Belt and braces: toPrintable leaves only ASCII and Arabic, and the agent refuses anything else.
+		const fallback: TextLine = {
+			...line,
+			text: asciiFallback(line.text).replace(/[^\x20-\x7e]/g, '?')
+		};
+		if (!draw) {
+			out.push(fallback);
+			continue;
+		}
+		try {
+			out.push({ image: await drawText(line, width), fallback });
+		} catch {
+			out.push(fallback);
+		}
+	}
+	return out;
+}
+
+/** The job with no picture left: each Arabic picture as its text, the logo off. */
+export function plainLines(lines: readonly PrintLine[]): PrintLine[] {
+	return lines.flatMap((line) =>
+		isImageLine(line) ? (line.fallback ? [line.fallback] : []) : [line]
+	);
+}
+
+/**
+ * The till's menu, receipt settings, payment methods or staff names hold
+ * Arabic — the chip's cue to say what Arabic needs (arabicGate). Cache reads
+ * only; a failed read counts as none.
+ */
+export async function arabicInUse(): Promise<boolean> {
+	const [menu, header, layout, methods, employees] = await Promise.all([
+		readMenu().catch(() => null),
+		readReceiptHeader().catch(() => null),
+		readReceiptLayout().catch(() => null),
+		readPaymentMethods().catch(() => []),
+		readCachedEmployees().catch(() => [])
+	]);
+	const texts: (string | null | undefined)[] = [
+		header?.restaurantName,
+		header?.address,
+		header?.phone,
+		...(layout?.headerLines ?? []),
+		...(layout?.footerLines ?? []),
+		layout?.paymentNumbersHeading,
+		...methods.map((method) => method.name),
+		...employees.map((employee) => employee.displayName),
+		...(menu?.categories ?? []).map((category) => category.name),
+		...(menu?.items ?? []).map((item) => item.name),
+		...(menu?.modifierGroups ?? []).flatMap((group) => group.modifiers.map((m) => m.name))
+	];
+	return texts.some((text) => typeof text === 'string' && hasArabic(text));
+}
+
+/**
+ * The Arabic facts for the printer chip, by the rule jobs use (arabicForAgent):
+ * confirmed only when the receipt printer AND a separate kitchen printer are.
+ */
+export async function arabicGate(
+	state: AgentState | null
+): Promise<{ inUse: boolean; supported: boolean; confirmed: boolean }> {
+	const inUse = await arabicInUse();
+	if (!state || state.state !== 'ready') return { inUse, supported: false, confirmed: false };
+	const receipt = await arabicForAgent(state.status, 'receipt', 'print');
+	const kitchen = state.status.printers.kitchen
+		? await arabicForAgent(state.status, 'kitchen', 'print')
+		: receipt;
+	return {
+		inUse,
+		supported: receipt.supported,
+		confirmed: receipt.confirmed && kitchen.confirmed
+	};
+}
+
 async function receiptInput(order: LocalOrder<Cart>, status: AgentStatus): Promise<ReceiptInput> {
 	const sale = order.sale;
 	if (!sale) throw new Error('order has no sale snapshot');
@@ -274,18 +432,19 @@ async function receiptInput(order: LocalOrder<Cart>, status: AgentStatus): Promi
 }
 
 /**
- * Send a RECEIPT job — an original or a reprint, never the kitchen ticket.
- * When the agent refuses it as a bad job AND it carries an image line, send it
- * ONCE more with the image removed, under the SAME id, and answer with that:
- * a logo never costs the customer a receipt. The id is safe to reuse because
- * the agent parses the job BEFORE its queue records the id (print-agent/src/
- * server.ts, the /jobs route: parseJob throws 422 ahead of submitJob), so the
- * refused job left nothing behind and nothing prints twice.
+ * Send a job — a receipt or a kitchen ticket, an original or a reprint. When
+ * the agent refuses it as a bad job AND it carries an image line, send it ONCE
+ * more with no picture left (plainLines: the logo off, each line of Arabic as
+ * its text), under the SAME id, and answer with that: a picture never costs
+ * the customer a receipt, nor the kitchen a line. The id is safe to reuse
+ * because the agent parses the job BEFORE its queue records the id
+ * (print-agent/src/server.ts, the /jobs route: parseJob throws 422 ahead of
+ * submitJob), so the refused job left nothing behind and nothing prints twice.
  */
-async function submitReceipt(job: PrintJob, fetchFn: typeof fetch): Promise<SubmitResult> {
+async function submitWithFallback(job: PrintJob, fetchFn: typeof fetch): Promise<SubmitResult> {
 	const answer = await submitJob(job, fetchFn);
 	if (typeof answer === 'object' && answer.error === 'bad_job' && job.lines.some(isImageLine)) {
-		return submitJob({ ...job, lines: job.lines.filter((l) => !isImageLine(l)) }, fetchFn);
+		return submitJob({ ...job, lines: plainLines(job.lines) }, fetchFn);
 	}
 	return answer;
 }
@@ -345,14 +504,21 @@ export async function printOriginals(
 	const input = await receiptInput(order, state.status);
 	const marks = order.printed ?? {};
 	const stamp = () => new Date(now()).toISOString();
+	const drawText = opts.drawText ?? drawTextLine;
 
 	let receipt: PrintOutcome = 'already_printed';
 	if (!marks.receiptAt) {
-		receipt = await submitReceipt(
+		const arabic = await arabicForAgent(state.status, 'receipt', 'print');
+		receipt = await submitWithFallback(
 			{
 				id: `${orderId}:receipt:0`,
 				printer: 'receipt',
-				lines: renderReceipt(input, { width: receiptWidth }),
+				lines: await forPaper(
+					renderReceipt(input, { width: receiptWidth }),
+					receiptWidth,
+					arabic.draw,
+					drawText
+				),
 				cut: true
 			},
 			fetchFn
@@ -362,11 +528,17 @@ export async function printOriginals(
 
 	let kitchen: PrintOutcome = 'already_printed';
 	if (!marks.kitchenAt) {
-		kitchen = await submitJob(
+		const arabic = await arabicForAgent(state.status, 'kitchen', 'print');
+		kitchen = await submitWithFallback(
 			{
 				id: `${orderId}:kitchen:0`,
 				printer: 'kitchen',
-				lines: renderKitchenTicket(input, { width: kitchenWidth }),
+				lines: await forPaper(
+					renderKitchenTicket(input, { width: kitchenWidth }),
+					kitchenWidth,
+					arabic.draw,
+					drawText
+				),
 				cut: true
 			},
 			fetchFn
@@ -426,12 +598,17 @@ export async function reprint(
 	await markPrinted(orderId, { reprints: n });
 	const input = await receiptInput(order, state.status);
 	const copy = { reprintedAt: new Date(now()).toISOString(), by };
-	const lines =
+	const arabic = await arabicForAgent(state.status, kind, 'print');
+	const lines = await forPaper(
 		kind === 'receipt'
 			? renderReceipt(input, { width, copy })
-			: renderKitchenTicket(input, { width, copy });
+			: renderKitchenTicket(input, { width, copy }),
+		width,
+		arabic.draw,
+		opts.drawText ?? drawTextLine
+	);
 	const job: PrintJob = { id: `${orderId}:${kind}:r${n}`, printer: kind, lines, cut: true };
-	return kind === 'receipt' ? submitReceipt(job, fetchFn) : submitJob(job, fetchFn);
+	return submitWithFallback(job, fetchFn);
 }
 
 // ── The auto-printer ────────────────────────────────────────────────────────

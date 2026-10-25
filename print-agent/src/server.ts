@@ -52,8 +52,18 @@ export type TextLine = {
  * (GET /api/pos/receipt-logo): 1-bit rows of widthDots / 8 bytes, most
  * significant bit first, 1 = black — the GS v 0 raster format, so the agent
  * never inverts or reorders a bit.
+ *
+ * `fallback` (the `text-images` feature, 2026-10-25): a line of Arabic that the
+ * till drew as a picture carries the same line as plain text, validated
+ * exactly like any text line. It is never printed beside the picture; it is
+ * what the queue prints INSTEAD of the picture when the printer has changed
+ * since the job was queued (queue.ts bytesFor), so a receipt never loses an
+ * item line. The logo carries none.
  */
-export type ImageLine = { image: { widthDots: number; heightDots: number; bitmap: string } };
+export type ImageLine = {
+	image: { widthDots: number; heightDots: number; bitmap: string };
+	fallback?: TextLine;
+};
 export type PrintLine = TextLine | ImageLine;
 export type Job = { id: string; printer: 'receipt' | 'kitchen'; lines: PrintLine[]; cut: boolean };
 export type DrawerRequest = { id: string; completedAt: string };
@@ -62,7 +72,7 @@ export type DrawerRequest = { id: string; completedAt: string };
  * printers (PUT /printers) and serves a setup page from an older one before it
  * sends anything (tasks/print-agent-installer). Additive: old tills ignore it.
  */
-export const AGENT_FEATURES = ['printers', 'setup', 'local-printers'] as const;
+export const AGENT_FEATURES = ['printers', 'setup', 'local-printers', 'text-images'] as const;
 /**
  * `host`/`port`, or `name` for a printer on this PC, let the till bind a logo
  * confirmation to ONE printer (T-14). `queued` counts what the agent holds —
@@ -111,9 +121,17 @@ export type AgentDeps = {
 	) => Promise<boolean>;
 };
 
-export const MAX_BODY_BYTES = 65_536;
-/** A receipt carries one logo; the cap stops a job from becoming a picture dump that holds the printer. */
-export const MAX_IMAGE_LINES = 2;
+/**
+ * 1 MiB: a receipt whose lines of Arabic arrive as pictures (`text-images`) is
+ * about 3 KB of base64 per line — a long Arabic menu fits many times over.
+ */
+export const MAX_BODY_BYTES = 1_048_576;
+/**
+ * The logo plus one picture per line of Arabic (`text-images`). Still a cap, so
+ * a job cannot become a picture dump that holds the printer; a job has at most
+ * 400 lines anyway.
+ */
+export const MAX_IMAGE_LINES = 200;
 const ID = /^[A-Za-z0-9:_-]{1,100}$/;
 const PRINTABLE = /^[\x20-\x7e]*$/;
 const ISO_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/;
@@ -144,17 +162,19 @@ function id(value: unknown): string {
 }
 
 /**
- * An image line is `{ image: { widthDots, heightDots, bitmap } }` and nothing
- * else — no text, no attribute, no extra field — in the exact shape the
- * encoder's raster header will fix for the target printer. `bitmap` must be
- * STANDARD base64 with `=` padding that decodes to EXACTLY widthDots / 8 ×
- * heightDots bytes: the canonical round trip refuses URL-safe characters,
+ * An image line is `{ image: { widthDots, heightDots, bitmap } }` and, at most,
+ * a `fallback` text line — no text, no attribute, no other field — in the exact
+ * shape the encoder's raster header will fix for the target printer. `bitmap`
+ * must be STANDARD base64 with `=` padding that decodes to EXACTLY widthDots /
+ * 8 × heightDots bytes: the canonical round trip refuses URL-safe characters,
  * missing padding and non-zero trailing bits, all of which Node's lenient
- * decoder accepts silently. Returns a FRESH object, never the input.
+ * decoder accepts silently. The fallback passes the text-line walls below.
+ * Returns a FRESH object, never the input.
  */
 function imageLine(l: Record<string, unknown>, i: number, width: 32 | 48): ImageLine {
-	if (Object.keys(l).length !== 1) {
-		throw new BadRequest(`lines[${i}] with an image must have no other key`);
+	const keys = Object.keys(l).sort().join(',');
+	if (keys !== 'image' && keys !== 'fallback,image') {
+		throw new BadRequest(`lines[${i}] with an image may carry only a fallback text line`);
 	}
 	const image = obj(l.image, `lines[${i}].image`);
 	if (Object.keys(image).sort().join(',') !== 'bitmap,heightDots,widthDots') {
@@ -200,7 +220,46 @@ function imageLine(l: Record<string, unknown>, i: number, width: 32 | 48): Image
 			`lines[${i}].image.bitmap must be standard base64 of exactly ${expected} bytes`
 		);
 	}
-	return { image: { widthDots, heightDots, bitmap } };
+	const line: ImageLine = { image: { widthDots, heightDots, bitmap } };
+	if (Object.hasOwn(l, 'fallback')) {
+		line.fallback = textLine(
+			obj(l.fallback, `lines[${i}].fallback`),
+			`lines[${i}].fallback`,
+			width
+		);
+	}
+	return line;
+}
+
+/**
+ * A text line: printable ASCII within the target printer's columns at its
+ * size, and only the three attributes. Returns a FRESH object.
+ */
+function textLine(l: Record<string, unknown>, what: string, width: 32 | 48): TextLine {
+	if (typeof l.text !== 'string' || !PRINTABLE.test(l.text)) {
+		throw new BadRequest(`${what}.text must be printable ASCII (0x20-0x7E)`);
+	}
+	const size = l.size === undefined ? 'normal' : l.size;
+	if (typeof size !== 'string' || !SIZES.has(size)) {
+		throw new BadRequest(`${what}.size must be normal, tall or double`);
+	}
+	const max = size === 'double' ? Math.floor(width / 2) : width;
+	if (l.text.length > max) {
+		throw new BadRequest(
+			`${what}.text is ${l.text.length} characters; at most ${max} at this size on a ${width}-column printer`
+		);
+	}
+	if (l.bold !== undefined && typeof l.bold !== 'boolean') {
+		throw new BadRequest(`${what}.bold must be a boolean`);
+	}
+	if (l.align !== undefined && (typeof l.align !== 'string' || !ALIGNS.has(l.align))) {
+		throw new BadRequest(`${what}.align must be left or center`);
+	}
+	const line: TextLine = { text: l.text };
+	if (l.bold !== undefined) line.bold = l.bold;
+	if (l.size !== undefined) line.size = size as TextLine['size'];
+	if (l.align !== undefined) line.align = l.align as TextLine['align'];
+	return line;
 }
 
 /**
@@ -228,30 +287,7 @@ export function parseJob(raw: unknown, printers: ReadyPrinters): Job {
 			imageLines += 1;
 			return imageLine(l, i, target.width);
 		}
-		if (typeof l.text !== 'string' || !PRINTABLE.test(l.text)) {
-			throw new BadRequest(`lines[${i}].text must be printable ASCII (0x20-0x7E)`);
-		}
-		const size = l.size === undefined ? 'normal' : l.size;
-		if (typeof size !== 'string' || !SIZES.has(size)) {
-			throw new BadRequest(`lines[${i}].size must be normal, tall or double`);
-		}
-		const max = size === 'double' ? Math.floor(target.width / 2) : target.width;
-		if (l.text.length > max) {
-			throw new BadRequest(
-				`lines[${i}].text is ${l.text.length} characters; at most ${max} at this size on a ${target.width}-column printer`
-			);
-		}
-		if (l.bold !== undefined && typeof l.bold !== 'boolean') {
-			throw new BadRequest(`lines[${i}].bold must be a boolean`);
-		}
-		if (l.align !== undefined && (typeof l.align !== 'string' || !ALIGNS.has(l.align))) {
-			throw new BadRequest(`lines[${i}].align must be left or center`);
-		}
-		const line: TextLine = { text: l.text };
-		if (l.bold !== undefined) line.bold = l.bold;
-		if (l.size !== undefined) line.size = size as TextLine['size'];
-		if (l.align !== undefined) line.align = l.align as TextLine['align'];
-		return line;
+		return textLine(l, `lines[${i}]`, target.width);
 	});
 	if (imageLines > MAX_IMAGE_LINES) {
 		throw new BadRequest(`a job carries at most ${MAX_IMAGE_LINES} image lines`);

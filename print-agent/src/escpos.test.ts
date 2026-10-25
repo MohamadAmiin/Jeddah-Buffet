@@ -94,6 +94,17 @@ describe('encodeJob — image lines (GS v 0)', () => {
 		expect(bytes).toEqual(expected);
 	});
 
+	// text-images (2026-10-25): the fallback is for the queue (plainLines), never
+	// printed beside its picture.
+	it('encodes a picture with a fallback exactly as the picture alone', () => {
+		const alone = encodeJob([image(8, 2, '/4E=')], { cut: false, columns: 32 });
+		const withFallback = encodeJob([{ ...image(8, 2, '/4E='), fallback: { text: '????' } }], {
+			cut: false,
+			columns: 32
+		});
+		expect(Array.from(withFallback)).toEqual(Array.from(alone));
+	});
+
 	it('centres a 384-dot row on 80 mm paper with 12 zero bytes each side', () => {
 		const bytes = Array.from(
 			encodeJob([image(384, 1, b64(new Array<number>(48).fill(0xff)))], {

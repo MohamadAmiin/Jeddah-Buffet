@@ -8,6 +8,7 @@ import type { NetworkPrinter, PrinterConfig } from './config.ts';
 import { DRAWER_PULSE, PAPER_STATUS_QUERY } from './escpos.ts';
 import {
 	bytesFor,
+	plainLines,
 	createDrawer,
 	createQueue,
 	createSeenStore,
@@ -389,6 +390,23 @@ describe('createQueue', () => {
 		expect(Buffer.from(withLogo!.plainBase64!, 'base64').includes(rasterHeader(0x48))).toBe(false);
 		expect(plain).not.toHaveProperty('imagePrinter');
 		expect(plain).not.toHaveProperty('plainBase64');
+	});
+});
+
+// text-images (2026-10-25): on another printer the logo goes, and each line of
+// Arabic drawn as a picture prints as its fallback text — no line is lost.
+describe('plainLines — the job with no picture left', () => {
+	it('swaps each picture for its fallback, drops the logo, keeps the text', () => {
+		const logo = { image: { widthDots: 8, heightDots: 1, bitmap: 'AA==' } };
+		const arabic = {
+			image: { widthDots: 8, heightDots: 1, bitmap: '/w==' },
+			fallback: { text: '???? 17.00', bold: true }
+		};
+		expect(plainLines([logo, { text: 'TOTAL' }, arabic, { text: 'Thank you' }])).toEqual([
+			{ text: 'TOTAL' },
+			{ text: '???? 17.00', bold: true },
+			{ text: 'Thank you' }
+		]);
 	});
 });
 

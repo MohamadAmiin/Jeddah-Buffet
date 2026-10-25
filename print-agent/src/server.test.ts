@@ -11,6 +11,7 @@ import {
 	createAgentServer,
 	listen,
 	MAX_BODY_BYTES,
+	MAX_IMAGE_LINES,
 	parseJob,
 	type AgentDeps,
 	type AgentStatus,
@@ -41,7 +42,7 @@ const config: AgentConfig = {
 
 const status: AgentStatus = {
 	agentVersion: 2,
-	features: ['printers', 'setup', 'local-printers'],
+	features: ['printers', 'setup', 'local-printers', 'text-images'],
 	printers: {
 		receipt: { host: '127.0.0.1', port: 9100, width: 48, reachable: true, queued: 0 },
 		kitchen: { host: '127.0.0.1', port: 9101, width: 32, reachable: false, queued: 2 }
@@ -576,12 +577,56 @@ describe('parseJob', () => {
 		expect(bad([img({ bitmap: 'AAAA' })])).toThrow(/bitmap/);
 		expect(bad([img({ bitmap: 42 })])).toThrow(/bitmap/);
 		// Nothing beside the image, and nothing inside it but the three fields.
-		expect(bad([{ ...img(), bold: true }])).toThrow(/lines\[0\] with an image/);
+		expect(bad([{ ...img(), bold: true }])).toThrow(/lines\[0\] with an image may carry only/);
 		expect(bad([img({ dither: 1 })])).toThrow(/lines\[0\]\.image must have exactly/);
 		expect(bad([{ text: 'a', ...img() }])).toThrow(/lines\[0\] with an image/);
 		expect(bad([{ image: 'AA==' }])).toThrow(/lines\[0\]\.image must be an object/);
 		const one = { image: { widthDots: 8, heightDots: 1, bitmap: 'AA==' } };
-		expect(bad([one, one, one])).toThrow(/at most 2/);
+		expect(bad(Array.from({ length: MAX_IMAGE_LINES + 1 }, () => one))).toThrow(
+			new RegExp(`at most ${MAX_IMAGE_LINES} image lines`)
+		);
+	});
+
+	// text-images (2026-10-25): a line of Arabic the till drew as a picture carries
+	// the same line as plain text, for the queue to print should the printer change.
+	it('accepts a fallback text line beside an image, validated like any text line', () => {
+		const printers = PRINTERS;
+		const image = { widthDots: 8, heightDots: 1, bitmap: 'AA==' };
+		const parsed = parseJob(
+			{
+				id: 'ar',
+				printer: 'receipt',
+				lines: [{ image, fallback: { text: '???? 17.00', bold: true, align: 'center' } }],
+				cut: true
+			},
+			printers
+		);
+		expect(parsed.lines).toEqual([
+			{ image, fallback: { text: '???? 17.00', bold: true, align: 'center' } }
+		]);
+		const bad = (fallback: unknown) => () =>
+			parseJob({ id: 'a', printer: 'receipt', lines: [{ image, fallback }], cut: true }, printers);
+		// The fallback is printable ASCII: never a command byte, never Arabic.
+		expect(bad({ text: 'برجر' })).toThrow(/lines\[0\]\.fallback\.text must be printable ASCII/);
+		expect(bad({ text: 'a\x1bp' })).toThrow(/fallback\.text must be printable ASCII/);
+		expect(bad({ text: 'x'.repeat(49) })).toThrow(/fallback\.text is 49 characters/);
+		expect(bad({ text: 'x'.repeat(25), size: 'double' })).toThrow(/at most 24/);
+		expect(bad({ text: 'a', size: 'huge' })).toThrow(/fallback\.size/);
+		expect(bad('???')).toThrow(/lines\[0\]\.fallback must be an object/);
+	});
+
+	it('accepts one picture per line of Arabic, up to the cap', () => {
+		const one = { image: { widthDots: 8, heightDots: 1, bitmap: 'AA==' }, fallback: { text: '?' } };
+		const lines = Array.from({ length: MAX_IMAGE_LINES }, () => one);
+		expect(() =>
+			parseJob({ id: 'a', printer: 'receipt', lines, cut: true }, PRINTERS)
+		).not.toThrow();
+	});
+
+	it('the body cap fits a receipt of Arabic pictures many times over', () => {
+		// One 48-column picture line, 30 dots tall: 72 × 30 bytes, about 2.9 KB of base64.
+		const perLine = 4 * Math.ceil((72 * 30) / 3);
+		expect(MAX_BODY_BYTES).toBeGreaterThan(100 * perLine);
 	});
 });
 
@@ -760,7 +805,7 @@ describe('no printer yet', () => {
 		expect(before.status).toBe(200);
 		expect(before.json).toEqual({
 			agentVersion: 2,
-			features: ['printers', 'setup', 'local-printers'],
+			features: ['printers', 'setup', 'local-printers', 'text-images'],
 			printers: { receipt: null, kitchen: null }
 		});
 		const job = await call(port, {

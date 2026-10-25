@@ -54,11 +54,20 @@
 		type PrinterPlace,
 		type PrinterWidth
 	} from '$lib/pos/printer-form';
-	import { logoForAgent, logoGate } from '$lib/pos/printing';
+	import {
+		arabicForAgent,
+		arabicGate,
+		arabicInUse,
+		forPaper,
+		logoForAgent,
+		logoGate
+	} from '$lib/pos/printing';
 	import { renderTestPage } from '$lib/pos/receipt';
 	import {
+		confirmArabicPrinter,
 		confirmReceiptLogo,
 		readReceiptLogo,
+		withdrawArabicConfirmation,
 		withdrawReceiptLogoConfirmation
 	} from '$lib/pos/settings';
 	import { readCachedSetting } from '$lib/pos/store';
@@ -108,8 +117,25 @@
 	// while the agent still reports that printer (print-agent-installer T-14).
 	let testedPrinterKey = $state<string | null>(null);
 
+	// ARABIC ON PAPER (2026-10-25): the same gate for lines of Arabic drawn as
+	// pictures, per printer (printing.ts arabicForAgent). A test page draws the
+	// Arabic line whenever the agent can; `arabicSentTo` names the printers the
+	// last one drew it on, the only time "Arabic printed correctly" is offered,
+	// and that answer records the printer's key (settings.ts confirmArabicPrinter).
+	let arabic = $state<{ inUse: boolean; supported: boolean; confirmed: boolean } | undefined>();
+	let arabicSentTo = $state<{ role: 'receipt' | 'kitchen'; key: string }[]>([]);
+	async function refreshArabic() {
+		const seen = status;
+		const facts = await arabicGate(seen).catch(() => undefined);
+		if (seen === status) arabic = facts;
+	}
+	$effect(() => {
+		void status;
+		void refreshArabic();
+	});
+
 	const chip = $derived(
-		status === null ? null : printerChip(status, { logoCached, logoConfirmed })
+		status === null ? null : printerChip(status, { logoCached, logoConfirmed, arabic })
 	);
 
 	// THE PRINTER FIELDS (print-agent-installer T-16): the receipt printer's
@@ -509,6 +535,7 @@
 		failure = '';
 		results = [];
 		logoSent = false;
+		arabicSentTo = [];
 		try {
 			status = await agentStatus();
 			if (status.state !== 'ready') {
@@ -517,6 +544,13 @@
 			}
 			const printers = status.status.printers;
 			testedPrinterKey = printerKeyOf(status.status);
+			// The Arabic line goes on each printer's page whenever the agent can draw it
+			// and the till holds Arabic — confirmed or not: this page is where it is checked.
+			const holdsArabic = await arabicInUse();
+			const [receiptArabic, kitchenArabic] = await Promise.all([
+				arabicForAgent(status.status, 'receipt', 'test'),
+				arabicForAgent(status.status, 'kitchen', 'test')
+			]);
 			// The cached logo, whenever the agent can print it — confirmed or not:
 			// this is the one page that may carry an unconfirmed logo, and only the
 			// RECEIPT printer's page gets it. The fingerprint is read beside it and
@@ -540,13 +574,37 @@
 					: null;
 			const now = new Date().toISOString();
 			const base = { restaurantName, deviceCode, now, timeZone };
+			const receiptSample = holdsArabic && receiptArabic.draw;
 			const receipt = await submitJob({
 				id: `test:${crypto.randomUUID()}`,
 				printer: 'receipt',
-				lines: renderTestPage({ ...base, width: printers.receipt.width, printer: 'receipt', logo }),
+				lines: await forPaper(
+					renderTestPage({
+						...base,
+						width: printers.receipt.width,
+						printer: 'receipt',
+						logo,
+						arabicSample: receiptSample
+					}),
+					printers.receipt.width,
+					receiptSample
+				),
 				cut: true
 			});
 			results = [describe('receipt', receipt)];
+			const sent = (r: SubmitResult) => r === 'queued' || r === 'duplicate';
+			if (sent(receipt) && receiptSample && receiptArabic.printerKey) {
+				arabicSentTo = [{ role: 'receipt', key: receiptArabic.printerKey }];
+				results = [
+					...results,
+					'● The Arabic line was sent — it should print at the bottom of the receipt test page.'
+				];
+			} else if (holdsArabic && !receiptArabic.supported) {
+				results = [
+					...results,
+					'◆ Arabic prints as ? — update the print agent on this PC to print it'
+				];
+			}
 			if (receipt === 'queued' || receipt === 'duplicate') {
 				if (logo !== null) {
 					results = [
@@ -562,13 +620,26 @@
 				}
 			}
 			if (printers.kitchen) {
+				const kitchenSample = holdsArabic && kitchenArabic.draw;
 				const kitchen = await submitJob({
 					id: `test:${crypto.randomUUID()}`,
 					printer: 'kitchen',
-					lines: renderTestPage({ ...base, width: printers.kitchen.width, printer: 'kitchen' }),
+					lines: await forPaper(
+						renderTestPage({
+							...base,
+							width: printers.kitchen.width,
+							printer: 'kitchen',
+							arabicSample: kitchenSample
+						}),
+						printers.kitchen.width,
+						kitchenSample
+					),
 					cut: true
 				});
 				results = [...results, describe('kitchen', kitchen)];
+				if (sent(kitchen) && kitchenSample && kitchenArabic.printerKey) {
+					arabicSentTo = [...arabicSentTo, { role: 'kitchen', key: kitchenArabic.printerKey }];
+				}
 			}
 		} catch (err) {
 			failure = `✕ ${err instanceof Error ? err.message : 'The test page could not be sent'}`;
@@ -630,12 +701,51 @@
 		}
 	}
 
+	/** "Arabic printed correctly" on one printer: its receipts and tickets draw Arabic from now on. */
+	async function arabicPrinted(sent: { role: 'receipt' | 'kitchen'; key: string }) {
+		if (busy) return;
+		busy = true;
+		failure = '';
+		try {
+			await confirmArabicPrinter(sent.key);
+			arabicSentTo = arabicSentTo.filter((s) => s.role !== sent.role);
+			results = [...results, `● The ${sent.role} printer will print Arabic`];
+			await refreshArabic();
+			announceChange();
+		} catch (err) {
+			failure = `✕ ${err instanceof Error ? err.message : 'The confirmation could not be saved'}`;
+		} finally {
+			busy = false;
+		}
+	}
+	/** "It did not print correctly": that printer prints Arabic as ? until a test print is confirmed. */
+	async function arabicNotPrinted(sent: { role: 'receipt' | 'kitchen'; key: string }) {
+		if (busy) return;
+		busy = true;
+		failure = '';
+		try {
+			await withdrawArabicConfirmation(sent.key);
+			arabicSentTo = arabicSentTo.filter((s) => s.role !== sent.role);
+			results = [
+				...results,
+				`✕ The ${sent.role} printer will print Arabic as ? — it may not print pictures`
+			];
+			await refreshArabic();
+			announceChange();
+		} catch (err) {
+			failure = `✕ ${err instanceof Error ? err.message : 'The answer could not be saved'}`;
+		} finally {
+			busy = false;
+		}
+	}
+
 	async function forget() {
 		if (busy) return;
 		busy = true;
 		failure = '';
 		results = [];
 		logoSent = false;
+		arabicSentTo = [];
 		try {
 			await clearAgentSettings();
 			// Forgetting withdrew the logo confirmation too (print-client.ts).
@@ -1006,6 +1116,35 @@
 					{/each}
 				</ul>
 			{/if}
+			{#each arabicSentTo as sent (sent.role)}
+				<!-- Offered only after a test page that drew the Arabic line on this printer:
+				     the owner's answer is what lets its receipts draw Arabic (2026-10-25). -->
+				<div
+					class="flex flex-wrap items-center gap-3"
+					role="group"
+					aria-label={`Did the Arabic line print correctly on the ${sent.role} printer?`}
+					data-testid={`arabic-check-${sent.role}`}
+				>
+					<button
+						type="button"
+						class={secondary}
+						disabled={busy}
+						data-testid={`arabic-printed-${sent.role}`}
+						onclick={() => void arabicPrinted(sent)}
+					>
+						Arabic printed correctly on the {sent.role} printer
+					</button>
+					<button
+						type="button"
+						class={secondary}
+						disabled={busy}
+						data-testid={`arabic-not-printed-${sent.role}`}
+						onclick={() => void arabicNotPrinted(sent)}
+					>
+						It did not print correctly
+					</button>
+				</div>
+			{/each}
 			{#if logoSent}
 				<!-- Offered only after a test page that carried the logo: the owner's answer
 				     is what lets a receipt print it (the logo confirmation gate). -->

@@ -14,6 +14,7 @@ import {
 	renderKitchenTicket,
 	renderReceipt,
 	renderTestPage,
+	ARABIC_SAMPLE,
 	toPrintable,
 	type PrintLine,
 	type ReceiptInput,
@@ -142,6 +143,71 @@ describe('toPrintable', () => {
 		expect(toPrintable('π')).toBe('?');
 		expect(toPrintable('plain ASCII 123')).toBe('plain ASCII 123');
 	});
+
+	// 2026-10-25: Arabic stays — printing.ts draws it as a picture — one column a letter.
+	it('keeps Arabic letters and digits, one column each', () => {
+		expect(toPrintable('برجر لحم')).toBe('برجر لحم');
+		expect(toPrintable('شاي ٢')).toBe('شاي ٢');
+		expect(toPrintable('مطعم جدة، فرع ١')).toBe('مطعم جدة، فرع ١');
+	});
+
+	it('keeps the hamza and madda letters NFKD would split, and folds presentation forms', () => {
+		// أحمد, إبريق, آمن, مؤمن, شاطئ: NFKD splits each into a letter and a mark; NFC puts it back.
+		for (const word of ['أحمد', 'إبريق', 'آمن', 'مؤمن', 'شاطئ']) {
+			expect(toPrintable(word), word).toBe(word);
+		}
+		// Presentation forms — isolated BEH, the LAM-ALEF ligature — become the letters they show.
+		expect(toPrintable('\ufe8f')).toBe('ب');
+		expect(toPrintable('\ufefb')).toBe('لا');
+	});
+
+	it('drops vowel marks and invisible direction marks, which would each take a column', () => {
+		expect(toPrintable('مَطْعَمٌ')).toBe('مطعم');
+		expect(toPrintable('\u200fبرجر\u200e 2')).toBe('برجر 2');
+		expect(toPrintable('\u202bشاي\u202c')).toBe('شاي');
+	});
+
+	it('still prints any other script as a question mark, and is idempotent with Arabic', () => {
+		expect(toPrintable('茶 Ωmega')).toBe('? ?mega');
+		for (const value of ['مَطْعَمٌ جدة — Café', 'أحمد ٢×٣']) {
+			expect(toPrintable(toPrintable(value))).toBe(toPrintable(value));
+		}
+	});
+});
+
+describe('Arabic on a receipt (2026-10-25)', () => {
+	const arabicLine: Line = {
+		lineId: 'l1',
+		lineNo: 1,
+		menuItemId: 'i1',
+		itemName: 'برجر لحم بالجبن الإضافي',
+		quantity: 2,
+		unitPriceMinor: '400',
+		taxRateBp: 1000,
+		discountMinor: '0',
+		modifiers: []
+	};
+
+	for (const width of [32, 48] as const) {
+		it(`at ${width}: the Arabic text is on the lines, and no line is wider than ${width}`, () => {
+			const lines = renderReceipt(
+				input(snapshot({ lines: [arabicLine] }), {
+					header: { ...header, restaurantName: 'مطعم جدة بوفيه', address: 'شارع الملك فهد' },
+					layout: layoutWith({ headerLines: ['أهلاً وسهلاً'], footerLines: ['شكراً لزيارتكم'] })
+				}),
+				{ width }
+			);
+			const t = text(lines);
+			for (const l of t) expect(l.length, l).toBeLessThanOrEqual(width);
+			expect(t.some((l) => l.includes('مطعم جدة بوفيه'))).toBe(true);
+			expect(t.some((l) => l.includes('شارع الملك فهد'))).toBe(true);
+			expect(t.some((l) => l.includes('أهلا وسهلا'))).toBe(true);
+			expect(t.some((l) => l.includes('شكرا لزيارتكم'))).toBe(true);
+			expect(t.join('\n')).toContain('برجر');
+			// Nothing became a question mark: every character is ASCII or Arabic.
+			expect(t.join('')).not.toContain('?');
+		});
+	}
 });
 
 describe('renderReceipt — MANDATORY (spec 29): tax in both modes, money on paper', () => {
@@ -977,6 +1043,20 @@ describe('renderTestPage with the logo (T-24)', () => {
 		expect(withLogo.filter(isImageLine)).toHaveLength(1);
 		expect(withLogo.slice(1)).toEqual(renderTestPage(page));
 		expect(withLogo.slice(1).some(isImageLine)).toBe(false);
+	});
+
+	it('an Arabic sample adds its line, last, as text for printing.ts to draw', () => {
+		const sample = renderTestPage({ ...page, arabicSample: true }).filter(
+			(l): l is TextLine => !isImageLine(l)
+		);
+		const last = sample.at(-1)!;
+		expect(last.text.trim()).toBe(ARABIC_SAMPLE);
+		expect(last.bold).toBe(true);
+		expect(sample.map((l) => l.text.trim())).toContain('THE NEXT LINE IS ARABIC:');
+		for (const l of sample) expect(l.text.length).toBeLessThanOrEqual(32);
+		expect(
+			renderTestPage(page).some((l) => !isImageLine(l) && l.text.includes(ARABIC_SAMPLE))
+		).toBe(false);
 	});
 
 	it('a null or an absent logo gives no image line, and the same page', () => {

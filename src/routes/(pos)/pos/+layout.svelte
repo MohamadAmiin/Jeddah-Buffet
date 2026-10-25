@@ -52,7 +52,7 @@
 	} from '$lib/pos/employee.svelte';
 	import { flush, lastSkewMs, onFlushResult, onSkew, parkedCount } from '$lib/pos/queue';
 	import { agentStatus, printerChip, type AgentState } from '$lib/pos/print-client';
-	import { logoGate, startAutoPrint } from '$lib/pos/printing';
+	import { arabicGate, logoGate, startAutoPrint } from '$lib/pos/printing';
 	import { readLocalSession, staleShiftDate } from '$lib/pos/session';
 	import { captureInstallPrompt } from '$lib/pos/install.svelte';
 
@@ -252,6 +252,9 @@
 	// still needs the test print. Only the newest read may land, as for the status.
 	let logoCached = $state(false);
 	let logoConfirmed = $state(false);
+	// Arabic on paper (2026-10-25, printing.ts arabicGate): whether the till holds
+	// Arabic, and what printing it as pictures still needs — read the same way.
+	let arabic = $state<{ inUse: boolean; supported: boolean; confirmed: boolean } | undefined>();
 	let latestPrinterRead = 0;
 	async function refreshPrinter() {
 		const mine = ++latestPrinterRead;
@@ -259,17 +262,18 @@
 			const state = await agentStatus();
 			// The rule receipts use (printing.ts logoGate): a confirmation counts only
 			// while the agent reports the printer it was watched on (print-agent-installer).
-			const logo = await logoGate(state);
+			const [logo, arabicFacts] = await Promise.all([logoGate(state), arabicGate(state)]);
 			if (mine !== latestPrinterRead) return;
 			printer = state;
 			logoCached = logo.cached;
 			logoConfirmed = logo.confirmed;
+			arabic = arabicFacts;
 		} catch {
 			if (mine === latestPrinterRead) printer = { state: 'unreachable' };
 		}
 	}
 	const printerPill = $derived(
-		printer === null ? null : printerChip(printer, { logoCached, logoConfirmed })
+		printer === null ? null : printerChip(printer, { logoCached, logoConfirmed, arabic })
 	);
 	onMount(() => {
 		void refreshPrinter();
