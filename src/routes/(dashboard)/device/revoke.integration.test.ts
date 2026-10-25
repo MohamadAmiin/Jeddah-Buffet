@@ -9,6 +9,8 @@ import { posDevices } from '$lib/server/db/schema/pos-devices';
 import { auditLog } from '$lib/server/db/schema/audit';
 import type { Principal } from '$lib/server/auth/session';
 import { registerDevice, validateDeviceToken } from '$lib/server/auth/pos-device';
+import { posSessions } from '$lib/server/db/schema/pos-sessions';
+import { onRestaurantCreated } from '$lib/server/restaurants';
 import { load, actions } from './+page.server';
 
 const db = testDb();
@@ -164,5 +166,45 @@ describe('the /device revoke action', () => {
 
 		expect((result as { status?: number }).status).toBe(400);
 		expect(await validateDeviceToken(db, a.token)).not.toBeNull();
+	});
+});
+
+describe("the /device load — each till's open shift", () => {
+	it('names the open shift of the till that has one, and null for the others', async () => {
+		const a = await makeRestaurant(`shift-${Date.now()}@cafe.com`);
+		// The load reads the settings row and the time zone: give the restaurant its
+		// initializers, as registration does.
+		await db.transaction((tx) =>
+			onRestaurantCreated(tx, a.restaurantId, {
+				restaurantName: 'Cafe One',
+				timeZone: 'Africa/Mogadishu'
+			})
+		);
+		const second = await db.transaction((tx) =>
+			registerDevice(tx, { restaurantId: a.restaurantId, actorUserId: a.ownerId, label: 'Bar' })
+		);
+		const openedAt = new Date('2026-10-01T05:45:09.736Z');
+		await db.insert(posSessions).values({
+			restaurantId: a.restaurantId,
+			deviceId: a.deviceId,
+			openedByUserId: a.ownerId,
+			openedAt,
+			businessDate: '2026-10-01',
+			openingCashMinor: 0n,
+			status: 'open'
+		});
+
+		const data = (await load(
+			makeEvent(principal(a.ownerId, a.restaurantId, 'owner')) as never
+		)) as {
+			devices: Array<{ id: string; openShift: unknown }>;
+		};
+		const byId = new Map(data.devices.map((d) => [d.id, d.openShift]));
+		expect(byId.get(a.deviceId)).toEqual({
+			businessDate: '2026-10-01',
+			openedAt,
+			openedBy: 'The Owner'
+		});
+		expect(byId.get(second.deviceId)).toBeNull();
 	});
 });

@@ -297,3 +297,31 @@ export async function adoptServerSession(
 			})
 	);
 }
+
+/**
+ * A shift open for longer than this cannot belong to ONE business date, which
+ * is what spec 10 says a shift is ("every POS session belongs to one business
+ * date"): a day has passed in full since it opened. Below it nothing is said —
+ * a shift opened at 18:00 and still open at 01:30 is spec 10's own example.
+ * A derived bound, not a setting: it answers no open decision.
+ */
+export const SHIFT_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The business date of an OPEN shift that has outlived SHIFT_STALE_AFTER_MS,
+ * or null: not stale, not open (opening, closing, closed), or an unreadable
+ * openedAt. The till's bar names that date in its warnings chip and the shift
+ * screen repeats it, because every sale made now would land on that old date
+ * (invariant 11). Falls back to the opened day when the server's business date
+ * has not arrived yet.
+ */
+export function staleShiftDate(
+	session: Pick<LocalSession, 'state' | 'openedAt' | 'businessDate'>,
+	now: Date
+): string | null {
+	if (session.state !== 'open') return null;
+	const openedAt = Date.parse(session.openedAt);
+	if (!Number.isFinite(openedAt)) return null;
+	if (now.getTime() - openedAt <= SHIFT_STALE_AFTER_MS) return null;
+	return session.businessDate ?? session.openedAt.slice(0, 10);
+}

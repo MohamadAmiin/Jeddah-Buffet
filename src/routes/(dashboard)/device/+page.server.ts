@@ -10,6 +10,7 @@ import {
 	settingsComplete,
 	updateSettings
 } from '$lib/server/restaurants';
+import { openSessionsForRestaurant } from '$lib/server/pos-sessions';
 
 // THE DASHBOARD'S POS DEVICE PAGE — at /device, and deliberately NOT /pos and not
 // any path beginning with the characters "pos". /pos belongs to the till, and the
@@ -36,6 +37,13 @@ export const load: ServerLoad = async (event) => {
 	// row means (live = revokedAt === null), and a revoked code is still the
 	// explanation of every invoice that carries it.
 	const rows = await listDevices(db, restaurantId);
+	// Each till's open shift, if any: a shift is opened and closed ON the till
+	// (spec 10), so this page can only show one — but a shift left open for days
+	// puts every later sale on that old business date, and the owner has to be
+	// able to see which till it is.
+	const shiftByDevice = new Map(
+		(await openSessionsForRestaurant(db, restaurantId)).map((s) => [s.deviceId, s])
+	);
 	// The launch gate: settingsComplete() is the one list of what a till needs
 	// before it may be opened, and the idle lock is settable on this page.
 	const settings = await settingsComplete(db, restaurantId);
@@ -55,7 +63,13 @@ export const load: ServerLoad = async (event) => {
 			label: row.label,
 			registeredAt: row.registeredAt,
 			lastSeenAt: row.lastSeenAt,
-			revokedAt: row.revokedAt
+			revokedAt: row.revokedAt,
+			openShift: (() => {
+				const shift = shiftByDevice.get(row.id);
+				return shift
+					? { businessDate: shift.businessDate, openedAt: shift.openedAt, openedBy: shift.openedBy }
+					: null;
+			})()
 		})),
 		settings: { complete: settings.complete, missing: settings.missing },
 		// Passed through as stored — null until the owner chooses. No fallback

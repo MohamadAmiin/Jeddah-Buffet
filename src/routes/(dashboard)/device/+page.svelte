@@ -41,6 +41,7 @@
 		{ key: 'deviceCode', label: 'Code' },
 		{ key: 'registeredAt', label: 'Registered' },
 		{ key: 'status', label: 'Status' },
+		{ key: 'shift', label: 'Shift' },
 		{ key: 'actions', label: '' }
 	];
 
@@ -166,6 +167,25 @@
 								)}</span
 							>
 						{/if}
+					{:else if key === 'shift'}
+						<!-- A shift is opened and closed on the till, by a cashier or the owner
+						     with their PIN; this cell only shows it. Glyph with the word, never
+						     colour alone. -->
+						{#if device.openShift}
+							<span class="flex flex-col gap-0.5">
+								<span
+									><span aria-hidden="true" class="font-mono">●</span> Open · business date
+									<span class="font-mono">{device.openShift.businessDate}</span></span
+								>
+								<span class="text-ink-2"
+									>since {when(device.openShift.openedAt)} by {device.openShift.openedBy}</span
+								>
+							</span>
+						{:else}
+							<span class="text-ink-2"
+								><span aria-hidden="true" class="font-mono">○</span> No open shift</span
+							>
+						{/if}
 					{:else if key === 'actions'}
 						{#if device.revokedAt === null}
 							<!-- One form per live till, each with a distinct accessible name, so a
@@ -187,6 +207,12 @@
 			</Table>
 
 			{#if live.length > 0}
+				<p class="text-ink-2 text-sm">
+					A shift is opened and closed on the till itself — a cashier or the owner signs in with
+					their PIN and uses Open shift or Close shift in the till bar. Signing out does not close
+					it. Every sale belongs to the business date of the shift it was made in, so a shift left
+					open past its day should be closed on that till before selling again.
+				</p>
 				<p class="text-ink-2 text-sm">
 					Revoking a till stops its PIN logins immediately; the owner signs in on it again to
 					re-register it, and it then takes a new code — a code is never reused, so old invoices

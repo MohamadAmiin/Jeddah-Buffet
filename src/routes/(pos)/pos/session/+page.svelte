@@ -11,8 +11,13 @@
 	import { resolve } from '$app/paths';
 	import { minor, type Minor } from '$lib/money';
 	import { formatMoney, moneyFormatFor, type MoneyFormat } from '$lib/money/format';
-	import { RESTORED_CONTEXT, signedIn, signOut } from '$lib/pos/employee.svelte';
-	import { closeLocalSession, openLocalSession, readLocalSession } from '$lib/pos/session';
+	import { RESTORED_CONTEXT, hasPermission, signedIn, signOut } from '$lib/pos/employee.svelte';
+	import {
+		closeLocalSession,
+		openLocalSession,
+		readLocalSession,
+		staleShiftDate
+	} from '$lib/pos/session';
 	import { flush, onFlushResult, parkedCount, type FlushEvent } from '$lib/pos/queue';
 	import {
 		countUnsynced,
@@ -59,6 +64,14 @@
 	} | null>(null);
 
 	const typed = $derived(minor(BigInt(digits === '' ? '0' : digits)));
+
+	// Opening and closing need pos.payment — the key the SERVER demands of both
+	// ops (decision (d)); this screen only says so before the tap. A waiter's
+	// close would come back 403 and hold the queue behind it.
+	const mayManage = $derived(signedIn.current !== null && hasPermission('pos.payment'));
+	// A shift open for more than a day (session.ts: it cannot belong to one
+	// business date). Re-read with the 30 s clock.
+	const stale = $derived(session === null ? null : staleShiftDate(session, clock));
 
 	const expectedDate = $derived(
 		timeZone === null
@@ -315,6 +328,31 @@
 <main class="relative flex min-h-0 flex-1 overflow-y-auto p-3 md:p-4 lg:p-6">
 	{#if !ready}
 		<p class="text-ink-2 m-auto">Loading the shift…</p>
+	{:else if !mayManage}
+		<section
+			aria-labelledby="who-h"
+			class="rounded-card border-line bg-raise shadow-raised m-auto flex w-full max-w-xl flex-col gap-4 border p-6"
+		>
+			<p class="text-eyebrow text-ink-3 uppercase">Shift</p>
+			<h1 id="who-h" class="text-display">A cashier opens and closes the shift</h1>
+			<p class="text-ink-2">
+				{signedIn.current?.displayName ?? 'This employee'} does not hold the payment permission, so this
+				till will not {session === null ? 'open' : 'close'} a shift under their name. Sign out and ask
+				a cashier or the owner to sign in.
+			</p>
+			{#if session !== null}
+				<p class="text-ink-2">
+					A shift is open on this till{session.businessDate
+						? ` · business date ${session.businessDate}`
+						: ''}.
+				</p>
+			{/if}
+			<button
+				type="button"
+				class="min-h-touch-xl rounded-control border-control-line bg-accent text-title text-accent-ink w-full border font-semibold"
+				onclick={done}>Sign out</button
+			>
+		</section>
 	{:else if result && format}
 		{@const negative = result.difference < 0n}
 		{@const zero = result.difference === 0n}
@@ -353,6 +391,9 @@
 			</dl>
 			<p class="text-ink-2">
 				{zero ? 'Nothing was posted' : 'The server posted the difference to 6800 Cash Over/Short'}
+			</p>
+			<p class="text-ink-2">
+				Done signs you out. The next cashier signs in and opens a new shift with their float.
 			</p>
 			<button
 				type="button"
@@ -443,6 +484,12 @@
 						{/if}
 					</p>
 				</div>
+				{#if stale !== null}
+					<TillBanner tone="offline" live="status"
+						>This shift has been open since {stale} — more than a day. Every sale made now lands on that
+						business date: close it, then open today's.</TillBanner
+					>
+				{/if}
 				{#if session.state === 'closing'}
 					<TillBanner tone="pending" live="status">Closing… waiting for the server</TillBanner>
 					{#if waitingForNetwork}

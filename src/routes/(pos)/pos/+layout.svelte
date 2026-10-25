@@ -44,6 +44,7 @@
 	import TillBar from '$lib/components/pos/TillBar.svelte';
 	import {
 		RESTORED_CONTEXT,
+		hasPermission,
 		restoreFromMirror,
 		signedIn,
 		signOut,
@@ -52,7 +53,7 @@
 	import { flush, lastSkewMs, onFlushResult, onSkew, parkedCount } from '$lib/pos/queue';
 	import { agentStatus, printerChip, type AgentState } from '$lib/pos/print-client';
 	import { logoGate, startAutoPrint } from '$lib/pos/printing';
-	import { readLocalSession } from '$lib/pos/session';
+	import { readLocalSession, staleShiftDate } from '$lib/pos/session';
 	import { captureInstallPrompt } from '$lib/pos/install.svelte';
 
 	let { children } = $props();
@@ -377,10 +378,30 @@
 					.join('')
 	);
 
+	// SIGN OUT ends the employee's turn and nothing else: the shift belongs to the
+	// till (spec 10). The sign-in screen's mount signs out as well, so the two
+	// agree whichever way the cashier leaves.
+	function leave() {
+		signOut();
+		void goto(resolve('/pos'));
+	}
+	// The shift controls are offered to an employee holding pos.payment — the key
+	// the server demands of session.open and session.close (decision (d)). A
+	// waiter's close would be refused with 403 and stop the flush ahead of every
+	// later op; the server stays the control, this only keeps the key off screen.
+	const mayManageShift = $derived(signedIn.current !== null && hasPermission('pos.payment'));
+	// A shift open for more than a day cannot belong to one business date
+	// (spec 10, invariant 11): every sale made now lands on that old date. The
+	// 30 s clock below re-evaluates it; the shift screen repeats it.
+	const staleShift = $derived(session === null ? null : staleShiftDate(session, now));
+
 	// Every till warning that is not the connection or the unsynced count, merged
 	// into the bar's ONE warnings chip. Each is written out in full in its panel.
 	const warnings = $derived(
 		[
+			staleShift !== null
+				? `Shift from ${staleShift} still open — close it, then open today's`
+				: null,
 			unsyncedUnreadable ? 'Unsynced count unavailable' : null,
 			parked > 0 ? `${parked} operations from a previous registration` : null,
 			skewMinutes !== null ? `Clock is off by ${skewMinutes} min` : null,
@@ -458,6 +479,8 @@
 					initials,
 					isOwner: signedIn.current.isOwner
 				}}
+		{mayManageShift}
+		onSignOut={leave}
 		current={onSales ? 'sales' : page.url.pathname === '/pos/order' ? 'order' : 'other'}
 	/>
 	<div class="relative flex min-h-0 flex-1 flex-col overflow-y-auto">
