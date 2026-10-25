@@ -668,3 +668,51 @@ export function renderTestPage(input: TestPageInput): PrintLine[] {
 	const logo = input.logo ?? null;
 	return logo === null ? textLines : [{ image: logo }, ...textLines];
 }
+
+export type ArabicTestPageInput = Pick<
+	TestPageInput,
+	'width' | 'restaurantName' | 'deviceCode' | 'now' | 'timeZone' | 'printer'
+>;
+
+/** The Arabic test page's sample item: "Arabic shawarma". */
+export const ARABIC_SAMPLE_ITEM = 'شاورما عربي';
+
+/**
+ * THE ARABIC TEST PAGE (2026-10-25): every way Arabic appears on a receipt, on
+ * one page, so the owner can judge the printer in one look before pressing
+ * "Arabic printed correctly" — a centred heading (the restaurant name, as the
+ * receipt's first line), an item line with its quantity and price in their
+ * columns, a bold line, a tall line, and the sample sentence. Text only: the
+ * logo is checked by the ordinary test page, and printing.ts forPaper draws
+ * each Arabic line as a picture on the way out exactly as on a receipt.
+ */
+export function renderArabicTestPage(input: ArabicTestPageInput): TextLine[] {
+	const w = input.width;
+	const out: TextLine[] = [
+		...lines(center('matcami', w), { bold: true, align: 'center' }),
+		...lines(center('ARABIC TEST', w), { bold: true, size: 'tall', align: 'center' }),
+		rule('-', w),
+		...lines(center(`${input.printer.toUpperCase()} PRINTER`, w), { align: 'center' }),
+		...lines(center(`TERMINAL ${toPrintable(input.deviceCode)}`, w), { align: 'center' }),
+		...lines(center(formatDateTime(input.now, input.timeZone), w), { align: 'center' }),
+		rule('=', w),
+		...lines(center('1. YOUR NAME, CENTRED:', w), { align: 'center' }),
+		...lines(center(input.restaurantName, w), { bold: true, align: 'center' }),
+		rule('-', w),
+		line('2. AN ITEM LINE:'),
+		...lines(pair(`  1 ${ARABIC_SAMPLE_ITEM}`, '3.50', w, '    ')),
+		...lines(pair(`  2 ${ARABIC_SAMPLE_ITEM} (Shuwarmo Arabi)`, '7.00', w, '    ')),
+		rule('-', w),
+		line('3. BOLD AND TALL:'),
+		...lines(wrap(ARABIC_SAMPLE_ITEM, w), { bold: true }),
+		...lines(wrap(ARABIC_SAMPLE_ITEM, w), { size: 'tall' }),
+		rule('-', w),
+		...lines(center('4. THE SENTENCE:', w), { align: 'center' }),
+		...lines(center(ARABIC_SAMPLE, w), { bold: true, align: 'center' }),
+		rule('=', w),
+		...lines(center('IF THE LETTERS ARE JOINED,', w), { align: 'center' }),
+		...lines(center('READING RIGHT TO LEFT,', w), { align: 'center' }),
+		...lines(center('PRESS "ARABIC PRINTED CORRECTLY"', w), { align: 'center' })
+	];
+	return out.map((l) => ({ ...l, text: toPrintable(l.text) }));
+}

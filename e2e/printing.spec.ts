@@ -743,6 +743,18 @@ test('Arabic prints as a picture once the owner confirms the test print', async 
 		// The picture has letters in it: the Arabic font drew, not a blank strip.
 		expect(pictureInk(arReceipt.bytes())).toBeGreaterThan(100);
 		expect(textOutsidePictures(arKitchen.bytes()).includes('?')).toBe(false);
+		//    The dedicated Arabic page: nothing but Arabic in every form; the same answers.
+		const beforeArabic = arReceipt.bytes().length;
+		await tillPage.getByTestId('test-arabic').click();
+		await expect(results).toContainText('● Arabic test page sent to the receipt printer', {
+			timeout: 15_000
+		});
+		await arReceipt.waitFor('ARABIC TEST', { from: beforeArabic, timeoutMs: 15_000 });
+		await arReceipt.waitFor('PRINTED CORRECTLY', { from: beforeArabic, timeoutMs: 15_000 });
+		const arabicPage = arReceipt.bytes().subarray(beforeArabic);
+		expect(textOutsidePictures(arabicPage).includes('?')).toBe(false);
+		expect(pictureInk(arabicPage)).toBeGreaterThan(300);
+		await expect(tillPage.getByTestId('arabic-check-receipt')).toBeVisible();
 		await tillPage.getByTestId('arabic-printed-receipt').click();
 		await expect(results).toContainText('● The receipt printer will print Arabic');
 		await tillPage.getByTestId('arabic-printed-kitchen').click();

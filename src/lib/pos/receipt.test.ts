@@ -15,6 +15,8 @@ import {
 	renderReceipt,
 	renderTestPage,
 	ARABIC_SAMPLE,
+	ARABIC_SAMPLE_ITEM,
+	renderArabicTestPage,
 	toPrintable,
 	type PrintLine,
 	type ReceiptInput,
@@ -1058,6 +1060,34 @@ describe('renderTestPage with the logo (T-24)', () => {
 			renderTestPage(page).some((l) => !isImageLine(l) && l.text.includes(ARABIC_SAMPLE))
 		).toBe(false);
 	});
+
+	// 2026-10-25: the dedicated Arabic page.
+	for (const width of [32, 48] as const) {
+		it(`renderArabicTestPage at ${width}: Arabic in every form, every line fits, no '?'`, () => {
+			const page = renderArabicTestPage({
+				width,
+				restaurantName: 'مطعم جدة بوفيه',
+				deviceCode: 'POS8',
+				now: '2026-10-25T15:00:00Z',
+				timeZone: 'Africa/Mogadishu',
+				printer: 'receipt'
+			});
+			const t = page.map((l) => l.text);
+			for (const l of page) {
+				const max = l.size === 'double' ? Math.floor(width / 2) : width;
+				expect(l.text.length, l.text).toBeLessThanOrEqual(max);
+			}
+			expect(t.join('')).not.toContain('?');
+			expect(t.some((l) => l.includes('مطعم جدة بوفيه'))).toBe(true);
+			expect(t.some((l) => /^\s*1 شاورما عربي\s+3\.50$/.test(l))).toBe(true);
+			expect(page.find((l) => l.text.trim() === ARABIC_SAMPLE_ITEM && l.bold)).toBeDefined();
+			expect(
+				page.find((l) => l.text.trim() === ARABIC_SAMPLE_ITEM && l.size === 'tall')
+			).toBeDefined();
+			expect(t.some((l) => l.includes(ARABIC_SAMPLE))).toBe(true);
+			expect(t.map((x) => x.trim())).toContain('ARABIC TEST');
+		});
+	}
 
 	it('a null or an absent logo gives no image line, and the same page', () => {
 		expect(renderTestPage({ ...page, logo: null }).some(isImageLine)).toBe(false);
