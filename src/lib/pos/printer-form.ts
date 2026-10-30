@@ -117,6 +117,15 @@ export function agentSentence(
 	}
 }
 
+/**
+ * A PAIRED till whose agent is not answering: the setup is intact, so this never
+ * says to download or pair. Both claims are in the code: the installer starts the
+ * agent at sign-in, and running the file again keeps config.json and its token.
+ */
+export function agentWaiting(url: string): string {
+	return `◆ The print agent on this PC is not answering at ${url}. Nothing needs setting up again: it starts by itself after you sign in to this PC, and this page keeps checking. If it has not answered after a few minutes, run the matcami print agent file again (Print agent installer, below). That keeps the pairing and the printers.`;
+}
+
 /** The line the results list shows after Save printers. */
 export function messageFor(result: SavePrintersResult, url: string): string {
 	if (result === 'saved') return '● Printer saved. Press Test print.';
@@ -143,8 +152,10 @@ export function messageFor(result: SavePrintersResult, url: string): string {
 			return '◆ Update the print agent on this PC to set printers here — download it below';
 		case 'unauthorized':
 		case 'blocked':
-		case 'unreachable':
 			return agentSentence(result.error, url);
+		// Save printers is offered only to a paired till.
+		case 'unreachable':
+			return agentWaiting(url);
 		case 'not_set_up':
 			return '○ Printer not set up — pair this till first';
 		default:

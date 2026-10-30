@@ -45,6 +45,7 @@
 	import {
 		addressText,
 		agentSentence,
+		agentWaiting,
 		applyPrinters,
 		localNameOf,
 		messageFor,
@@ -216,14 +217,17 @@
 			? recommend(downloads.files, platform)
 			: { primary: [] as DownloadFile[], others: [] as DownloadFile[] }
 	);
-	// Open while the till still needs the agent; folded away once it answers.
-	const installerOpen = $derived(
-		!paired ||
-			status === null ||
-			status.state === 'unreachable' ||
-			status.state === 'blocked' ||
-			status.state === 'not_set_up'
+	// Open only while the till has NO pairing (2026-10-30). A paired till whose
+	// agent is not answering already has the agent: it may simply not have started
+	// yet, and offering the installer there reads as "set it up again". The installer
+	// stays one press away, and `agent-waiting` says when it is needed.
+	// Forget pairing waits for the same reason: while the agent is not answering it
+	// repairs nothing and costs a re-pair (the pairing is single-use on the agent).
+	const agentAnswered = $derived(
+		status !== null &&
+			(status.state === 'ready' || status.state === 'no_printer' || status.state === 'unauthorized')
 	);
+	const installerOpen = $derived(!paired || status === null || status.state === 'not_set_up');
 
 	async function loadDownloads() {
 		try {
@@ -335,15 +339,36 @@
 				return '● The agent answered';
 			case 'no_printer':
 				return '◆ The agent answered, but no printer address is set yet — enter it below';
+			case 'unreachable':
+				return paired ? agentWaiting(url) : agentSentence(state.state, url);
 			case 'unauthorized':
 			case 'blocked':
-			case 'unreachable':
 				// The same sentences a failed Save printers shows (printer-form.ts).
 				return agentSentence(state.state, url);
 			case 'not_set_up':
 				return '○ Printer not set up';
 		}
 	}
+
+	/** One more read of an agent that was not answering; a key in use goes first. */
+	async function recheckAgent() {
+		if (busy) return;
+		const next = await agentStatus();
+		if (busy || status?.state !== 'unreachable' || next.state === 'unreachable') return;
+		status = next;
+		({ cached: logoCached, confirmed: logoConfirmed } = await logoGate(next));
+		fillFields(next);
+		void loadLocalPrinters();
+		announceChange();
+	}
+	// While a paired till's agent is not answering, ask again every 5 s, so the owner
+	// sees it come back instead of reaching for the installer. The cleanup ends this
+	// with the page, and as soon as the state changes.
+	$effect(() => {
+		if (!paired || status?.state !== 'unreachable') return;
+		const every = setInterval(() => void recheckAgent(), 5000);
+		return () => clearInterval(every);
+	});
 
 	/** The fields show what the agent has now. Never called on a refresh the owner did not ask for. */
 	function fillFields(state: AgentState | null) {
@@ -1043,6 +1068,11 @@
 				<p class="text-ink-2" data-testid="paired-agent">
 					Paired with the agent at <span class="font-mono">{url}</span>.
 				</p>
+				{#if status?.state === 'unreachable'}
+					<p class="bg-raise-2 text-ink-2 rounded-control px-3 py-2" data-testid="agent-waiting">
+						{agentWaiting(url)}
+					</p>
+				{/if}
 				<button
 					type="button"
 					class={primary}
@@ -1272,9 +1302,10 @@
 				</details>
 			{/if}
 
-			{#if paired}
-				<!-- Shown only while there is a pairing to forget: a key that can do nothing
-				     is not offered. -->
+			{#if paired && agentAnswered}
+				<!-- Shown only while there is a pairing to forget AND the agent answered:
+				     a key that can do nothing is not offered, and forgetting a pairing
+				     while the agent is merely not running yet only costs a re-pair. -->
 				<div class="border-line flex flex-wrap items-center justify-between gap-3 border-t pt-4">
 					<p class="text-ink-2">
 						Pairing is stored on this till and kept when the till is registered again.

@@ -502,6 +502,25 @@ test('receipts, kitchen tickets and the drawer: cash prints, a reprint is COPY, 
 		{ n: '6' }
 	]);
 
+	// 13. THE PC WAS SWITCHED OFF AND THE AGENT HAS NOT STARTED YET: a paired till is
+	//     not sent back through setup, and it recovers by itself when the agent answers.
+	await signInOnTill(tillPage, 'The Owner', OWNER_PIN);
+	await tillPage.getByTestId('till-employee').click();
+	await tillPage.getByRole('link', { name: 'Printer', exact: true }).click();
+	await expect(tillPage).toHaveURL(/\/pos\/printer$/);
+	await expect(tillPage.getByTestId('paired-agent')).toBeVisible();
+	const waiting = tillPage.getByTestId('agent-waiting');
+	await expect(waiting).toContainText('Nothing needs setting up again');
+	await expect(tillPage.getByTestId('forget-pairing')).toHaveCount(0);
+	await expect(tillPage.getByTestId('pair-here')).toHaveCount(0);
+	await expect(tillPage.getByTestId('agent-download-details')).not.toHaveAttribute('open');
+	agent = await startAgent(configPath);
+	await expect(waiting).toHaveCount(0, { timeout: 15_000 });
+	await expect(tillPage.getByTestId('forget-pairing')).toBeVisible();
+	await expect(tillPage.getByTestId('printer-chip')).toContainText('Printer ready', {
+		timeout: 15_000
+	});
+
 	await till.close();
 });
 
