@@ -276,12 +276,23 @@
 		printer === null ? null : printerChip(printer, { logoCached, logoConfirmed, arabic })
 	);
 	onMount(() => {
-		void refreshPrinter();
-		const every = setInterval(() => void refreshPrinter(), 30_000);
+		// Every 30 s — every 5 s while the agent is not answering (2026-10-30), so a
+		// PC that has just started clears its chip as soon as the agent is up. Each
+		// wait starts after the read before it: a slow agent is never asked twice at
+		// once.
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let stopped = false;
+		const poll = async () => {
+			await refreshPrinter();
+			if (stopped) return;
+			timer = setTimeout(() => void poll(), printer?.state === 'unreachable' ? 5_000 : 30_000);
+		};
+		void poll();
 		const changed = () => void refreshPrinter();
 		addEventListener('matcami:printer-changed', changed);
 		return () => {
-			clearInterval(every);
+			stopped = true;
+			clearTimeout(timer);
 			removeEventListener('matcami:printer-changed', changed);
 			latestPrinterRead++;
 		};
