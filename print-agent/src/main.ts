@@ -207,12 +207,21 @@ async function runServer(configPath: string, config: AgentConfig): Promise<void>
 		status: async () =>
 			runtime
 				? runtime.deps.status()
-				: { agentVersion: 2, features: AGENT_FEATURES, printers: { receipt: null, kitchen: null } },
+				: {
+						agentVersion: 2,
+						features: AGENT_FEATURES,
+						printers: { receipt: null, kitchen: null },
+						arabicPrinters: config.arabicPrinters
+					},
 		setPrinters: async (printers) => {
 			if (!runtime) throw new Error('the agent is still starting');
 			return runtime.deps.setPrinters(printers);
 		},
 		listLocalPrinters: async () => (runtime ? runtime.deps.listLocalPrinters() : []),
+		setArabicPrinter: async (key, confirmed) => {
+			if (!runtime) throw new Error('the agent is still starting');
+			return runtime.deps.setArabicPrinter(key, confirmed);
+		},
 		claimPairing: () => claimPairing((runtime?.config() ?? config).dataDir),
 		setup: async (req, res, ctx) => (setup ? setup(req, res, ctx) : false)
 	});

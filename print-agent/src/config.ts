@@ -77,6 +77,15 @@ export type AgentConfig = {
 	printers: { receipt: PrinterConfig | null; kitchen: PrinterConfig | null };
 	/** Where the job queue, the seen-id store and agent.log live. */
 	dataDir: string;
+	/**
+	 * The printers the owner watched print Arabic correctly (2026-11-04): keys
+	 * in the till's own form, `local:<name>:<width>` or `<host>:<port>:<width>`.
+	 * Kept HERE, beside the pairing and the printers, because a confirmation
+	 * belongs to a printer on this PC — not to one browser's storage, where it
+	 * vanished whenever Windows opened the till in the other browser. Absent in
+	 * a config written before this field: an empty list.
+	 */
+	arabicPrinters: string[];
 };
 
 export const DEFAULT_AGENT_PORT = 9471;
@@ -190,6 +199,23 @@ function optionalPrinter(value: unknown, field: string): PrinterConfig | null {
 	return value === null || value === undefined ? null : parsePrinter(value, field);
 }
 
+/** A printer key as the till forms it: 1–300 printable characters, no control bytes. */
+export const PRINTER_KEY_RE = /^[^\x00-\x1f\x7f]{1,300}$/;
+
+/** The confirmed-for-Arabic list: absent = none; present = a list of printer keys, each one distinct. */
+export function parseArabicPrinters(raw: unknown): string[] {
+	if (raw === undefined || raw === null) return [];
+	if (!Array.isArray(raw)) fail('arabicPrinters', 'must be a list of printer keys');
+	const out: string[] = [];
+	for (const key of raw as unknown[]) {
+		if (typeof key !== 'string' || !PRINTER_KEY_RE.test(key)) {
+			fail('arabicPrinters', 'must hold printer keys of 1-300 printable characters');
+		}
+		if (!out.includes(key)) out.push(key);
+	}
+	return out;
+}
+
 export function parseConfig(raw: unknown): AgentConfig {
 	const config = record(raw, 'config');
 	const origin = parseOrigin(config.origin);
@@ -213,7 +239,16 @@ export function parseConfig(raw: unknown): AgentConfig {
 	if (typeof dataDir !== 'string' || dataDir.trim().length === 0) {
 		fail('dataDir', 'must be a non-empty path');
 	}
-	return { origin, token, setupSecret, port, printers: { receipt, kitchen }, dataDir };
+	const arabicPrinters = parseArabicPrinters(config.arabicPrinters);
+	return {
+		origin,
+		token,
+		setupSecret,
+		port,
+		printers: { receipt, kitchen },
+		dataDir,
+		arabicPrinters
+	};
 }
 
 export function loadConfig(path: string): AgentConfig {
@@ -296,6 +331,7 @@ export function createConfig(args: {
 		setupSecret: randomBytes(32).toString('hex'),
 		port: args.port ?? DEFAULT_AGENT_PORT,
 		printers: args.printers ?? { receipt: null, kitchen: null },
+		arabicPrinters: [],
 		dataDir: args.dataDir
 	});
 }

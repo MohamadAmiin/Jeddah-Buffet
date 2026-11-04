@@ -50,7 +50,7 @@ const tmp = () => {
 describe('parseConfig', () => {
 	it('accepts a complete config and normalises the origin', () => {
 		const parsed = parseConfig({ ...complete, origin: 'https://pos.example.com/' });
-		expect(parsed).toEqual({ ...complete, setupSecret: null });
+		expect(parsed).toEqual({ ...complete, setupSecret: null, arabicPrinters: [] });
 		expect(
 			parseConfig({ ...complete, printers: { receipt: complete.printers.receipt } }).printers
 				.kitchen
@@ -90,6 +90,22 @@ describe('parseConfig', () => {
 		expect(parseOrigin('http://localhost:4173')).toBe('http://localhost:4173');
 		expect(parseOrigin('http://127.0.0.1:5173/')).toBe('http://127.0.0.1:5173');
 		expect(() => parseOrigin('http://192.168.1.5:5173')).toThrow(/https/);
+	});
+
+	// 2026-11-04: the Arabic confirmation moved from the browser to this file.
+	it('reads arabicPrinters: absent is none, duplicates fold, a control byte is refused', () => {
+		expect(parseConfig(complete).arabicPrinters).toEqual([]);
+		expect(
+			parseConfig({ ...complete, arabicPrinters: ['local:A:48', 'local:A:48', '1.2.3.4:9100:32'] })
+				.arabicPrinters
+		).toEqual(['local:A:48', '1.2.3.4:9100:32']);
+		expect(() => parseConfig({ ...complete, arabicPrinters: 'local:A:48' })).toThrow(
+			/arabicPrinters/
+		);
+		expect(() => parseConfig({ ...complete, arabicPrinters: ['a\u001bb'] })).toThrow(
+			/arabicPrinters/
+		);
+		expect(() => parseConfig({ ...complete, arabicPrinters: [''] })).toThrow(/arabicPrinters/);
 	});
 
 	it("still reads the e2e harness's config (written before the installer: no setupSecret)", () => {

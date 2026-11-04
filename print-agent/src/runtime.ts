@@ -129,7 +129,8 @@ export function createRuntime(args: {
 	const noPrinterStatus = (): AgentStatus => ({
 		agentVersion: 2,
 		features: AGENT_FEATURES,
-		printers: { receipt: null, kitchen: null }
+		printers: { receipt: null, kitchen: null },
+		arabicPrinters: config.arabicPrinters
 	});
 
 	return {
@@ -145,8 +146,17 @@ export function createRuntime(args: {
 			},
 			status: async () => {
 				await settled();
-				return queue ? queue.status() : noPrinterStatus();
+				// The confirmed list is the config's, never the queue's: it outlives a rebuild.
+				return queue
+					? { ...(await queue.status()), arabicPrinters: config.arabicPrinters }
+					: noPrinterStatus();
 			},
+			setArabicPrinter: (key, confirmed) =>
+				serial(async () => {
+					const without = config.arabicPrinters.filter((k) => k !== key);
+					save({ ...config, arabicPrinters: confirmed ? [...without, key] : without });
+					return config.arabicPrinters;
+				}),
 			listLocalPrinters: () => listLocalPrinters(),
 			setPrinters: (next) =>
 				serial(async (): Promise<SetPrintersOutcome> => {
