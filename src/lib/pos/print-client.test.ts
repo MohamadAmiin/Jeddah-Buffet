@@ -403,6 +403,44 @@ describe('submitJob and pulseDrawer', () => {
 		}
 	});
 
+	// The agent's /status starts PowerShell for a printer on a Windows PC: slow, not
+	// lost. At the old 3 s a running agent read as unreachable and a sale skipped its
+	// receipt.
+	it('a slow agent is still ready at 9 s; only 10 s of silence is unreachable', async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		const slow = stubFetch([{ hang: true }]);
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+		try {
+			const pending = agentStatus(slow.fetchFn, unknown);
+			for (let i = 0; i < 200 && slow.calls.length === 0; i += 1) {
+				await new Promise((r) => setImmediate(r));
+			}
+			expect(slow.calls).toHaveLength(1);
+			await vi.advanceTimersByTimeAsync(9_999);
+			expect(slow.calls[0]!.init.signal!.aborted).toBe(false);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(slow.calls[0]!.init.signal!.aborted).toBe(true);
+			expect(await pending).toEqual({ state: 'unreachable' });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('pairing does not inherit the status wait: it still gives up after 3 s', async () => {
+		const { fetchFn, calls } = stubFetch([{ hang: true }]);
+		vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+		try {
+			const pending = requestPairing(URL, fetchFn, unknown);
+			await vi.advanceTimersByTimeAsync(2_999);
+			expect(calls[0]!.init.signal!.aborted).toBe(false);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(calls[0]!.init.signal!.aborted).toBe(true);
+			expect(await pending).toEqual({ ok: false, reason: 'unreachable' });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('the drawer waits 20 s, not 5: the agent may hold a pulse up to 15 s for a printer on the till PC', async () => {
 		await saveAgentSettings({ url: URL, token: TOKEN });
 		const { fetchFn, calls } = stubFetch([{ hang: true }]);
@@ -573,6 +611,52 @@ describe('printerChip', () => {
 				printerChip({ state })
 			);
 		}
+	});
+
+	// 2026-10-30: a printer the agent reports as not reachable is named, never "ready".
+	it('names a printer that may be off before anything else, with the waiting count', () => {
+		const receiptOff: ReadyStatus = {
+			agentVersion: 2,
+			printers: {
+				receipt: { width: 48, reachable: false, queued: 3 },
+				kitchen: { width: 32, reachable: true, queued: 0 }
+			}
+		};
+		const off = {
+			glyph: '◆',
+			text: 'Printer may be off — check its power and cable · 3 waiting',
+			tone: 'offline'
+		};
+		expect(printerChip({ state: 'ready', status: receiptOff })).toEqual(off);
+		// Before the logo and Arabic warnings: nothing prints until the printer is back.
+		expect(
+			printerChip(
+				{ state: 'ready', status: receiptOff },
+				{ logoCached: true, arabic: { inUse: true, supported: false, confirmed: false } }
+			)
+		).toEqual(off);
+		const kitchenOff: ReadyStatus = {
+			agentVersion: 2,
+			printers: {
+				receipt: { width: 48, reachable: true, queued: 0 },
+				kitchen: { width: 32, reachable: false, queued: 0 }
+			}
+		};
+		expect(printerChip({ state: 'ready', status: kitchenOff })).toEqual({
+			glyph: '◆',
+			text: 'Kitchen printer may be off — check its power and cable',
+			tone: 'offline'
+		});
+		// No kitchen printer: only the receipt printer counts.
+		const alone: ReadyStatus = {
+			agentVersion: 2,
+			printers: { receipt: { width: 48, reachable: true, queued: 0 }, kitchen: null }
+		};
+		expect(printerChip({ state: 'ready', status: alone })).toEqual({
+			glyph: '●',
+			text: 'Printer ready',
+			tone: 'ok'
+		});
 	});
 
 	it('gives each state its glyph, sentence and tone', () => {

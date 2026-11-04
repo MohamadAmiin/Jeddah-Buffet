@@ -156,7 +156,20 @@ export type DrawerResult =
 
 export type LocalNetworkPermission = 'granted' | 'denied' | 'prompt' | 'unknown';
 
-const STATUS_TIMEOUT_MS = 3000;
+/** `POST /pair` answers from a file on the PC at once. */
+const PAIR_TIMEOUT_MS = 3000;
+/**
+ * `GET /status` may take seconds on a healthy PC: for a printer plugged into a
+ * Windows PC the agent starts PowerShell twice per printer, one after the other,
+ * slowest right after sign-in. This limit is the line between "slow" and
+ * "unreachable", and a sale's print path reads it too, so one that is too short
+ * calls a running agent unreachable, skips the receipt and sends the owner to set
+ * up again. An agent that is not running costs no wait: the connection is refused
+ * at once.
+ */
+const STATUS_TIMEOUT_MS = 10_000;
+/** Listing the PC's printers is slower still, and only the Printer page asks. */
+const LOCAL_PRINTERS_TIMEOUT_MS = 15_000;
 const JOB_TIMEOUT_MS = 5000;
 /**
  * The drawer answer can take longer than a job: for a printer on the till PC
@@ -285,7 +298,7 @@ export async function requestPairing(
 ): Promise<PairingResult> {
 	if (!isAgentUrl(url)) return { ok: false, reason: 'refused' };
 	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS);
+	const timer = setTimeout(() => controller.abort(), PAIR_TIMEOUT_MS);
 	let response: Response;
 	try {
 		response = await fetchFn(url + '/pair', {
@@ -482,7 +495,7 @@ export async function listLocalPrinters(
 			settings,
 			'/local-printers',
 			{ method: 'GET' },
-			STATUS_TIMEOUT_MS * 5,
+			LOCAL_PRINTERS_TIMEOUT_MS,
 			fetchFn
 		);
 	} catch {
@@ -636,6 +649,12 @@ export type PrinterChipOptions = {
  * has not test-printed and confirmed yet, says so in the offline tone — the
  * till bar lists that sentence among its warnings. Receipts still print, without
  * the logo (T-24).
+ *
+ * A printer the agent reports as not reachable is named FIRST (2026-10-30): the
+ * agent answered, so nothing is wrong with the setup, and "ready" there hid a
+ * printer that was off. It says "may be" because that report comes from the PC's
+ * print service, whose reading of a Windows printer has not been checked on real
+ * hardware. Receipts wait on the agent or in the print service either way.
  */
 export function printerChip(state: AgentState, opts: PrinterChipOptions = {}): PrinterChip {
 	switch (state.state) {
@@ -643,6 +662,20 @@ export function printerChip(state: AgentState, opts: PrinterChipOptions = {}): P
 			const { receipt, kitchen } = state.status.printers;
 			const waiting = receipt.queued + (kitchen?.queued ?? 0);
 			const suffix = waiting > 0 ? ` · ${waiting} waiting` : '';
+			if (!receipt.reachable) {
+				return {
+					glyph: '◆',
+					text: `Printer may be off — check its power and cable${suffix}`,
+					tone: 'offline'
+				};
+			}
+			if (kitchen && !kitchen.reachable) {
+				return {
+					glyph: '◆',
+					text: `Kitchen printer may be off — check its power and cable${suffix}`,
+					tone: 'offline'
+				};
+			}
 			if (opts.logoCached && !agentPrintsImages(state.status)) {
 				return {
 					glyph: '◆',

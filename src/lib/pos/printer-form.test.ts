@@ -3,6 +3,7 @@ import type { AgentStatus, SavePrintersResult } from './print-client';
 import {
 	addressText,
 	agentSentence,
+	agentWaiting,
 	applyPrinters,
 	DEFAULT_PRINTER_PORT,
 	localNameOf,
@@ -188,8 +189,8 @@ describe('the sentence after Save printers (T-16)', () => {
 		);
 	});
 
-	it('unauthorized, blocked and unreachable read exactly as the page explains those states', () => {
-		for (const state of ['unauthorized', 'blocked', 'unreachable'] as const) {
+	it('unauthorized and blocked read exactly as the page explains those states', () => {
+		for (const state of ['unauthorized', 'blocked'] as const) {
 			expect(messageFor({ error: state }, URL)).toBe(agentSentence(state, URL));
 		}
 		expect(agentSentence('unauthorized', URL)).toBe(
@@ -201,6 +202,17 @@ describe('the sentence after Save printers (T-16)', () => {
 		expect(agentSentence('unreachable', URL)).toBe(
 			'◆ Printer unreachable — nothing answered at http://127.0.0.1:9471. Is the matcami print agent installed on this PC? Download it below.'
 		);
+	});
+
+	// 2026-10-30: only a paired till can Save printers, and its setup is intact, so an
+	// agent that is not answering is never a reason to install or pair again.
+	it('a paired till whose agent is not answering is told to wait, not to set up again', () => {
+		expect(messageFor({ error: 'unreachable' }, URL)).toBe(agentWaiting(URL));
+		const sentence = agentWaiting(URL);
+		expect(sentence).toContain(URL);
+		expect(sentence).toContain('Nothing needs setting up again');
+		expect(sentence).toContain('keeps the pairing and the printers');
+		expect(sentence).not.toMatch(/download|forget|pair this till/i);
 	});
 });
 
