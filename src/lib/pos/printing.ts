@@ -41,6 +41,7 @@ import { canPrint, type CanPrint } from './can-print';
 import type { Cart } from './orders';
 import { asciiFallback, hasArabic, isPlainAscii } from './paper-script';
 import {
+	ARABIC_PRINTERS_FEATURE,
 	agentPrintsImages,
 	agentStatus,
 	agentSupports,
@@ -305,9 +306,13 @@ export async function arabicForAgent(
 	const printer = printerFor(status, target);
 	const printerKey = printer ? printerKeyFor(printer) : null;
 	const supported = agentPrintsImages(status) && agentSupports(status, TEXT_IMAGES_FEATURE);
-	const confirmed =
-		printerKey !== null &&
-		(await readArabicConfirmedPrinters().catch(() => [] as string[])).includes(printerKey);
+	// THE LIST IS THE AGENT'S when it keeps one (2026-11-04): the confirmation
+	// belongs to the printer on that PC, and every browser on the PC must read
+	// the same answer. The browser's own store is only for an older agent.
+	const keys = agentSupports(status, ARABIC_PRINTERS_FEATURE)
+		? (status.arabicPrinters ?? [])
+		: await readArabicConfirmedPrinters().catch(() => [] as string[]);
+	const confirmed = printerKey !== null && keys.includes(printerKey);
 	return { supported, confirmed, draw: supported && (purpose === 'test' || confirmed), printerKey };
 }
 
