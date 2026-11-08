@@ -289,10 +289,8 @@ prints the logo. Lines without Arabic print as ordinary text. The labels the til
 3. If the line printed correctly — the letters joined, reading right to left — press **Arabic
    printed correctly on the receipt printer** (and the same for a separate kitchen printer). From
    then on that printer's receipts and tickets print Arabic. The confirmation belongs to that
-   printer on this PC and is kept by the agent, beside the pairing and the printers — so Chrome,
-   Edge and a re-registered till on this PC all see it (an agent from before 2026-11-04 kept it in
-   one browser only, and Windows opening the till in the other browser printed `?` again). A new
-   printer needs a new test print.
+   printer on this PC: it is kept when the till is registered again, and a new printer needs a new
+   test print.
 4. If the paper shows garbage or nothing where the line should be, press **It did not print
    correctly**: that printer keeps printing Arabic as `?`, which is safe — a printer that cannot
    print pictures may read a picture's bytes as commands, the drawer pulse included, which is why

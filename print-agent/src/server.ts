@@ -32,7 +32,6 @@ import { timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import {
 	DEFAULT_PRINTER_PORT,
-	PRINTER_KEY_RE,
 	parsePrinter,
 	type AgentConfig,
 	type ReadyPrinters
@@ -73,13 +72,7 @@ export type DrawerRequest = { id: string; completedAt: string };
  * printers (PUT /printers) and serves a setup page from an older one before it
  * sends anything (tasks/print-agent-installer). Additive: old tills ignore it.
  */
-export const AGENT_FEATURES = [
-	'printers',
-	'setup',
-	'local-printers',
-	'text-images',
-	'arabic-printers'
-] as const;
+export const AGENT_FEATURES = ['printers', 'setup', 'local-printers', 'text-images'] as const;
 /**
  * `host`/`port`, or `name` for a printer on this PC, let the till bind a logo
  * confirmation to ONE printer (T-14). `queued` counts what the agent holds —
@@ -95,12 +88,6 @@ export type AgentStatus = {
 	features: readonly string[];
 	/** `receipt` null: no printer set yet — the installer runs before anyone types an address. */
 	printers: { receipt: PrinterStatus | null; kitchen: PrinterStatus | null };
-	/**
-	 * The printers confirmed for Arabic on THIS PC (`arabic-printers`,
-	 * 2026-11-04): the till reads the gate from here, so every browser on the PC
-	 * agrees. Set and cleared by PUT /arabic.
-	 */
-	arabicPrinters: readonly string[];
 };
 export type SubmitOutcome = 'queued' | 'duplicate' | 'no_printer';
 export type DrawerOutcome =
@@ -118,8 +105,6 @@ export type AgentDeps = {
 	status: () => Promise<AgentStatus>;
 	/** Re-point the queue and the drawer at new printers (runtime.ts). */
 	setPrinters: (printers: AgentConfig['printers']) => Promise<SetPrintersOutcome>;
-	/** Record, or take back, that a printer prints Arabic correctly (runtime.ts); answers the list. */
-	setArabicPrinter: (key: string, confirmed: boolean) => Promise<readonly string[]>;
 	/** The printers this PC's print service knows (local-printer.ts) — what the Printer page offers to pick. */
 	listLocalPrinters: () => Promise<LocalPrinterInfo[]>;
 	/** Take open pairing's one claim (pairing.ts claimPairing). */
@@ -510,31 +495,6 @@ export function createAgentServer(getConfig: () => AgentConfig, deps: AgentDeps)
 			return;
 		}
 		// The till's Printer page sets the printers (tasks/print-agent-installer T-04).
-		// PUT /arabic {printerKey, confirmed} — "Arabic printed correctly" / "It did
-		// not" from the till's Printer page, kept on this PC (2026-11-04).
-		if (req.method === 'PUT' && path === '/arabic') {
-			const body = await jsonBody(req, send);
-			if (!body) return;
-			let raw: unknown;
-			try {
-				raw = JSON.parse(body.text);
-			} catch {
-				send(400, { error: 'bad_request', detail: 'body is not JSON' });
-				return;
-			}
-			const o = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : null;
-			const key = o?.printerKey;
-			const confirmed = o?.confirmed;
-			if (typeof key !== 'string' || !PRINTER_KEY_RE.test(key) || typeof confirmed !== 'boolean') {
-				send(422, {
-					error: 'bad_request',
-					detail: 'printerKey must be a printer key and confirmed a boolean'
-				});
-				return;
-			}
-			send(200, { arabicPrinters: await deps.setArabicPrinter(key, confirmed) });
-			return;
-		}
 		if (req.method === 'PUT' && path === '/printers') {
 			const body = await jsonBody(req, send);
 			if (!body) return;

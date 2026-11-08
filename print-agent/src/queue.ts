@@ -450,13 +450,7 @@ export function createQueue(options: QueueOptions): Queue {
 				: null;
 			// With no kitchen printer, kitchen jobs ride the receipt worker — count them there.
 			if (!options.printers.kitchen) receipt.queued += workers.kitchen.jobs.length;
-			// `arabicPrinters` is the config's: the runtime fills it in (runtime.ts status).
-			return {
-				agentVersion: 2,
-				features: AGENT_FEATURES,
-				printers: { receipt, kitchen },
-				arabicPrinters: []
-			};
+			return { agentVersion: 2, features: AGENT_FEATURES, printers: { receipt, kitchen } };
 		},
 		queuedByTarget: () => ({
 			receipt: workers.receipt.jobs.length,

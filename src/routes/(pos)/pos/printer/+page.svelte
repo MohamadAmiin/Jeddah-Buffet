@@ -40,9 +40,7 @@
 		type AgentSettings,
 		type AgentState,
 		type PairingRefusal,
-		type SubmitResult,
-		ARABIC_PRINTERS_FEATURE,
-		saveArabicPrinter
+		type SubmitResult
 	} from '$lib/pos/print-client';
 	import {
 		addressText,
@@ -789,34 +787,13 @@
 		}
 	}
 
-	/**
-	 * Record the answer where the gate reads it (printing.ts arabicForAgent): on
-	 * the PC, through the agent, when it keeps the list (2026-11-04) — so Chrome,
-	 * Edge and a re-registered till on this PC all agree; else in this browser's
-	 * store, for an older agent. An agent answer other than OK is an error here:
-	 * a confirmation silently kept in the wrong place is the bug this fixes.
-	 */
-	async function recordArabic(key: string, confirmed: boolean) {
-		const current =
-			status?.state === 'ready' || status?.state === 'no_printer' ? status.status : null;
-		if (current && agentSupports(current, ARABIC_PRINTERS_FEATURE)) {
-			const saved = await saveArabicPrinter(current, key, confirmed);
-			if (!saved.ok) throw new Error(`The agent did not keep the answer (${saved.error})`);
-			// The chip and the gate read the list from /status: fetch it fresh.
-			status = await agentStatus();
-			return;
-		}
-		if (confirmed) await confirmArabicPrinter(key);
-		else await withdrawArabicConfirmation(key);
-	}
-
 	/** "Arabic printed correctly" on one printer: its receipts and tickets draw Arabic from now on. */
 	async function arabicPrinted(sent: { role: 'receipt' | 'kitchen'; key: string }) {
 		if (busy) return;
 		busy = true;
 		failure = '';
 		try {
-			await recordArabic(sent.key, true);
+			await confirmArabicPrinter(sent.key);
 			arabicSentTo = arabicSentTo.filter((s) => s.role !== sent.role);
 			results = [...results, `● The ${sent.role} printer will print Arabic`];
 			await refreshArabic();
@@ -833,7 +810,7 @@
 		busy = true;
 		failure = '';
 		try {
-			await recordArabic(sent.key, false);
+			await withdrawArabicConfirmation(sent.key);
 			arabicSentTo = arabicSentTo.filter((s) => s.role !== sent.role);
 			results = [
 				...results,

@@ -74,8 +74,7 @@ describe('runInit', () => {
 				receipt: { host: '192.168.10.50', port: 9100, width: 48 },
 				kitchen: { host: '192.168.10.51', port: 9100, width: 32 }
 			},
-			dataDir: defaultPaths().dataDir,
-			arabicPrinters: []
+			dataDir: defaultPaths().dataDir
 		});
 		expect(config.token).toMatch(/^[0-9a-f]{64}$/);
 		expect(config.setupSecret).toMatch(/^[0-9a-f]{64}$/);

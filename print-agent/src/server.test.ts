@@ -37,18 +37,16 @@ const config: AgentConfig = {
 	setupSecret: null,
 	port: 0,
 	printers: PRINTERS,
-	dataDir: '/tmp/unused',
-	arabicPrinters: []
+	dataDir: '/tmp/unused'
 };
 
 const status: AgentStatus = {
 	agentVersion: 2,
-	features: ['printers', 'setup', 'local-printers', 'text-images', 'arabic-printers'],
+	features: ['printers', 'setup', 'local-printers', 'text-images'],
 	printers: {
 		receipt: { host: '127.0.0.1', port: 9100, width: 48, reachable: true, queued: 0 },
 		kitchen: { host: '127.0.0.1', port: 9101, width: 32, reachable: false, queued: 2 }
-	},
-	arabicPrinters: []
+	}
 };
 
 type Call = {
@@ -98,14 +96,8 @@ function harness() {
 	let pairingAnswer: PairingClaim = 'not_open';
 	let claims = 0;
 	let localPrinters: LocalPrinterInfo[] = [];
-	let arabicPrinters: string[] = [];
 	const deps: AgentDeps = {
 		listLocalPrinters: async () => localPrinters,
-		setArabicPrinter: async (key, confirmed) => {
-			arabicPrinters = arabicPrinters.filter((k) => k !== key);
-			if (confirmed) arabicPrinters = [...arabicPrinters, key];
-			return arabicPrinters;
-		},
 		submitJob: (job) => {
 			jobs.push(job);
 			return submitAnswer;
@@ -663,39 +655,6 @@ const putPrinters = (port: number, headers: Record<string, string>, body: unknow
 		body: JSON.stringify(body)
 	});
 
-// The Arabic confirmation lives on the PC (2026-11-04): PUT /arabic records or
-// takes back one printer key, behind the same three walls as every other route.
-describe('PUT /arabic — the Arabic confirmation on this PC', () => {
-	it('records a printer key, takes it back, and refuses a bad body', async () => {
-		const h = harness();
-		const { port, good } = await start(h.deps);
-		const headers = good({ 'content-type': 'application/json' });
-		const put = (body: unknown) =>
-			call(port, { method: 'PUT', path: '/arabic', headers, body: JSON.stringify(body) });
-		const on = await put({ printerKey: 'local:SomStar-80mm-Series:48', confirmed: true });
-		expect(on.status).toBe(200);
-		expect(on.json).toEqual({ arabicPrinters: ['local:SomStar-80mm-Series:48'] });
-		const off = await put({ printerKey: 'local:SomStar-80mm-Series:48', confirmed: false });
-		expect(off.json).toEqual({ arabicPrinters: [] });
-		for (const bad of [
-			{},
-			{ printerKey: '', confirmed: true },
-			{ printerKey: 'x', confirmed: 'yes' },
-			{ printerKey: 'a\u0000b', confirmed: true }
-		]) {
-			expect((await put(bad)).status, JSON.stringify(bad)).toBe(422);
-		}
-		// No token: the wall in front of it.
-		const bare = await call(port, {
-			method: 'PUT',
-			path: '/arabic',
-			headers: { host: `127.0.0.1:${port}`, origin: ORIGIN, 'content-type': 'application/json' },
-			body: JSON.stringify({ printerKey: 'k', confirmed: true })
-		});
-		expect(bare.status).toBe(401);
-	});
-});
-
 describe('the origin is never adopted from a request (the installer plan’s BLOCKER)', () => {
 	it('MANDATORY: a fresh install with pairing OPEN refuses /pair from another origin and changes nothing', async () => {
 		const { configPath, fresh } = freshInstall();
@@ -846,9 +805,8 @@ describe('no printer yet', () => {
 		expect(before.status).toBe(200);
 		expect(before.json).toEqual({
 			agentVersion: 2,
-			features: ['printers', 'setup', 'local-printers', 'text-images', 'arabic-printers'],
-			printers: { receipt: null, kitchen: null },
-			arabicPrinters: []
+			features: ['printers', 'setup', 'local-printers', 'text-images'],
+			printers: { receipt: null, kitchen: null }
 		});
 		const job = await call(port, {
 			method: 'POST',

@@ -74,12 +74,6 @@ export type AgentStatus = {
 	features?: readonly string[];
 	/** `receipt` null: the agent runs, but no printer address is set yet. */
 	printers: { receipt: PrinterStatus | null; kitchen: PrinterStatus | null };
-	/**
-	 * The printers confirmed for Arabic on the till PC, as the agent keeps them
-	 * (`arabic-printers`, 2026-11-04); absent from an older agent, whose
-	 * confirmation stays in this browser's own store (settings.ts).
-	 */
-	arabicPrinters?: readonly string[];
 };
 /** A status with a receipt printer set — what printing needs. */
 export type ReadyStatus = AgentStatus & {
@@ -99,13 +93,6 @@ export function agentPrintsImages(status: AgentStatus): boolean {
  * lines a job, each with a plain-text `fallback` (print-agent server.ts).
  */
 export const TEXT_IMAGES_FEATURE = 'text-images';
-/**
- * The agent keeps the Arabic confirmation on the PC (2026-11-04): PUT /arabic
- * records or takes back a printer key, and /status lists them. Before this the
- * till kept it in its own browser store, and Windows opening the till in the
- * other browser (Edge for Chrome) made a confirmed printer print '?' again.
- */
-export const ARABIC_PRINTERS_FEATURE = 'arabic-printers';
 
 /**
  * The agent offers this (`features` in its status) — e.g. 'printers' = PUT /printers,
@@ -113,12 +100,7 @@ export const ARABIC_PRINTERS_FEATURE = 'arabic-printers';
  */
 export function agentSupports(
 	status: AgentStatus,
-	feature:
-		| 'printers'
-		| 'setup'
-		| 'local-printers'
-		| typeof TEXT_IMAGES_FEATURE
-		| typeof ARABIC_PRINTERS_FEATURE
+	feature: 'printers' | 'setup' | 'local-printers' | typeof TEXT_IMAGES_FEATURE
 ): boolean {
 	return Array.isArray(status.features) && status.features.includes(feature);
 }
@@ -457,13 +439,9 @@ function stateOf(body: Record<string, unknown>): AgentState {
 	const features = Array.isArray(body.features)
 		? body.features.filter((f): f is string => typeof f === 'string')
 		: undefined;
-	const arabicPrinters = Array.isArray(body.arabicPrinters)
-		? body.arabicPrinters.filter((k): k is string => typeof k === 'string')
-		: undefined;
 	const base = {
 		agentVersion: typeof body.agentVersion === 'number' ? body.agentVersion : 0,
-		...(features ? { features } : {}),
-		...(arabicPrinters ? { arabicPrinters } : {})
+		...(features ? { features } : {})
 	};
 	if (rawReceipt === null) {
 		return { state: 'no_printer', status: { ...base, printers: { receipt: null, kitchen } } };
@@ -471,50 +449,6 @@ function stateOf(body: Record<string, unknown>): AgentState {
 	const receipt = printerStatusOf(rawReceipt);
 	if (!receipt) return { state: 'unreachable' };
 	return { state: 'ready', status: { ...base, printers: { receipt, kitchen } } };
-}
-
-export type SaveArabicResult =
-	| { ok: true; arabicPrinters: readonly string[] }
-	| {
-			ok: false;
-			error: 'unsupported' | 'unauthorized' | 'blocked' | 'unreachable' | 'not_set_up' | string;
-	  };
-
-/**
- * "Arabic printed correctly" / "It did not" for one printer key, kept on the PC
- * by an agent with `arabic-printers` (PUT /arabic). The caller falls back to the
- * browser store for an older agent.
- */
-export async function saveArabicPrinter(
-	status: AgentStatus,
-	printerKey: string,
-	confirmed: boolean,
-	fetchFn: typeof fetch = fetch,
-	probe: () => Promise<LocalNetworkPermission> = localNetworkPermission
-): Promise<SaveArabicResult> {
-	if (!agentSupports(status, ARABIC_PRINTERS_FEATURE)) return { ok: false, error: 'unsupported' };
-	const settings = await readAgentSettings();
-	if (!settings) return { ok: false, error: 'not_set_up' };
-	let response: Response;
-	try {
-		response = await agentFetch(
-			settings,
-			'/arabic',
-			{ method: 'PUT', body: { printerKey, confirmed } },
-			JOB_TIMEOUT_MS,
-			fetchFn
-		);
-	} catch {
-		return { ok: false, error: await failureState(probe) };
-	}
-	const body = await bodyOf(response);
-	if (response.status === 200 && Array.isArray(body.arabicPrinters)) {
-		return {
-			ok: true,
-			arabicPrinters: body.arabicPrinters.filter((k): k is string => typeof k === 'string')
-		};
-	}
-	return { ok: false, error: errorCode(body, response.status) };
 }
 
 export type SavePrintersResult =
@@ -728,17 +662,6 @@ export function printerChip(state: AgentState, opts: PrinterChipOptions = {}): P
 			const { receipt, kitchen } = state.status.printers;
 			const waiting = receipt.queued + (kitchen?.queued ?? 0);
 			const suffix = waiting > 0 ? ` · ${waiting} waiting` : '';
-			// An unconfirmed Arabic printer is said FIRST even while the printer is off
-			// (2026-11-04): a till whose confirmation is missing — another browser on
-			// the PC, an agent before `arabic-printers` — printed '?' with the only
-			// warning hidden behind "may be off" until the first bad receipt.
-			if (opts.arabic?.inUse && opts.arabic.supported && !opts.arabic.confirmed) {
-				return {
-					glyph: '◆',
-					text: `Test-print Arabic before receipts use it${suffix}`,
-					tone: 'offline'
-				};
-			}
 			if (!receipt.reachable) {
 				return {
 					glyph: '◆',

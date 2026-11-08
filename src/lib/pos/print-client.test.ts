@@ -628,26 +628,13 @@ describe('printerChip', () => {
 			tone: 'offline'
 		};
 		expect(printerChip({ state: 'ready', status: receiptOff })).toEqual(off);
-		// Before the logo warning and an agent too old for Arabic: nothing prints
-		// until the printer is back.
+		// Before the logo and Arabic warnings: nothing prints until the printer is back.
 		expect(
 			printerChip(
 				{ state: 'ready', status: receiptOff },
 				{ logoCached: true, arabic: { inUse: true, supported: false, confirmed: false } }
 			)
 		).toEqual(off);
-		// But NOT before an unconfirmed Arabic printer (2026-11-04): a missing
-		// confirmation printed '?' with that warning hidden behind "may be off".
-		expect(
-			printerChip(
-				{ state: 'ready', status: receiptOff },
-				{ arabic: { inUse: true, supported: true, confirmed: false } }
-			)
-		).toEqual({
-			glyph: '◆',
-			text: 'Test-print Arabic before receipts use it · 3 waiting',
-			tone: 'offline'
-		});
 		const kitchenOff: ReadyStatus = {
 			agentVersion: 2,
 			printers: {
@@ -764,38 +751,6 @@ describe('agentStatus validates the body (print-agent-installer T-14)', () => {
 });
 
 describe('agentSupports and printerKeyOf', () => {
-	// 2026-11-04: the Arabic confirmation list comes from the agent's /status.
-	it('reads arabicPrinters from a status body, strings only; absent stays absent', async () => {
-		const body = {
-			agentVersion: 2,
-			features: ['printers', 'arabic-printers'],
-			printers: {
-				receipt: { host: '10.0.0.5', port: 9100, width: 48, reachable: true, queued: 0 },
-				kitchen: null
-			},
-			arabicPrinters: ['local:SomStar-80mm-Series:48', 7, null]
-		};
-		const fetchFn = (async () =>
-			new Response(JSON.stringify(body), {
-				status: 200,
-				headers: { 'content-type': 'application/json' }
-			})) as unknown as typeof fetch;
-		await saveAgentSettings({ url: 'http://127.0.0.1:9471', token: 'ab'.repeat(32) });
-		const state = await agentStatus(fetchFn, async () => 'granted');
-		expect(state.state).toBe('ready');
-		if (state.state !== 'ready') return;
-		expect(state.status.arabicPrinters).toEqual(['local:SomStar-80mm-Series:48']);
-		const older = await agentStatus(
-			(async () =>
-				new Response(JSON.stringify({ ...body, arabicPrinters: undefined }), {
-					status: 200,
-					headers: { 'content-type': 'application/json' }
-				})) as unknown as typeof fetch,
-			async () => 'granted'
-		);
-		expect(older.state === 'ready' && older.status.arabicPrinters).toBeUndefined();
-	});
-
 	it('features are read only from an array', () => {
 		expect(agentSupports(NEW_AGENT, 'printers')).toBe(true);
 		expect(agentSupports(NEW_AGENT, 'setup')).toBe(true);

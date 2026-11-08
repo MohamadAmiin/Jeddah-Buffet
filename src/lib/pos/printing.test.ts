@@ -21,7 +21,6 @@ import {
 	type AgentStatus
 } from './print-client';
 import {
-	arabicForAgent,
 	arabicGate,
 	CATCH_UP_WINDOW_MS,
 	catchUp,
@@ -928,38 +927,6 @@ describe('Arabic on paper (2026-10-25)', () => {
 			confirmed: true
 		});
 		expect(await arabicGate(null)).toEqual({ inUse: true, supported: false, confirmed: false });
-	});
-
-	// 2026-11-04: on an agent with `arabic-printers` the gate reads the AGENT's
-	// list — the browser's own store is ignored, so Chrome and Edge on one PC
-	// cannot disagree. On an older agent the browser store still decides.
-	it('the gate reads the confirmation from the agent when it keeps one, else from this browser', async () => {
-		const withList = (arabicPrinters: string[]): AgentStatus => ({
-			agentVersion: 2,
-			features: ['printers', 'setup', 'text-images', 'arabic-printers'],
-			printers: {
-				receipt: { host: '10.0.0.5', port: 9100, width: 48, reachable: true, queued: 0 },
-				kitchen: null
-			},
-			arabicPrinters
-		});
-		// The browser store says yes, the agent says no: the agent wins.
-		await confirmArabicPrinter(RECEIPT_KEY);
-		expect((await arabicForAgent(withList([]), 'receipt', 'print')).confirmed).toBe(false);
-		// The agent says yes, the browser store is empty: the agent wins.
-		await withdrawArabicConfirmation(RECEIPT_KEY);
-		expect((await arabicForAgent(withList([RECEIPT_KEY]), 'receipt', 'print')).confirmed).toBe(
-			true
-		);
-		// An older agent (no feature): this browser's store decides.
-		const older: AgentStatus = {
-			...withList([RECEIPT_KEY]),
-			features: ['printers', 'setup', 'text-images'],
-			arabicPrinters: undefined
-		};
-		expect((await arabicForAgent(older, 'receipt', 'print')).confirmed).toBe(false);
-		await confirmArabicPrinter(RECEIPT_KEY);
-		expect((await arabicForAgent(older, 'receipt', 'print')).confirmed).toBe(true);
 	});
 
 	it('forPaper passes ASCII and image lines as they are', async () => {

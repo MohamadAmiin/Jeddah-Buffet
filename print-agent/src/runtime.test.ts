@@ -118,9 +118,8 @@ describe('a runtime with no receipt printer', () => {
 		const { runtime, dataDir } = setUp({ receipt: null, kitchen: null });
 		expect(await runtime.deps.status()).toEqual({
 			agentVersion: 2,
-			features: ['printers', 'setup', 'local-printers', 'text-images', 'arabic-printers'],
-			printers: { receipt: null, kitchen: null },
-			arabicPrinters: []
+			features: ['printers', 'setup', 'local-printers', 'text-images'],
+			printers: { receipt: null, kitchen: null }
 		});
 		expect(await runtime.deps.submitJob(job('a', 'Tea'))).toBe('no_printer');
 		expect(await runtime.deps.pulseDrawer({ id: 'd', completedAt: new Date().toISOString() })).toBe(
@@ -294,34 +293,6 @@ describe('setPrinters re-wires the queue and the drawer', () => {
 		await until(() => b.jobs.length >= 1, 5000, 'the waiting job on B');
 		await settle(600);
 		expect(b.jobs).toHaveLength(1);
-	});
-});
-
-// 2026-11-04: the Arabic confirmation belongs to the PC, so it is in config.json
-// and survives a restart — and a printer rebuild, which replaces the queue.
-describe('setArabicPrinter', () => {
-	it('saves the key on disk, status reports it, and it outlives a printers rebuild', async () => {
-		const { runtime, configPath } = setUp({ receipt: null, kitchen: null });
-		expect(await runtime.deps.setArabicPrinter('local:SomStar-80mm-Series:48', true)).toEqual([
-			'local:SomStar-80mm-Series:48'
-		]);
-		expect(onDisk(configPath).arabicPrinters).toEqual(['local:SomStar-80mm-Series:48']);
-		expect((await runtime.deps.status()).arabicPrinters).toEqual(['local:SomStar-80mm-Series:48']);
-		// A second confirmation of the same printer folds; another printer adds.
-		await runtime.deps.setArabicPrinter('local:SomStar-80mm-Series:48', true);
-		await runtime.deps.setArabicPrinter('10.0.0.6:9100:32', true);
-		expect(runtime.config().arabicPrinters).toEqual([
-			'local:SomStar-80mm-Series:48',
-			'10.0.0.6:9100:32'
-		]);
-		// Taking one back leaves the other.
-		expect(await runtime.deps.setArabicPrinter('local:SomStar-80mm-Series:48', false)).toEqual([
-			'10.0.0.6:9100:32'
-		]);
-		// A fresh runtime over the same file still has it: a restart loses nothing.
-		const again = createRuntime({ configPath, config: onDisk(configPath), queue: FAST });
-		runtimes.push(again);
-		expect((await again.deps.status()).arabicPrinters).toEqual(['10.0.0.6:9100:32']);
 	});
 });
 
