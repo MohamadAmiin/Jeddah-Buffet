@@ -72,6 +72,12 @@ export type AgentStatus = {
 	agentVersion: number;
 	/** What the agent can do beyond printing ('printers', 'setup'); absent from an older agent. */
 	features?: readonly string[];
+	/**
+	 * The printer keys an agent that keeps its own Arabic confirmations reports
+	 * (a Nov 2026 agent). SHOWN on the Printer page's details box only: the gate
+	 * (printing.ts arabicForAgent) reads this browser's store, not this list.
+	 */
+	arabicPrinters?: readonly string[];
 	/** `receipt` null: the agent runs, but no printer address is set yet. */
 	printers: { receipt: PrinterStatus | null; kitchen: PrinterStatus | null };
 };
@@ -439,9 +445,13 @@ function stateOf(body: Record<string, unknown>): AgentState {
 	const features = Array.isArray(body.features)
 		? body.features.filter((f): f is string => typeof f === 'string')
 		: undefined;
+	const arabicPrinters = Array.isArray(body.arabicPrinters)
+		? body.arabicPrinters.filter((k): k is string => typeof k === 'string')
+		: undefined;
 	const base = {
 		agentVersion: typeof body.agentVersion === 'number' ? body.agentVersion : 0,
-		...(features ? { features } : {})
+		...(features ? { features } : {}),
+		...(arabicPrinters ? { arabicPrinters } : {})
 	};
 	if (rawReceipt === null) {
 		return { state: 'no_printer', status: { ...base, printers: { receipt: null, kitchen } } };

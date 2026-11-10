@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentStatus, SavePrintersResult } from './print-client';
+import type { AgentState, AgentStatus, ReadyStatus, SavePrintersResult } from './print-client';
 import {
 	addressText,
 	agentSentence,
 	agentWaiting,
 	applyPrinters,
+	browserName,
 	DEFAULT_PRINTER_PORT,
 	localNameOf,
 	messageFor,
 	parseAddress,
 	placeOf,
+	printerDetails,
 	receiptChanged,
+	type DetailsInput,
 	type PrintersBody
 } from './printer-form';
 
@@ -262,5 +265,160 @@ describe('a printer plugged into the till PC (feat/local-printers)', () => {
 		expect(messageFor({ error: 'bad_printers', field: 'kitchen.host' }, URL)).toBe(
 			'✕ Check the printer address'
 		);
+	});
+});
+
+// ── The Printer details box (2026-11-10) ────────────────────────────────────
+
+const EDGE =
+	'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0';
+const CHROME =
+	'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+const LOCAL: ReadyStatus = {
+	agentVersion: 2,
+	features: ['printers', 'setup', 'local-printers', 'text-images'],
+	printers: {
+		receipt: { name: 'SomStar 80mm Series', width: 48, reachable: true, queued: 0 },
+		kitchen: null
+	}
+};
+
+function input(over: Partial<DetailsInput> = {}): DetailsInput {
+	return {
+		state: { state: 'ready', status: LOCAL },
+		confirmedHere: ['local:SomStar 80mm Series:48'],
+		arabic: { inUse: true, supported: true, confirmed: true },
+		browser: { userAgent: EDGE, standalone: true, persisted: true },
+		...over
+	};
+}
+
+const value = (rows: ReturnType<typeof printerDetails>, label: string) =>
+	rows.find((row) => row.label === label)?.value;
+
+describe('browserName tells Edge from Chrome', () => {
+	it('Edge and Opera carry the Chrome token and are named first', () => {
+		expect(browserName(EDGE)).toBe('Edge');
+		expect(browserName(CHROME)).toBe('Chrome');
+		expect(browserName(CHROME.replace('Chrome/', 'HeadlessChrome/'))).toBe('Chrome');
+		expect(browserName(`${CHROME} OPR/115.0.0.0`)).toBe('Opera');
+		expect(
+			browserName('Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0')
+		).toBe('Firefox');
+		expect(browserName('')).toBe('unknown browser');
+	});
+});
+
+describe('the Printer details box (2026-11-10)', () => {
+	it('names the browser, the window and the storage', () => {
+		expect(value(printerDetails(input()), 'Browser')).toBe(
+			'Edge · installed app window · storage persisted'
+		);
+		expect(
+			value(
+				printerDetails(
+					input({ browser: { userAgent: CHROME, standalone: false, persisted: null } })
+				),
+				'Browser'
+			)
+		).toBe('Chrome · browser tab · storage: unknown');
+		expect(
+			value(
+				printerDetails(
+					input({ browser: { userAgent: CHROME, standalone: false, persisted: false } })
+				),
+				'Browser'
+			)
+		).toBe('Chrome · browser tab · storage NOT persisted');
+	});
+
+	it('shows the agent, the printer keys and both confirmation lists', () => {
+		const rows = printerDetails(input());
+		expect(value(rows, 'Agent')).toBe('version 2 · printers, setup, local-printers, text-images');
+		expect(value(rows, 'Receipt printer')).toBe(
+			'local:SomStar 80mm Series:48 · reachable · 0 waiting'
+		);
+		expect(value(rows, 'Kitchen printer')).toBe('none (tickets print on the receipt printer)');
+		expect(value(rows, 'Arabic confirmed on the agent')).toBe('this agent keeps no list');
+		expect(value(rows, 'Arabic confirmed in this browser')).toBe('local:SomStar 80mm Series:48');
+		expect(value(rows, 'Receipts draw Arabic')).toBe('yes');
+	});
+
+	it('an agent that keeps its own list shows it, empty or not', () => {
+		const keeps = { ...LOCAL, arabicPrinters: [] as string[] };
+		expect(
+			value(
+				printerDetails(input({ state: { state: 'ready', status: keeps } })),
+				'Arabic confirmed on the agent'
+			)
+		).toBe('none');
+		expect(
+			value(
+				printerDetails(
+					input({
+						state: { state: 'ready', status: { ...keeps, arabicPrinters: ['local:X:48'] } }
+					})
+				),
+				'Arabic confirmed on the agent'
+			)
+		).toBe('local:X:48');
+	});
+
+	it("says why receipts print '?' in the gate's own words", () => {
+		const unconfirmed = input({
+			confirmedHere: [],
+			arabic: { inUse: true, supported: true, confirmed: false }
+		});
+		const rows = printerDetails(unconfirmed);
+		expect(value(rows, 'Arabic confirmed in this browser')).toBe('none');
+		expect(value(rows, 'Receipts draw Arabic')).toBe(
+			'no — the printer is not confirmed in THIS browser'
+		);
+		expect(
+			value(
+				printerDetails(input({ arabic: { inUse: true, supported: false, confirmed: false } })),
+				'Receipts draw Arabic'
+			)
+		).toBe('no — the agent cannot print pictures (update it)');
+		expect(
+			value(
+				printerDetails(input({ arabic: { inUse: false, supported: true, confirmed: false } })),
+				'Receipts draw Arabic'
+			)
+		).toBe('no Arabic in the menu or the receipt header');
+		expect(value(printerDetails(input({ arabic: undefined })), 'Receipts draw Arabic')).toBe(
+			'not read yet'
+		);
+	});
+
+	it('an agent that is not answering, or no pairing, still gives the browser rows', () => {
+		for (const [state, text] of [
+			[null, 'not paired'],
+			[{ state: 'not_set_up' }, 'not paired'],
+			[{ state: 'unreachable' }, 'not answering (unreachable)'],
+			[{ state: 'unauthorized' }, 'not answering (unauthorized)']
+		] as Array<[AgentState | null, string]>) {
+			const rows = printerDetails(input({ state }));
+			expect(value(rows, 'Agent')).toBe(text);
+			expect(value(rows, 'Receipt printer')).toBeUndefined();
+			expect(value(rows, 'Arabic confirmed in this browser')).toBe('local:SomStar 80mm Series:48');
+		}
+	});
+
+	it('a network printer and an older agent read as their keys say', () => {
+		const older: ReadyStatus = {
+			agentVersion: 2,
+			printers: {
+				receipt: { width: 48, reachable: false, queued: 2 },
+				kitchen: { host: '192.168.1.60', port: 9100, width: 32, reachable: true, queued: 0 }
+			}
+		};
+		const rows = printerDetails(input({ state: { state: 'ready', status: older } }));
+		expect(value(rows, 'Agent')).toBe('version 2 · no features (an older agent)');
+		expect(value(rows, 'Receipt printer')).toBe(
+			'no key (an older agent) · not reachable · 2 waiting'
+		);
+		expect(value(rows, 'Kitchen printer')).toBe('192.168.1.60:9100:32 · reachable · 0 waiting');
 	});
 });

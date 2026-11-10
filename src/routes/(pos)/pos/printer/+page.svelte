@@ -51,6 +51,8 @@
 		messageFor,
 		parseAddress,
 		placeOf,
+		printerDetails,
+		type DetailRow,
 		type PrinterFields,
 		type PrinterPlace,
 		type PrinterWidth
@@ -67,6 +69,7 @@
 	import {
 		confirmArabicPrinter,
 		confirmReceiptLogo,
+		readArabicConfirmedPrinters,
 		readReceiptLogo,
 		withdrawArabicConfirmation,
 		withdrawReceiptLogoConfirmation
@@ -125,6 +128,34 @@
 	// and that answer records the printer's key (settings.ts confirmArabicPrinter).
 	let arabic = $state<{ inUse: boolean; supported: boolean; confirmed: boolean } | undefined>();
 	let arabicSentTo = $state<{ role: 'receipt' | 'kitchen'; key: string }[]>([]);
+	// THE PRINTER DETAILS BOX (2026-11-10, printer-form.ts printerDetails): the
+	// facts the Arabic gate uses, for a screenshot when a receipt prints '?'.
+	// Re-read whenever the agent answers or the Arabic facts change.
+	let details = $state<DetailRow[]>([]);
+	async function refreshDetails() {
+		const seen = status;
+		const facts = arabic;
+		const [confirmedHere, persisted] = await Promise.all([
+			readArabicConfirmedPrinters().catch(() => [] as string[]),
+			navigator.storage?.persisted?.().catch(() => null) ?? Promise.resolve(null)
+		]);
+		if (seen !== status || facts !== arabic) return;
+		details = printerDetails({
+			state: seen,
+			confirmedHere,
+			arabic: facts,
+			browser: {
+				userAgent: navigator.userAgent,
+				standalone: matchMedia('(display-mode: standalone)').matches,
+				persisted
+			}
+		});
+	}
+	$effect(() => {
+		void status;
+		void arabic;
+		void refreshDetails();
+	});
 	async function refreshArabic() {
 		const seen = status;
 		const facts = await arabicGate(seen).catch(() => undefined);
@@ -1321,6 +1352,26 @@
 					</button>
 				</div>
 			{/if}
+
+			<!-- Printer details (2026-11-10): the facts a '?' receipt is diagnosed from,
+			     in one screenshot. Read-only; no secret is shown (the token stays out). -->
+			<details class="group border-line border-t pt-4" data-testid="printer-details">
+				<summary
+					class="min-h-touch text-ink flex cursor-pointer items-center justify-between gap-3 px-4 {KEY}"
+				>
+					Printer details
+					<span aria-hidden="true" class="font-mono group-open:hidden">▸</span>
+					<span aria-hidden="true" class="hidden font-mono group-open:inline">▾</span>
+				</summary>
+				<dl class="text-ink-2 mt-3 flex flex-col gap-2">
+					{#each details as row (row.label)}
+						<div class="flex flex-col gap-0.5">
+							<dt class="text-ink font-semibold">{row.label}</dt>
+							<dd class="font-mono break-all">{row.value}</dd>
+						</div>
+					{/each}
+				</dl>
+			</details>
 		{/if}
 	</div>
 </main>
