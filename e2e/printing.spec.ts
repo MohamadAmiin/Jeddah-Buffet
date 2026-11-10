@@ -774,11 +774,26 @@ test('Arabic prints as a picture once the owner confirms the test print', async 
 		expect(textOutsidePictures(arabicPage).includes('?')).toBe(false);
 		expect(pictureInk(arabicPage)).toBeGreaterThan(300);
 		await expect(tillPage.getByTestId('arabic-check-receipt')).toBeVisible();
+		// The Printer details box (2026-11-10) states the facts the gate uses, before
+		// and after the confirmation: a '?' receipt is diagnosed from a screenshot of it.
+		const detailsBox = tillPage.getByTestId('printer-details');
+		const detail = (label: string) =>
+			detailsBox
+				.locator('div', { has: tillPage.locator('dt').getByText(label, { exact: true }) })
+				.locator('dd');
+		await detailsBox.locator('summary').click();
+		await expect(detail('Arabic confirmed in this browser')).toHaveText('none');
+		await expect(detail('Receipts draw Arabic')).toHaveText(
+			'no — the printer is not confirmed in THIS browser'
+		);
+		await expect(detail('Browser')).toContainText('Chrome · browser tab');
 		await tillPage.getByTestId('arabic-printed-receipt').click();
 		await expect(results).toContainText('● The receipt printer will print Arabic');
 		await tillPage.getByTestId('arabic-printed-kitchen').click();
 		await expect(results).toContainText('● The kitchen printer will print Arabic');
 		await expect(chip).toContainText('Printer ready');
+		await expect(detail('Receipts draw Arabic')).toHaveText('yes');
+		await expect(detail('Arabic confirmed in this browser')).not.toHaveText('none');
 
 		// 4. A cash sale: the receipt's Arabic header line is a picture, never '?'.
 		const before = arReceipt.bytes().length;

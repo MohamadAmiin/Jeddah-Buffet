@@ -748,6 +748,21 @@ describe('agentStatus validates the body (print-agent-installer T-14)', () => {
 		const state = await agentStatus(stubFetch([{ status: 200, body: READY }]).fetchFn, unknown);
 		expect(state).toEqual({ state: 'ready', status: READY });
 	});
+
+	it("an agent's own Arabic list is kept as strings only, for the details box (2026-11-10)", async () => {
+		await saveAgentSettings({ url: URL, token: TOKEN });
+		const body = { ...NEW_AGENT, arabicPrinters: ['local:A:48', 7, null, 'b:9100:32'] };
+		const state = await agentStatus(stubFetch([{ status: 200, body }]).fetchFn, unknown);
+		expect(state).toEqual({
+			state: 'ready',
+			status: { ...NEW_AGENT, arabicPrinters: ['local:A:48', 'b:9100:32'] }
+		});
+		const without = await agentStatus(
+			stubFetch([{ status: 200, body: { ...NEW_AGENT, arabicPrinters: 'x' } }]).fetchFn,
+			unknown
+		);
+		expect(without).toEqual({ state: 'ready', status: NEW_AGENT });
+	});
 });
 
 describe('agentSupports and printerKeyOf', () => {

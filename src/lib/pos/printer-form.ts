@@ -11,6 +11,7 @@
 import {
 	printerKeyFor,
 	printerKeyOf,
+	type AgentState,
 	type AgentStatus,
 	type PrinterStatus,
 	type SavePrintersResult
@@ -161,4 +162,112 @@ export function messageFor(result: SavePrintersResult, url: string): string {
 		default:
 			return `✕ The agent refused the printers (${result.error})`;
 	}
+}
+
+// ── The Printer details box (2026-11-10) ────────────────────────────────────
+// Arabic printed as '?' on a Windows till after a power cycle although the
+// till had been confirmed, and printing never reaches the server, so nothing
+// could be read from a log. The box puts every fact the Arabic gate uses
+// (printing.ts arabicForAgent) on the page, for one screenshot: the browser
+// (each keeps its own store), the agent's build, the printer keys, and the
+// confirmations in this browser and on the agent. Pure: the page passes what
+// it read.
+
+export type DetailRow = { label: string; value: string };
+
+export type DetailsInput = {
+	/** The agent's last answer, or null before the first. */
+	state: AgentState | null;
+	/** The printer keys confirmed in THIS browser's store (settings.ts). */
+	confirmedHere: readonly string[];
+	/** The printer chip's Arabic facts (printing.ts arabicGate), if read. */
+	arabic: { inUse: boolean; supported: boolean; confirmed: boolean } | undefined;
+	browser: {
+		/** navigator.userAgent */
+		userAgent: string;
+		/** matchMedia('(display-mode: standalone)') — an installed app window. */
+		standalone: boolean;
+		/** navigator.storage.persisted(), null when the browser cannot say. */
+		persisted: boolean | null;
+	};
+};
+
+/** The browser a user-agent string names; Edge and Opera carry Chrome's token too, so they go first. */
+export function browserName(userAgent: string): string {
+	if (/\bEdg(?:e|A|iOS)?\//.test(userAgent)) return 'Edge';
+	if (/\bOPR\//.test(userAgent)) return 'Opera';
+	if (/\bFirefox\//.test(userAgent)) return 'Firefox';
+	// No word boundary: Playwright's Chromium says HeadlessChrome/.
+	if (/Chrome\//.test(userAgent)) return 'Chrome';
+	if (/\bSafari\//.test(userAgent)) return 'Safari';
+	return 'unknown browser';
+}
+
+function printerRow(printer: PrinterStatus | null, none: string): string {
+	if (!printer) return none;
+	const key = printerKeyFor(printer) ?? 'no key (an older agent)';
+	return `${key} · ${printer.reachable ? 'reachable' : 'not reachable'} · ${printer.queued} waiting`;
+}
+
+function list(keys: readonly string[], none: string): string {
+	return keys.length === 0 ? none : keys.join(', ');
+}
+
+/** The rows of the box. Every value is a plain sentence or a key, never a secret. */
+export function printerDetails(input: DetailsInput): DetailRow[] {
+	const { state, browser } = input;
+	const where = browser.standalone ? 'installed app window' : 'browser tab';
+	const persisted =
+		browser.persisted === null
+			? 'storage: unknown'
+			: browser.persisted
+				? 'storage persisted'
+				: 'storage NOT persisted';
+	const rows: DetailRow[] = [
+		{ label: 'Browser', value: `${browserName(browser.userAgent)} · ${where} · ${persisted}` }
+	];
+	if (state === null || state.state === 'not_set_up') {
+		rows.push({ label: 'Agent', value: 'not paired' });
+	} else if (state.state !== 'ready' && state.state !== 'no_printer') {
+		rows.push({ label: 'Agent', value: `not answering (${state.state})` });
+	} else {
+		const status = state.status;
+		rows.push(
+			{
+				label: 'Agent',
+				value: `version ${status.agentVersion} · ${list(status.features ?? [], 'no features (an older agent)')}`
+			},
+			{ label: 'Receipt printer', value: printerRow(status.printers.receipt, 'none set') },
+			{
+				label: 'Kitchen printer',
+				value: printerRow(status.printers.kitchen, 'none (tickets print on the receipt printer)')
+			},
+			{
+				label: 'Arabic confirmed on the agent',
+				value:
+					status.arabicPrinters === undefined
+						? 'this agent keeps no list'
+						: list(status.arabicPrinters, 'none')
+			}
+		);
+	}
+	rows.push({
+		label: 'Arabic confirmed in this browser',
+		value: list(input.confirmedHere, 'none')
+	});
+	const arabic = input.arabic;
+	rows.push({
+		label: 'Receipts draw Arabic',
+		value:
+			arabic === undefined
+				? 'not read yet'
+				: !arabic.inUse
+					? 'no Arabic in the menu or the receipt header'
+					: !arabic.supported
+						? 'no — the agent cannot print pictures (update it)'
+						: arabic.confirmed
+							? 'yes'
+							: 'no — the printer is not confirmed in THIS browser'
+	});
+	return rows;
 }
