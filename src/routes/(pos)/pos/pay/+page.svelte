@@ -57,16 +57,31 @@
 		readCachedSetting,
 		readMenu,
 		type LocalMenu,
+		type LocalOrder,
 		type LocalSession
 	} from '$lib/pos/store';
 	import { lineTaxRateText } from '$lib/pos/menu-view';
 	import {
 		CASH_TENDER_KEY,
+		tenderClass,
 		tenderOptions,
 		tenderReason,
 		type TenderKind,
 		type TenderOption
 	} from '$lib/pos/tenders';
+	import {
+		asOf,
+		creditCheck,
+		hasChargeable,
+		localChargesFor,
+		readCustomers,
+		readLocalOrders,
+		refreshCustomersWithin,
+		searchCustomers,
+		type CachedCustomer,
+		type CreditCheck,
+		type CustomersCache
+	} from '$lib/pos/customers';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import Check from '$lib/components/pos/Check.svelte';
 	import Closer from '$lib/components/pos/Closer.svelte';
@@ -74,7 +89,7 @@
 	import TillBanner from '$lib/components/pos/TillBanner.svelte';
 	import TaxExemptSheet from '$lib/components/pos/TaxExemptSheet.svelte';
 	import type { CheckLineView } from '$lib/components/pos/CheckLine.svelte';
-	import { KEY, KEY_CHOSEN } from '$lib/components/pos/keys';
+	import { KEY, KEY_CHOSEN, TILL_FIELD } from '$lib/components/pos/keys';
 
 	const restored = getContext<Promise<void>>(RESTORED_CONTEXT) ?? Promise.resolve();
 
@@ -104,9 +119,23 @@
 				name: string;
 				total: Minor;
 				tendered: Minor | null;
+				/** Who a credit sale was charged to; null on every other tender. */
+				customerName: string | null;
 		  })
 		| null
 	>(null);
+
+	// CUSTOMER CREDIT (tasks/customer-credit T-18). The customer is state of THIS
+	// screen, never of the cart: changing the tender away from credit clears it,
+	// so a cashier who picked a customer and then took cash cannot charge them.
+	// The list and its balances are the till's cached copy (customers.ts) and say
+	// when they were fetched; the limit is advisory here — the server flags an
+	// over-limit charge, it never rejects one.
+	let customersCache = $state.raw<CustomersCache | null>(null);
+	// Raw: read from IndexedDB, only ever replaced whole.
+	let localOrders = $state.raw<LocalOrder[]>([]);
+	let customerQuery = $state('');
+	let customerId = $state<string | null>(null);
 	let outcome = $state<'paid' | 'pending' | 'review' | 'refused'>('paid');
 	let refusalReason = $state('');
 	let waitingForNetwork = $state(false);
@@ -141,6 +170,33 @@
 	);
 
 	const selected = $derived(options.find((o) => o.key === tender) ?? null);
+
+	const mayTakePayment = $derived(hasPermission('pos.payment'));
+	// Never a pay-only (archived) customer: they are on /pos/customers to PAY.
+	const chargeable = $derived((customersCache?.customers ?? []).filter((c) => !c.payOnly));
+	const matches = $derived(searchCustomers(chargeable, customerQuery));
+	const chosen = $derived(chargeable.find((c) => c.id === customerId) ?? null);
+	const balancesAsOf = $derived(asOf(customersCache));
+
+	/** May this bill be charged to this customer? All the arithmetic is the
+	 * customers module's; this page only shows what it returns. */
+	function checkFor(customer: CachedCustomer): CreditCheck | null {
+		if (!figures || !format || customersCache === null) return null;
+		const money = format;
+		return creditCheck({
+			customer,
+			billTotalMinor: figures.totals.total,
+			localChargesMinor: localChargesFor(localOrders, customer.id, customersCache.requestedAt),
+			creditEnabled: customersCache.creditEnabled,
+			format: (amount) => formatMoney(amount, money)
+		});
+	}
+	const chosenCheck = $derived(chosen ? checkFor(chosen) : null);
+
+	async function loadCustomers() {
+		customersCache = await readCustomers().catch(() => null);
+		localOrders = await readLocalOrders().catch(() => []);
+	}
 
 	// Who may exempt a bill: anyone who may take payment (no new key — the user's
 	// "any cashier"); the server checks pos.payment on the sale itself.
@@ -208,7 +264,10 @@
 
 	// THE offline rule, by KIND (invariant 5): cash never; card and mobile while offline.
 	function reasonFor(o: TenderOption): string | null {
-		return tenderReason(o.kind, online);
+		return tenderReason(o.kind, online, {
+			mayTakePayment,
+			customersCached: hasChargeable(customersCache)
+		});
 	}
 
 	$effect(() => {
@@ -219,6 +278,14 @@
 		}
 	});
 
+	$effect(() => {
+		// Leaving the credit tender forgets the customer and the search.
+		if (selected?.kind !== 'credit' && (customerId !== null || customerQuery !== '')) {
+			customerId = null;
+			customerQuery = '';
+		}
+	});
+
 	const payBlocked = $derived(
 		busy
 			? 'Recording…'
@@ -226,7 +293,11 @@
 				? 'Choose a tender'
 				: selected.kind === 'cash' && change === null
 					? 'The amount tendered is less than the total'
-					: null
+					: selected.kind === 'credit' && chosen === null
+						? 'Choose a customer'
+						: selected.kind === 'credit' && chosenCheck !== null && !chosenCheck.ok
+							? chosenCheck.words
+							: null
 	);
 
 	function press(key: KeypadKey) {
@@ -260,7 +331,9 @@
 	// A card or mobile sale is printed by the layout's auto-printer once the
 	// server confirms it; its answer is shown here exactly as a cash print's is.
 	function onPrinted(event: AutoPrinted) {
-		if (sale === null || sale.kind === 'cash' || event.clientOpId !== sale.clientOpId) return;
+		if (sale === null || event.clientOpId !== sale.clientOpId) return;
+		// A fact tender (cash, credit) printed at Pay; this is the request path.
+		if (tenderClass(sale.kind) === 'fact') return;
 		describePrint(event.result);
 	}
 
@@ -310,11 +383,13 @@
 			await reconcile().catch(() => {});
 			const layout = await readReceiptLayout().catch(() => null);
 			zeroTaxShown = layout?.show.zeroTax ?? true;
-			// The Customer credit tender is held back until this screen can pick the
-			// customer it charges (tasks/customer-credit T-18).
-			options = tenderOptions(await readPaymentMethods().catch(() => [])).filter(
-				(o) => o.kind !== 'credit'
-			);
+			options = tenderOptions(await readPaymentMethods().catch(() => []));
+			// The cached customers first, so the credit tender works offline; then a
+			// refresh in the background, which never holds the screen up.
+			await loadCustomers();
+			void refreshCustomersWithin(3000, { mayTakePayment, online }).then((result) => {
+				if (result === 'refreshed') void loadCustomers();
+			});
 			const code = await readCachedSetting('deviceCode').catch(() => null);
 			deviceCode = typeof code === 'string' ? code : null;
 			ready = true;
@@ -354,6 +429,30 @@
 			if (await reconcile()) return;
 			// Captured once: every decision below keys on the option's KIND.
 			const option = selected;
+			// A credit bill names its customer. Online, the balances are fetched again
+			// first (bounded: a weak link must not hang the till) and the limit is
+			// checked against them; offline the cached balance stands.
+			let customer: { id: string; name: string } | null = null;
+			if (option.kind === 'credit') {
+				if (chosen === null) return;
+				const id = chosen.id;
+				if (online) {
+					await refreshCustomersWithin(3000, { mayTakePayment, online });
+					await loadCustomers();
+				}
+				const fresh = (customersCache?.customers ?? []).find((c) => c.id === id && !c.payOnly);
+				const verdict = fresh ? checkFor(fresh) : null;
+				if (!fresh || verdict === null) {
+					failure = 'That customer is no longer on this till — choose another';
+					customerId = null;
+					return;
+				}
+				if (!verdict.ok) {
+					failure = verdict.words;
+					return;
+				}
+				customer = { id: fresh.id, name: fresh.name };
+			}
 			const result = await completeSale({
 				cart,
 				deviceId,
@@ -364,37 +463,43 @@
 				currencyCode: menu.currency as string,
 				menuVersion: menu.version,
 				payment: {
-					// Never credit here yet: the filter above holds that tender back (T-18).
-					method: option.kind as 'cash' | 'card' | 'mobile',
+					method: option.kind,
 					tenderedMinor: option.kind === 'cash' ? cashTendered : null,
 					// The owner-named method, id and name always as a pair; the synthetic
 					// Cash sends both null and the server resolves the restaurant's Cash
 					// row and its name (T-15).
 					paymentMethodId: option.id,
-					paymentMethodName: option.id === null ? null : option.name
+					paymentMethodName: option.id === null ? null : option.name,
+					customer
 				},
 				now: new Date(),
 				// Kept on the local order for the receipt (T-18).
 				cashierName: signedIn.current.displayName,
 				businessDate: session.businessDate ?? null
 			});
-			outcome = option.kind === 'cash' ? 'paid' : 'pending';
+			// THE class of the sale (tenders.ts): a fact — cash, or a charge to a
+			// customer's credit — is complete now; a request waits for the server.
+			const fact = tenderClass(option.kind) === 'fact';
+			outcome = fact ? 'paid' : 'pending';
 			sale = {
 				...result,
 				kind: option.kind,
 				name: option.name,
 				total: figures.totals.total,
-				tendered: option.kind === 'cash' ? cashTendered : null
+				tendered: option.kind === 'cash' ? cashTendered : null,
+				customerName: customer?.name ?? null
 			};
 			print = null;
 			drawerLine = '';
 			void flush().catch(() => {});
-			if (option.kind === 'cash') {
+			if (fact) {
 				// Fire-and-report: the sale is complete on the device; the printer
 				// never holds up ● Paid (invariant 4). Card and mobile print from the
 				// layout's auto-printer once the server confirms (invariant 5), and
-				// onPrinted shows its answer.
-				void printOriginals(result.orderId, { drawer: true }).then(describePrint, () => {
+				// onPrinted shows its answer. ONLY cash asks for the drawer: a credit
+				// sale moves no money (and the drawer clause refuses it anyway).
+				const drawer = option.kind === 'cash';
+				void printOriginals(result.orderId, { drawer }).then(describePrint, () => {
 					print = { ok: false, text: 'Not printed — reprint it from Sales' };
 				});
 			}
@@ -499,7 +604,9 @@
 		sale === null
 			? { glyph: '◐' as const, word: 'BILLED' }
 			: outcome === 'paid'
-				? { glyph: '●' as const, word: 'PAID' }
+				? sale.kind === 'credit'
+					? { glyph: '◐' as const, word: 'ON CREDIT' }
+					: { glyph: '●' as const, word: 'PAID' }
 				: outcome === 'pending'
 					? { glyph: '◐' as const, word: 'PENDING' }
 					: outcome === 'review'
@@ -577,7 +684,13 @@
 				<div aria-live="polite" class="flex flex-col gap-3">
 					{#if sale}
 						{#if outcome === 'paid'}
-							<TillBanner tone="ok">Paid</TillBanner>
+							{#if sale.kind === 'credit'}
+								<TillBanner tone="pending" testid="credit-charged"
+									>Charged to {sale.customerName} — on credit, not paid</TillBanner
+								>
+							{:else}
+								<TillBanner tone="ok">Paid</TillBanner>
+							{/if}
 							{#if print}
 								<TillBanner tone={print.ok ? 'ok' : 'offline'} testid="print-line"
 									>{print.text}</TillBanner
@@ -752,6 +865,102 @@
 									<Keypad label="Amount tendered keypad" onkey={press} />
 								</section>
 							</div>
+						{:else if selected?.kind === 'credit'}
+							<!-- CUSTOMER CREDIT: the customer is picked HERE, in the pane — never
+							     in a modal (modals are for reasons, approvals and errors). -->
+							<section
+								aria-labelledby="credit-h"
+								class="rounded-card border-line bg-raise-2 flex flex-col gap-3 border p-4"
+								data-testid="credit-pane"
+							>
+								<h2 id="credit-h" class="text-pos font-sans font-semibold">
+									Charge {formatMoney(figures.totals.total, money)} to a customer
+								</h2>
+								{#if chosen}
+									{@const verdict = chosenCheck}
+									<div
+										class="rounded-control border-control-line bg-raise flex flex-wrap items-start gap-3 border p-3"
+										data-testid="credit-customer"
+									>
+										<div class="flex min-w-0 flex-1 flex-col gap-1">
+											<p class="font-semibold">{chosen.name}</p>
+											<p class="text-body text-ink-2 font-mono">{chosen.phone}</p>
+										</div>
+										<button
+											type="button"
+											class="min-h-touch-min px-4 {KEY}"
+											onclick={() => (customerId = null)}>Change</button
+										>
+										{#if verdict}
+											<dl class="flex w-full flex-col gap-1">
+												<div class="flex items-baseline justify-between gap-3">
+													<dt class="text-ink-2">Owes now</dt>
+													<dd class="font-mono tabular-nums">
+														{formatMoney(verdict.owedMinor, money)}
+													</dd>
+												</div>
+												<div class="flex items-baseline justify-between gap-3">
+													<dt class="text-ink-2">Credit left</dt>
+													<dd class="font-mono tabular-nums" data-testid="credit-left">
+														{verdict.availableMinor === null
+															? 'No limit'
+															: formatMoney(verdict.availableMinor, money)}
+													</dd>
+												</div>
+											</dl>
+										{/if}
+									</div>
+									{#if chosenCheck && !chosenCheck.ok}
+										<TillBanner tone="danger" live="status" testid="credit-refusal"
+											>{chosenCheck.words}</TillBanner
+										>
+									{/if}
+								{:else}
+									<label class="flex flex-col gap-2">
+										<span class="text-ink-2">Search by name or phone</span>
+										<input
+											type="search"
+											class={TILL_FIELD}
+											bind:value={customerQuery}
+											autocomplete="off"
+											data-testid="credit-search"
+										/>
+									</label>
+									{#if matches.length === 0}
+										<p class="text-ink-2">
+											No customer matches — the owner adds customers on the dashboard
+										</p>
+									{:else}
+										<ul class="flex max-h-80 flex-col gap-2 overflow-y-auto">
+											{#each matches as c (c.id)}
+												{@const verdict = checkFor(c)}
+												<li>
+													<button
+														type="button"
+														class="min-h-touch flex w-full flex-wrap items-baseline justify-between gap-x-3 px-3 py-2 text-left {KEY}"
+														onclick={() => (customerId = c.id)}
+													>
+														<span class="min-w-0">
+															{c.name}
+															<span class="text-body text-ink-2 font-mono font-normal"
+																>{c.phone}</span
+															>
+														</span>
+														{#if verdict}
+															<span class="text-body font-mono font-normal tabular-nums">
+																owes {formatMoney(verdict.owedMinor, money)}
+															</span>
+														{/if}
+													</button>
+												</li>
+											{/each}
+										</ul>
+									{/if}
+								{/if}
+								<p class="text-body text-ink-2" data-testid="credit-as-of">
+									Balances {balancesAsOf}{online ? '' : ' — offline, so they may be out of date'}
+								</p>
+							</section>
 						{:else if selected !== null}
 							<div class="rounded-card border-line bg-raise-2 flex items-start gap-3 border p-4">
 								<Icon name={selected.icon} class="text-accent size-6" />

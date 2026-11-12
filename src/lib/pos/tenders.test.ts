@@ -14,7 +14,7 @@ import {
 // (tasks/settings-tax-payments-receipt T-22). Pure — no IndexedDB.
 
 /** The pay screen's comparisons with the literal 'cash' (see the tripwire below). */
-const PAY_PAGE_CASH_COMPARISONS = 9;
+const PAY_PAGE_CASH_COMPARISONS = 7;
 
 const SYNTHETIC_CASH = {
 	key: 'cash',
