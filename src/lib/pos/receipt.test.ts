@@ -1320,3 +1320,88 @@ describe('the zeroTax switch on a bill with no override', () => {
 		expect(find(off, /^VAT 10\.00%/)).toMatch(/^VAT 10\.00%\s+0\.80$/);
 	});
 });
+
+describe('a bill charged to a customer’s credit (customer-credit T-17)', () => {
+	const creditSale = (name: string) =>
+		snapshot({
+			payments: [
+				{
+					paymentId: 'p1',
+					method: 'credit',
+					paymentMethodId: 'pm-credit',
+					paymentMethodName: 'Customer credit',
+					customerId: 'cust-1',
+					customerName: name,
+					amountMinor: '880',
+					tenderedMinor: null,
+					changeMinor: null
+				}
+			]
+		});
+
+	/** Every owner switch off: the most a receipt can hide. */
+	const ALL_OFF = Object.fromEntries(
+		Object.keys(DEFAULT_RECEIPT_LAYOUT.show).map((key) => [key, false])
+	) as ReceiptShow;
+
+	it.each([32, 48] as const)(
+		'prints ON CREDIT - NOT PAID, the amount charged, who to, and a signature line at %i columns',
+		(width) => {
+			const lines = renderReceipt(input(creditSale('Ali Hassan')), { width });
+			const t = text(lines);
+
+			const banner = lines.find(
+				(l): l is TextLine => !isImageLine(l) && l.text.trim() === 'ON CREDIT - NOT PAID'
+			);
+			expect(banner?.bold).toBe(true);
+			expect(t.find((l) => /^CHARGED\s+8\.80$/.test(l))).toBeDefined();
+			expect(t).toContain('Charged to: Ali Hassan');
+			const signature = t.find((l) => l.startsWith('Signature: '));
+			expect(signature).toMatch(/^Signature: _{8,}$/);
+			expect(signature!.length).toBeLessThanOrEqual(width);
+			// In this order, after the total, and never a cash line.
+			const at = (re: RegExp) => t.findIndex((l) => re.test(l));
+			expect(at(/^TOTAL/)).toBeLessThan(at(/ON CREDIT - NOT PAID/));
+			expect(at(/ON CREDIT - NOT PAID/)).toBeLessThan(at(/^CHARGED/));
+			expect(at(/^CHARGED/)).toBeLessThan(at(/^Charged to:/));
+			expect(at(/^Charged to:/)).toBeLessThan(at(/^Signature:/));
+			expect(t.some((l) => /^CASH|^CHANGE/.test(l))).toBe(false);
+			for (const l of t) expect(l.length).toBeLessThanOrEqual(width);
+		}
+	);
+
+	it('MANDATORY: none of the credit lines can be hidden — every owner switch off', () => {
+		const layout = layoutWith({ show: ALL_OFF });
+		const t = text(renderReceipt(input(creditSale('Ali Hassan'), { layout }), { width: 32 }));
+		expect(t.some((l) => l.trim() === 'ON CREDIT - NOT PAID')).toBe(true);
+		expect(t.some((l) => /^CHARGED\s+8\.80$/.test(l))).toBe(true);
+		expect(t).toContain('Charged to: Ali Hassan');
+		expect(t.some((l) => l.startsWith('Signature: '))).toBe(true);
+	});
+
+	it('a long name wraps; no line is ever wider than the paper', () => {
+		const long = 'Abdirahman Mohamed Abdullahi Farah Warsame of the Hodan district';
+		const t = text(renderReceipt(input(creditSale(long)), { width: 32 }));
+		const start = t.findIndex((l) => l.startsWith('Charged to:'));
+		expect(start).toBeGreaterThan(-1);
+		expect(t.slice(start, start + 4).join(' ')).toContain('Warsame');
+		for (const l of t) expect(l.length).toBeLessThanOrEqual(32);
+	});
+
+	it('a reprint carries COPY and the same credit lines', () => {
+		const t = text(
+			renderReceipt(input(creditSale('Ali Hassan')), {
+				width: 32,
+				copy: { reprintedAt: '2026-09-14T17:05:00Z', by: 'Farhiya' }
+			})
+		);
+		expect(t.some((l) => /COPY/.test(l))).toBe(true);
+		expect(t.some((l) => l.trim() === 'ON CREDIT - NOT PAID')).toBe(true);
+	});
+
+	it('a cash receipt is unchanged: no credit line appears', () => {
+		const t = text(renderReceipt(input(snapshot({})), { width: 32 }));
+		expect(t.some((l) => /ON CREDIT|Charged to|Signature/.test(l))).toBe(false);
+		expect(t.some((l) => /^CASH/.test(l))).toBe(true);
+	});
+});

@@ -26,6 +26,7 @@ import {
 	cleanTaxOverrideReason,
 	codePointLength,
 	PAYMENT_METHODS,
+	cleanCustomerName,
 	TAX_OVERRIDE_REASON_MIN,
 	type OpEnvelope,
 	type OrderType,
@@ -455,10 +456,15 @@ export type CompleteSaleArgs = {
 	 * forget them; null means "this till does not know the method", and the
 	 * server then resolves it by kind (T-15). */
 	payment: {
-		method: 'cash' | 'card' | 'mobile';
+		method: 'cash' | 'card' | 'mobile' | 'credit';
 		tenderedMinor: bigint | null;
 		paymentMethodId: string | null;
 		paymentMethodName: string | null;
+		/** The registered customer a `credit` bill is charged to (tasks/customer-
+		 * credit) — REQUIRED for credit, forbidden on every other method. It is an
+		 * argument of the sale, deliberately NOT a field of the cart: a cashier who
+		 * picks a customer and then takes cash must not carry the customer along. */
+		customer?: { id: string; name: string } | null;
 	};
 	employeeId: string;
 	deviceId: string;
@@ -512,6 +518,15 @@ function validateBeforeTx(args: CompleteSaleArgs): void {
 		}
 	} else if (payment.tenderedMinor !== null) {
 		throw new Error('card/mobile tenderedMinor must be null');
+	}
+	// A credit bill names who owes it; nothing else may name a customer.
+	const customer = payment.customer ?? null;
+	if (payment.method === 'credit') {
+		if (customer === null || customer.id === '' || cleanCustomerName(customer.name) === '') {
+			throw new Error('Choose the customer this bill is charged to.');
+		}
+	} else if (customer !== null) {
+		throw new Error('only a credit payment names a customer');
 	}
 }
 
@@ -614,7 +629,15 @@ export async function completeSale(
 				// The owner-named method (T-14, optional on the wire): sent as null
 				// when this till does not know it, the way `note` is sent.
 				paymentMethodId: args.payment.paymentMethodId,
-				paymentMethodName: args.payment.paymentMethodName
+				paymentMethodName: args.payment.paymentMethodName,
+				// The customer keys ride ONLY on a credit payment (tasks/customer-credit);
+				// the name is what the receipt prints, cleaned by the shared cleaner.
+				...(args.payment.method === 'credit' && args.payment.customer
+					? {
+							customerId: args.payment.customer.id,
+							customerName: cleanCustomerName(args.payment.customer.name)
+						}
+					: {})
 			}
 		]
 	};

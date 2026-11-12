@@ -21,7 +21,9 @@
 // WHAT THE OWNER MAY HIDE is decided here, not by the database (CLAUDE.md
 // "Settings 4"): each of the layout's ten switches removes or replaces ONE
 // line. The restaurant name, the invoice number, the date and time, the items,
-// the subtotal, discount, tax and total, the payment, the COPY marks and the
+// the subtotal, discount, tax and total, the payment — on a bill charged to a
+// customer's credit that is "ON CREDIT - NOT PAID", "Charged to: <name>" and the
+// signature line (tasks/customer-credit) — the COPY marks and the
 // tax registration number when one is set have no switch and always print —
 // except that a tax line whose stored amount is zero hides with the zeroTax
 // switch, while an exempt bill's "Tax exempt" and "Tax removed" lines never do
@@ -486,6 +488,18 @@ export function renderReceipt(input: ReceiptInput, opts: RenderOptions): PrintLi
 		if (payment.method === 'cash') {
 			out.push(...lines(pair('CASH', money(payment.tenderedMinor ?? payment.amountMinor, cur), w)));
 			out.push(...lines(pair('CHANGE', money(payment.changeMinor ?? '0', cur), w)));
+		} else if (payment.method === 'credit') {
+			// A bill charged to a registered customer (tasks/customer-credit). NEVER
+			// hideable, any of it: this slip is what the customer signs and what the
+			// owner holds against a cashier who charges a bill nobody agreed to. No
+			// balance line — the balance is not part of the sale's stored numbers.
+			out.push(...lines(center('ON CREDIT - NOT PAID', w), { align: 'center', bold: true }));
+			out.push(...lines(pair('CHARGED', money(payment.amountMinor, cur), w)));
+			const who = typeof payment.customerName === 'string' ? payment.customerName : '';
+			out.push(...lines(wrap(`Charged to: ${p(who)}`, w)));
+			out.push(line(''));
+			out.push(line(''));
+			out.push(line(`Signature: ${'_'.repeat(Math.max(8, w - 11))}`));
 		} else {
 			const name = payment.paymentMethodName;
 			const label =
