@@ -45,6 +45,14 @@
 # till shows 0 unsynced, reload the tills, and only then roll back. Otherwise
 # roll FORWARD.
 #
+# Rolling the CODE back past migration 0021 (tasks/customer-credit): an older
+# server cannot post a credit sale (its posting rules have no credit_sale and no
+# account 1100) and does not know the customer.payment op, and its reports do
+# not count credit. NEVER roll back past 0021 once a credit sale or a customer
+# payment exists — roll FORWARD. Before that point: switch Customer credit off
+# on /settings/payments, wait until every till shows 0 unsynced, reload the
+# tills, and only then roll back.
+#
 set -euo pipefail
 
 BRANCH="${BRANCH:-main}"
@@ -236,7 +244,9 @@ if [ -z "$ok" ]; then
   the previous commit reads the same .env and will die the same way.
   If a migration ran, restore the newest dump in backups/ with pg_restore first.
   Never roll back past 0019 while a till has unsynced sales or a rate is offered
-  for tax-exempt bills: un-offer them, wait for 0 unsynced, reload the tills."
+  for tax-exempt bills: un-offer them, wait for 0 unsynced, reload the tills.
+  Never roll back past 0021 once a credit sale or a customer payment exists
+  (tasks/customer-credit): roll forward."
 fi
 
 pm2 save >/dev/null 2>&1 || true
