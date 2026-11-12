@@ -59,7 +59,7 @@
 		mayManageShift: boolean;
 		/** Sign the employee out. The SHIFT stays as it is: it belongs to the till. */
 		onSignOut: () => void;
-		current: 'order' | 'sales' | 'other';
+		current: 'order' | 'sales' | 'customers' | 'other';
 	} = $props();
 
 	const pending = $derived(
@@ -137,7 +137,7 @@
 			href={employee !== null ? resolve('/pos/order') : resolve('/pos')}
 			aria-current={current === 'order' ? 'page' : undefined}
 			class="min-h-touch-min border-rail-line hidden items-center gap-2 rounded-full border px-5 font-semibold sm:flex {current ===
-			'sales'
+				'sales' || current === 'customers'
 				? ''
 				: 'bg-rail-active'}"
 		>
@@ -157,6 +157,22 @@
 			>
 				<Icon name="clipboard" />
 				Sales
+			</a>
+		{/if}
+		{#if employee !== null && mayManageShift}
+			<!-- Customers on credit (tasks/customer-credit): one tap from the bar, for
+			     an employee holding pos.payment. A tab from 2xl, like Sales; below that
+			     it stays in the employee menu. -->
+			<a
+				href={resolve('/pos/customers')}
+				aria-current={current === 'customers' ? 'page' : undefined}
+				class="min-h-touch-min border-rail-line hidden items-center gap-2 rounded-full border px-5 font-semibold 2xl:flex {current ===
+				'customers'
+					? 'bg-rail-active'
+					: ''}"
+			>
+				<Icon name="user-plus" />
+				Customers
 			</a>
 		{/if}
 	</nav>
@@ -320,7 +336,7 @@
 					<!-- Customers on credit: who owes, and receiving a payment
 					     (tasks/customer-credit T-20). Shown to an employee holding
 					     pos.payment — the key the server demands for the payment op. -->
-					<a href={resolve('/pos/customers')} class={MENU_ITEM}>
+					<a href={resolve('/pos/customers')} class="{MENU_ITEM} 2xl:hidden">
 						<Icon name="user-plus" class="text-ink-2 size-5" />
 						Customers
 					</a>

@@ -496,7 +496,13 @@
 				}}
 		{mayManageShift}
 		onSignOut={leave}
-		current={onSales ? 'sales' : page.url.pathname === '/pos/order' ? 'order' : 'other'}
+		current={onSales
+			? 'sales'
+			: page.url.pathname.startsWith('/pos/customers')
+				? 'customers'
+				: page.url.pathname === '/pos/order'
+					? 'order'
+					: 'other'}
 	/>
 	<div class="relative flex min-h-0 flex-1 flex-col overflow-y-auto">
 		{@render children()}
