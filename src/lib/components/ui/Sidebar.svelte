@@ -43,6 +43,7 @@
 			| '/menu'
 			| '/inventory'
 			| '/purchases'
+			| '/customers'
 			| '/reports'
 			| null;
 		icon: IconName;
@@ -118,6 +119,8 @@
 			label: 'Money',
 			items: [
 				{ label: 'Deliveries', href: '/purchases', icon: 'purchases' },
+				// tasks/customer-credit: who may eat now and pay later, and what they owe.
+				{ label: 'Customers', href: '/customers', icon: 'employees' },
 				{ label: 'Expenses', href: null, icon: 'expenses' },
 				{ label: 'Reports', href: '/reports', icon: 'reports' }
 			]
