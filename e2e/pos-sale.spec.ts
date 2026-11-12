@@ -18,7 +18,8 @@ import {
 	registerDevice,
 	registerRestaurant,
 	signIn,
-	storeRows
+	storeRows,
+	typeMinor
 } from './fixtures';
 
 // A FULL SHIFT, ONLINE AND OFFLINE, SYNCING EXACTLY ONCE (spec 6, 10, 13, 24, 26).
@@ -641,6 +642,203 @@ test('a tax-exempt cash bill: offered on /settings/tax, applied at the till, on 
 	await expect(bill).toContainText('8.00');
 	await expect(bill).toContainText('0.80');
 	await expect(page.getByRole('row', { name: /^The Cashier/ })).toContainText(/1\s*0\.80/);
+
+	await till.close();
+});
+
+// CUSTOMER CREDIT, END TO END (tasks/customer-credit T-24): the owner switches
+// credit on and registers a customer with a limit; a cashier on a third till
+// charges a bill to them, is refused the next one by the limit, charges one
+// OFFLINE that syncs once, receives a cash payment, and closes the shift on the
+// exact figure; the owner sees the statement and the report. It REUSES this
+// file's restaurant and cashier — a new sign-up would break a later spec.
+// MANDATORY (spec 29 — offline sync: the offline credit sale records once).
+//
+// No print agent runs in this spec: what prints, and that the drawer stays shut
+// for a credit sale, is proved by the unit tests of src/lib/pos.
+test('customer credit: charge, the limit, an offline charge, a repayment, the books', async ({
+	page,
+	browser
+}) => {
+	test.setTimeout(300_000);
+
+	// 1. The owner switches Customer credit on and registers a customer, limit 15.00.
+	await page.goto('/settings/payments');
+	if (/\/login/.test(page.url())) {
+		await signIn(page, OWNER);
+		await page.goto('/settings/payments');
+	}
+	await page.getByRole('button', { name: 'Switch customer credit on' }).click();
+	await expect(page.getByRole('button', { name: 'Switch customer credit off' })).toBeVisible();
+
+	await page.goto('/customers/new');
+	await page.getByLabel('Name', { exact: true }).fill('Ali Credit');
+	await page.getByLabel('Phone', { exact: true }).fill('615 000 001');
+	await page.getByLabel('Credit limit', { exact: true }).fill('15.00');
+	await page.getByRole('button', { name: 'Add customer' }).click();
+	await expect(page.getByRole('heading', { name: 'Ali Credit' })).toBeVisible();
+	const [{ id: customerId }] = await dbRows<{ id: string }>(
+		`select id from customers where name = 'Ali Credit'`
+	);
+
+	// 2. A third till, the same cashier, a fresh shift: its sign-in caches the
+	// credit tender, and the pay screen fetches the customers.
+	const till = await browser.newContext();
+	const tillPage = await till.newPage();
+	await signIn(tillPage, OWNER);
+	await registerDevice(tillPage, OWNER, 'Credit till');
+	await pickEmployee(tillPage, 'The Cashier');
+	await enterPin(tillPage, '4321');
+	await openSession(tillPage, 0n);
+	const status = tillPage.getByRole('status', { name: 'Connection and sync' });
+	const tenders = tillPage.getByRole('radiogroup', { name: 'Tender' });
+	const pane = tillPage.getByTestId('credit-pane');
+
+	const toPay = async () => {
+		await tillPage.getByRole('link', { name: /^Pay\b/ }).click();
+		await expect(tillPage).toHaveURL(/\/pos\/pay$/);
+	};
+	const chooseCredit = async () => {
+		await tenders.getByRole('radio', { name: /Customer credit/ }).click();
+		await pane.getByRole('button', { name: /Ali Credit/ }).click();
+		await expect(tillPage.getByTestId('credit-customer')).toContainText('Ali Credit');
+	};
+
+	// 3. One Burger (8.80) charged to Ali: complete at once — never PENDING, no Cancel.
+	await addItem(tillPage, 'Burger');
+	await toPay();
+	await chooseCredit();
+	await expect(tillPage.getByTestId('credit-left')).toContainText('15.00');
+	await tillPage.getByRole('button', { name: /^Pay · Customer credit/ }).click();
+	await expect(tillPage.getByTestId('credit-charged')).toContainText('Charged to Ali Credit');
+	await expect(tillPage.getByRole('button', { name: 'Cancel' })).toHaveCount(0);
+	await expect(status).toContainText('0 unsynced');
+
+	// 4. A second Burger would pass the limit: refused in words, Pay disabled. The
+	// cashier takes cash instead — and the customer is NOT carried onto that sale.
+	await tillPage.getByRole('link', { name: 'New sale' }).click();
+	await addItem(tillPage, 'Burger');
+	await toPay();
+	await chooseCredit();
+	await expect(tillPage.getByTestId('credit-refusal')).toContainText('Over the credit limit');
+	await expect(tillPage.getByRole('button', { name: /^Pay · Customer credit/ })).toBeDisabled();
+	await tenders.getByRole('radio', { name: 'Cash', exact: true }).click();
+	await tillPage.getByRole('button', { name: /^Pay · Cash/ }).click();
+	await expect(tillPage.getByText('● Paid', { exact: true })).toBeVisible();
+	await expect(status).toContainText('0 unsynced');
+
+	// 5. OFFLINE: a Drink (2.20) fits what is left. It completes on the device and
+	// syncs ONCE when the connection returns.
+	await tillPage.getByRole('link', { name: 'New sale' }).click();
+	await till.setOffline(true);
+	await addItem(tillPage, 'Drink');
+	await toPay();
+	await chooseCredit();
+	await tillPage.getByRole('button', { name: /^Pay · Customer credit/ }).click();
+	await expect(tillPage.getByTestId('credit-charged')).toContainText('Charged to Ali Credit');
+	await expect(status).toContainText('1 unsynced');
+	await till.setOffline(false);
+	await expect(status).toContainText('0 unsynced');
+
+	expect(
+		await dbRows(
+			`select p.method, p.amount_minor::text as amount, p.customer_name
+			 from payments p where p.customer_id = $1 order by p.paid_at`,
+			[customerId]
+		)
+	).toEqual([
+		{ method: 'credit', amount: '880', customer_name: 'Ali Credit' },
+		{ method: 'credit', amount: '220', customer_name: 'Ali Credit' }
+	]);
+	// The cash sale in between names no customer.
+	expect(
+		await count(
+			`select count(*)::text as n from payments where method = 'cash' and customer_id is not null`
+		)
+	).toBe('0');
+	// A credit sale posts Dr 1100 / Cr 4000 / Cr 2100.
+	expect(
+		await dbRows(
+			`select a.code, sum(l.debit_minor)::text as debit, sum(l.credit_minor)::text as credit
+			 from journal_entry_lines l
+			 join journal_entries e on e.id = l.entry_id
+			 join accounts a on a.id = l.account_id
+			 where e.event = 'credit_sale' group by a.code order by a.code`
+		)
+	).toEqual([
+		{ code: '1100', debit: '1100', credit: '0' },
+		{ code: '2100', debit: '0', credit: '100' },
+		{ code: '4000', debit: '0', credit: '1000' }
+	]);
+
+	// 6. Ali pays 5.00 in cash on the till's Customers screen.
+	await tillPage.goto('/pos/customers');
+	await expect(tillPage.getByRole('heading', { name: 'Customers on credit' })).toBeVisible();
+	await tillPage.getByTestId('customer-row').filter({ hasText: 'Ali Credit' }).click();
+	await expect(tillPage.getByTestId('customer-owes')).toContainText('11.00');
+	await typeMinor(tillPage, 500n);
+	await expect(tillPage.getByTestId('paying-now')).toContainText('5.00');
+	await tillPage.getByTestId('receive-payment').click();
+	const paid = tillPage.getByTestId('payment-row').filter({ hasText: 'Ali Credit' });
+	await expect(paid).toContainText('5.00');
+	await expect(paid).toContainText('still owed');
+	await expect(paid).toContainText('6.00');
+	await expect(status).toContainText('0 unsynced');
+	await expect(tillPage.getByTestId('payment-pending')).toHaveCount(0);
+
+	expect(
+		await dbRows(
+			`select method, amount_minor::text as amount, balance_after_minor::text as after,
+				reversed_at is not null as reversed
+			 from customer_payments where customer_id = $1`,
+			[customerId]
+		)
+	).toEqual([{ method: 'cash', amount: '500', after: '600', reversed: false }]);
+
+	// 7. The shift closes on the exact figure: the cash sale (8.80) and the cash
+	// customer payment (5.00). The 11.00 of credit sales is not cash.
+	await tillPage.goto('/pos/order');
+	await closeSession(tillPage, 1380n);
+	expect(
+		await dbRows(
+			`select s.expected_cash_minor::text as expected, s.difference_minor::text as difference
+			 from pos_sessions s
+			 join pos_devices d on d.id = s.device_id
+			 where d.label = 'Credit till'`
+		)
+	).toEqual([{ expected: '1380', difference: '0' }]);
+	// Account 1100 holds exactly what Ali still owes.
+	expect(
+		await dbRows(
+			`select (sum(l.debit_minor) - sum(l.credit_minor))::text as net
+			 from journal_entry_lines l join accounts a on a.id = l.account_id
+			 where a.code = '1100'`
+		)
+	).toEqual([{ net: '600' }]);
+
+	// 8. The owner: the customer's statement, and the day's report.
+	await page.goto(`/customers/${customerId}`);
+	await expect(page.getByTestId('customer-balance')).toContainText('6.00');
+	const statement = page.getByRole('table', { name: 'Customer statement' });
+	await expect(statement.getByRole('row').filter({ hasText: 'Invoice' })).toHaveCount(2);
+	await expect(statement.getByRole('row').filter({ hasText: 'Payment — Cash' })).toContainText(
+		'5.00'
+	);
+
+	const [{ business_date: day }] = await dbRows<{ business_date: string }>(
+		`select s.business_date::text as business_date from pos_sessions s
+		 join pos_devices d on d.id = s.device_id where d.label = 'Credit till'`
+	);
+	await page.goto(`/reports?date=${day}`);
+	await expect(page.getByText('Net sales + tax = takings + sold on credit.')).toBeVisible();
+	const received = page
+		.locator('section')
+		.filter({ has: page.getByRole('heading', { name: 'Customer payments received' }) });
+	await expect(received.getByRole('row', { name: /^Cash/ })).toContainText('5.00');
+
+	await page.goto(`/reports/credit?from=${day}&to=${day}`);
+	await expect(page.getByRole('heading', { name: 'Customer credit', exact: true })).toBeVisible();
+	await expect(page.getByRole('row', { name: /^The Cashier/ })).toContainText('11.00');
 
 	await till.close();
 });
