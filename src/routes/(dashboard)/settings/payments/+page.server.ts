@@ -7,6 +7,8 @@ import {
 	archivePaymentMethod,
 	createPaymentMethod,
 	listPaymentMethods,
+	getCreditMethod,
+	setCreditEnabled,
 	movePaymentMethod,
 	updatePaymentMethod,
 	type PaymentMethodRow
@@ -57,6 +59,7 @@ export const load: ServerLoad = async (event) => {
 
 	// Cash first, then sort_order, then name; archived rows included (T-11).
 	const rows = await listPaymentMethods(db, restaurantId, { includeArchived: true });
+	const credit = await getCreditMethod(db, restaurantId);
 	const cash = rows.find((row) => row.kind === 'cash');
 	const live = rows.filter((row) => row.archivedAt === null).filter(isOwnerMethod);
 	// An archived row is never cash (payment_methods_cash_rules); the filter narrows the type.
@@ -66,6 +69,13 @@ export const load: ServerLoad = async (event) => {
 		// Every restaurant has one (seedCashMethod; migration 0017). Null only for a
 		// restaurant built by hand — the page still renders.
 		cash: cash ? { id: cash.id, name: cash.name } : null,
+		// The built-in Customer credit row (tasks/customer-credit): never one of the
+		// editable methods — the owner may only switch it on or off. Null only for a
+		// restaurant no migration or initializer has reached; switching it on then
+		// creates the row and account 1100 (setCreditEnabled is self-healing).
+		credit: credit
+			? { name: credit.name, enabled: credit.enabled }
+			: { name: 'Customer credit', enabled: false },
 		methods: live.map((row, index) => ({
 			id: row.id,
 			name: row.name,
@@ -176,6 +186,28 @@ export const actions: Actions = {
 		if (!result.ok) return fail(400, { message: messageFor(result) });
 
 		return { message: `${name} added.` };
+	},
+
+	// tasks/customer-credit T-22: the ONE thing an owner may do to the built-in
+	// Customer credit method. Its own permission check, like every action here.
+	setCredit: async (event) => {
+		const user = requirePermission(event, 'admin.settings');
+		const { restaurantId, ctx } = scopeOf(event, user);
+
+		const form = await event.request.formData();
+		const wanted = form.get('enabled');
+		if (wanted !== 'yes' && wanted !== 'no') return fail(400, { message: METHOD_FALLBACK });
+
+		const result = await db.transaction((tx) =>
+			setCreditEnabled(tx, restaurantId, wanted === 'yes', ctx)
+		);
+		if (!result.changed) return { message: 'No changes to save.' };
+		return {
+			message:
+				wanted === 'yes'
+					? 'Customer credit is on. Tills offer it after their next sign-in.'
+					: 'Customer credit is off. Customers can still pay what they owe.'
+		};
 	},
 
 	update: async (event) => {

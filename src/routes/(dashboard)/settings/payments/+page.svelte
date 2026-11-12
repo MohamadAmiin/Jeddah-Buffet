@@ -143,6 +143,31 @@
 			</p>
 		</Card>
 
+		<!-- Customer credit (tasks/customer-credit): the other built-in row. ONE
+		     control — on or off. It is never renamed, numbered, moved or archived. -->
+		<Card class="flex flex-col gap-3">
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<h3 class="text-section">{data.credit.name}</h3>
+				{#if data.credit.enabled}
+					<StatusMark status="done" label="offered at the till" />
+				{:else}
+					<StatusMark status="not-started" label="switched off" />
+				{/if}
+			</div>
+			<p class="text-body text-ink-2">
+				Lets every employee who can take payment charge a whole bill to a registered customer, who
+				pays later at the till. Nothing is charged to anyone who is not on the Customers page, and
+				each customer can have a credit limit. Turning it off stops new charges; customers can still
+				pay what they owe.
+			</p>
+			<form method="POST" action="?/setCredit" use:enhance={keepValues}>
+				<input type="hidden" name="enabled" value={data.credit.enabled ? 'no' : 'yes'} />
+				<Button type="submit" variant={data.credit.enabled ? 'secondary' : 'primary'}>
+					{data.credit.enabled ? 'Switch customer credit off' : 'Switch customer credit on'}
+				</Button>
+			</form>
+		</Card>
+
 		<!-- One card per live owner method. The fields are labelled Name, Number and
 		     Offered at the till, NOT Method name / Merchant number / Accepted at the
 		     till: Playwright's getByLabel matches substrings, and the create panel owns
