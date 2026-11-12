@@ -134,6 +134,19 @@ export type AuditEvent =
 				totalMinor: string;
 			};
 	  }
+	// tasks/customer-credit (T-10): a bill was charged to a registered customer's
+	// account. The name is the TILL's (what the receipt printed). Written with
+	// clientOpId null, like sale.tax_override: sale.recorded owns the op's row.
+	| {
+			event: 'sale.credit_charged';
+			details: {
+				deviceCode: string;
+				invoiceNumber: string;
+				customerId: string;
+				customerName: string;
+				totalMinor: string;
+			};
+	  }
 	| {
 			event: 'sale.abandoned';
 			details: { deviceCode: string; invoiceNumber: string; reason: 'rejected' | 'cancelled' };
@@ -269,7 +282,48 @@ export type AuditEvent =
 			event: 'receipt.logo_updated';
 			details: { sha256: string; widthDots: number; heightDots: number };
 	  }
-	| { event: 'receipt.logo_removed'; details: { sha256: string } };
+	| { event: 'receipt.logo_removed'; details: { sha256: string } }
+	// tasks/customer-credit (T-08, T-09, T-11). Amounts are decimal strings.
+	| {
+			event: 'customer.created';
+			details: {
+				customerId: string;
+				name: string;
+				phone: string;
+				creditLimitMinor: string | null;
+			};
+	  }
+	| {
+			event: 'customer.updated';
+			details: { customerId: string; changes: Record<string, { old: unknown; new: unknown }> };
+	  }
+	| { event: 'customer.archived'; details: { customerId: string; name: string } }
+	| { event: 'customer.restored'; details: { customerId: string; name: string } }
+	// Also the evidence for that payment's drawer pulse when the tender is cash
+	// (CLAUDE.md, "Printing — decided 2026-09-29", the same reading as a cash sale).
+	| {
+			event: 'customer.payment_received';
+			details: {
+				paymentId: string;
+				customerId: string;
+				amountMinor: string;
+				method: 'cash' | 'card' | 'mobile';
+				paymentMethodId: string;
+				posSessionId: string;
+				balanceAfterMinor: string;
+			};
+	  }
+	| {
+			event: 'customer.payment_reversed';
+			details: {
+				paymentId: string;
+				customerId: string;
+				amountMinor: string;
+				reason: string;
+				reversalBusinessDate: string;
+			};
+	  }
+	| { event: 'payment_method.credit_switched'; details: { enabled: boolean } };
 
 export type AuditEventName = AuditEvent['event'];
 
@@ -303,6 +357,7 @@ export const AUDIT_EVENT_NAMES = [
 	'sale.recorded',
 	'sale.flagged',
 	'sale.tax_override',
+	'sale.credit_charged',
 	'sale.abandoned',
 	'sync.op_unrecorded',
 	'sync.op_retried',
@@ -331,7 +386,14 @@ export const AUDIT_EVENT_NAMES = [
 	'payment_method.archived',
 	'receipt.lines_updated',
 	'receipt.logo_updated',
-	'receipt.logo_removed'
+	'receipt.logo_removed',
+	'customer.created',
+	'customer.updated',
+	'customer.archived',
+	'customer.restored',
+	'customer.payment_received',
+	'customer.payment_reversed',
+	'payment_method.credit_switched'
 ] as const satisfies readonly AuditEventName[];
 
 type AssertTrue<T extends true> = T;
