@@ -12,9 +12,20 @@ import type { OrderType } from '$lib/sync-ops';
 // money formatter's string, and a negative difference carries its sign as a
 // boolean from a comparison, so the page never inspects a number (invariants 1, 7).
 
-const TENDER_LABELS = { cash: 'Cash', card: 'Card', mobile: 'Mobile' } as const;
+const TENDER_LABELS = {
+	cash: 'Cash',
+	card: 'Card',
+	mobile: 'Mobile',
+	// tasks/customer-credit: sold, not received.
+	credit: 'Customer credit (not received)'
+} as const;
 // The Type column of "By payment method": the kind of each named method.
-const METHOD_KIND_LABELS = { cash: 'Cash', card: 'Card', mobile: 'Mobile money' } as const;
+const METHOD_KIND_LABELS = {
+	cash: 'Cash',
+	card: 'Card',
+	mobile: 'Mobile money',
+	credit: 'Customer credit'
+} as const;
 // A Record over the wire contract's type: a fourth order type with no label here
 // fails to compile, instead of being mislabelled as the "other" one.
 const ORDER_TYPE_LABELS: Record<OrderType, string> = {
