@@ -177,6 +177,7 @@ describe('every /api route is guarded', () => {
 			'/api/menu',
 			'/api/menu/images/[id]',
 			'/api/menu/version',
+			'/api/pos/customers',
 			'/api/pos/employees',
 			'/api/pos/pin',
 			'/api/pos/receipt-logo',
