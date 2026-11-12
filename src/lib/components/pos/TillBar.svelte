@@ -316,6 +316,15 @@
 					<Icon name="clipboard" class="text-ink-2 size-5" />
 					Sales
 				</a>
+				{#if mayManageShift}
+					<!-- Customers on credit: who owes, and receiving a payment
+					     (tasks/customer-credit T-20). Shown to an employee holding
+					     pos.payment — the key the server demands for the payment op. -->
+					<a href={resolve('/pos/customers')} class={MENU_ITEM}>
+						<Icon name="user-plus" class="text-ink-2 size-5" />
+						Customers
+					</a>
+				{/if}
 				{#if employee.isOwner}
 					<!-- Setup is owner-only, and enforced on the device (T-29). -->
 					<a href={resolve('/pos/printer')} class={MENU_ITEM}>

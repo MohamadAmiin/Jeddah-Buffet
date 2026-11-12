@@ -186,7 +186,9 @@ describe('tenderClass — THE fact / request rule', () => {
 			// Tendered and change exist for cash only.
 			'src/lib/pos/orders.ts': 3,
 			// The cash keypad, tendered, change, and the drawer on Pay.
-			'src/routes/(pos)/pos/pay/+page.svelte': PAY_PAGE_CASH_COMPARISONS
+			'src/routes/(pos)/pos/pay/+page.svelte': PAY_PAGE_CASH_COMPARISONS,
+			// A cash customer payment is taken exactly: tendered = amount, change 0.
+			'src/routes/(pos)/pos/customers/+page.svelte': 1
 		};
 		const found: Record<string, number> = {};
 		const walk = (dir: string) => {
