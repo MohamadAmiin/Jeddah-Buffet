@@ -111,7 +111,7 @@ export const posSyncOps = pgTable(
 		index('pos_sync_ops_device_invoice_seq_idx').on(t.deviceId, t.invoiceSeq),
 		check(
 			'pos_sync_ops_kind_valid',
-			sql`${t.kind} in ('session.open', 'session.close', 'sale.complete', 'sale.abandoned', 'pin.login')`
+			sql`${t.kind} in ('session.open', 'session.close', 'sale.complete', 'sale.abandoned', 'pin.login', 'customer.payment')`
 		),
 		check(
 			'pos_sync_ops_status_valid',

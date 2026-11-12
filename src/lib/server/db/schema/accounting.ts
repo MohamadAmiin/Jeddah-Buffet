@@ -115,11 +115,11 @@ export const journalEntries = pgTable(
 		index('journal_entries_source_idx').on(t.sourceType, t.sourceId),
 		check(
 			'journal_entries_event_valid',
-			sql`${t.event} in ('cash_sale', 'card_sale', 'mobile_sale', 'cost_of_goods_sold', 'cash_shortage_at_close', 'cash_overage_at_close', 'purchase_paid', 'purchase_on_credit', 'supplier_paid', 'waste', 'stock_count_shortfall', 'stock_count_surplus', 'inventory_revaluation', 'opening_stock')`
+			sql`${t.event} in ('cash_sale', 'card_sale', 'mobile_sale', 'cost_of_goods_sold', 'cash_shortage_at_close', 'cash_overage_at_close', 'purchase_paid', 'purchase_on_credit', 'supplier_paid', 'waste', 'stock_count_shortfall', 'stock_count_surplus', 'inventory_revaluation', 'opening_stock', 'credit_sale', 'customer_payment_received')`
 		),
 		check(
 			'journal_entries_source_type_valid',
-			sql`${t.sourceType} in ('order', 'pos_session', 'purchase', 'supplier_payment', 'waste_entry', 'stock_count', 'opening_stock')`
+			sql`${t.sourceType} in ('order', 'pos_session', 'purchase', 'supplier_payment', 'waste_entry', 'stock_count', 'opening_stock', 'customer_payment')`
 		),
 		// One reversal per entry: a double-submitted reversal fails with 23505.
 		uniqueIndex('journal_entries_reverses_entry_unique')

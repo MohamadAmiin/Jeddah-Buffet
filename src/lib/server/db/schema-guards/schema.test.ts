@@ -28,6 +28,7 @@ import * as purchasesSchema from '../schema/purchases';
 import * as taxRatesSchema from '../schema/tax-rates';
 import * as paymentMethodsSchema from '../schema/payment-methods';
 import * as receiptSchema from '../schema/receipt';
+import * as customersSchema from '../schema/customers';
 import { TABLES } from '../test/reset';
 
 // Tables are DISCOVERED from the schema modules' exports, never from a
@@ -57,7 +58,8 @@ const modules = {
 	...purchasesSchema,
 	...taxRatesSchema,
 	...paymentMethodsSchema,
-	...receiptSchema
+	...receiptSchema,
+	...customersSchema
 };
 
 // Every file in src/lib/server/db/schema/ that is imported above. A schema file
@@ -66,6 +68,7 @@ const modules = {
 const IMPORTED_SCHEMA_FILES = [
 	'accounting.ts',
 	'audit.ts',
+	'customers.ts',
 	'inventory.ts',
 	'menu.ts',
 	'orders.ts',
@@ -213,6 +216,8 @@ describe('schema guards every future aggregate inherits', () => {
 		expect(tables.map((t) => t.name).sort()).toEqual([
 			'accounts',
 			'audit_log',
+			'customer_payments',
+			'customers',
 			'ingredient_purchase_units',
 			'ingredients',
 			'invoices',

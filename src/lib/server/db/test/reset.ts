@@ -6,7 +6,9 @@ import pg from 'pg';
 //
 // Current tables, child-first for readability (the single statement below makes
 // the order irrelevant): stock_count_lines, stock_counts, waste_entries,
-// opening_stock_entries, stock_movements, supplier_payments, purchase_lines,
+// opening_stock_entries, stock_movements, supplier_payments, customer_payments
+// (before payment_methods, pos_sessions and customers, which it references;
+// customers after payments, which references it), purchase_lines,
 // purchases, recipe_lines, ingredient_purchase_units, ingredients,
 // journal_entry_lines, journal_entries, accounts,
 // pos_sync_ops, invoices, payments, payment_methods, order_line_modifiers,
@@ -33,6 +35,7 @@ export const TABLES = [
 	'opening_stock_entries',
 	'stock_movements',
 	'supplier_payments',
+	'customer_payments',
 	'purchase_lines',
 	'purchases',
 	'recipe_lines',
@@ -44,6 +47,7 @@ export const TABLES = [
 	'pos_sync_ops',
 	'invoices',
 	'payments',
+	'customers',
 	'payment_methods',
 	'order_line_modifiers',
 	'order_lines',

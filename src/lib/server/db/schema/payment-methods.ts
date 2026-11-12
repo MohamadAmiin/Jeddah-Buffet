@@ -88,7 +88,16 @@ export const paymentMethods = pgTable(
 		uniqueIndex('payment_methods_name_unique')
 			.on(t.restaurantId, sql`lower(${t.name})`)
 			.where(sql`${t.archivedAt} is null`),
-		check('payment_methods_kind_valid', sql`${t.kind} in ('cash', 'card', 'mobile')`),
+		// The built-in Customer credit row (tasks/customer-credit): one per restaurant,
+		// switched on by the owner, never archived, no merchant number.
+		uniqueIndex('payment_methods_one_credit')
+			.on(t.restaurantId)
+			.where(sql`${t.kind} = 'credit'`),
+		check('payment_methods_kind_valid', sql`${t.kind} in ('cash', 'card', 'mobile', 'credit')`),
+		check(
+			'payment_methods_credit_rules',
+			sql`${t.kind} <> 'credit' or (${t.archivedAt} is null and ${t.merchantNumber} is null)`
+		),
 		check(
 			'payment_methods_name_valid',
 			sql`char_length(${t.name}) between 1 and 40 and ${t.name} !~ '[[:cntrl:]]'`

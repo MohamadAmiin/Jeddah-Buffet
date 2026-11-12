@@ -148,6 +148,13 @@
       "when": 1792775417502,
       "tag": "0020_category_photos",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1794503426367,
+      "tag": "0021_customer_credit",
+      "breakpoints": true
     }
   ]
 }
