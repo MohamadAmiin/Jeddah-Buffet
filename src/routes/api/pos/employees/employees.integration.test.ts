@@ -16,6 +16,7 @@ import {
 import {
 	archivePaymentMethod,
 	createPaymentMethod,
+	setCreditEnabled,
 	onRestaurantCreated,
 	replaceReceiptLines,
 	setReceiptLogo,
@@ -407,6 +408,25 @@ describe('payment methods and the receipt layout (settings-tax-payments-receipt 
 		const { body } = await get({ [DEVICE_COOKIE]: a.token });
 		expect(body!.settings.paymentMethods.map((m) => m.name)).toEqual(['Cash']);
 		expect(body!.settings.paymentMethods.map((m) => m.name)).not.toContain('Zaad');
+	});
+
+	it('ships the Customer credit method LAST, and only while the owner has it switched on (customer-credit T-09)', async () => {
+		const a = await makeRestaurant('Cafe Credit', 'credit@cafe.com');
+
+		const off = await get({ [DEVICE_COOKIE]: a.token });
+		expect(off.body!.settings.paymentMethods.map((m) => m.kind)).toEqual(['cash']);
+
+		await db.transaction((tx) => setCreditEnabled(tx, a.restaurantId, true, ctxOf(a)));
+		const on = await get({ [DEVICE_COOKIE]: a.token });
+		const methods = on.body!.settings.paymentMethods;
+		expect(methods.map((m) => m.kind)).toEqual(['cash', 'credit']);
+		// Exactly the four keys, like every other method.
+		expect(Object.keys(methods[1]).sort()).toEqual(['id', 'kind', 'merchantNumber', 'name']);
+		expect(methods[1]).toMatchObject({ name: 'Customer credit', merchantNumber: null });
+
+		await db.transaction((tx) => setCreditEnabled(tx, a.restaurantId, false, ctxOf(a)));
+		const offAgain = await get({ [DEVICE_COOKIE]: a.token });
+		expect(offAgain.body!.settings.paymentMethods.map((m) => m.kind)).toEqual(['cash']);
 	});
 
 	it("ships the layout and only the logo's fingerprint", async () => {

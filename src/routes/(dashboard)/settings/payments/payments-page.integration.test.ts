@@ -6,7 +6,7 @@
 // (invariant 10); a method of another restaurant is never reachable
 // (invariant 8).
 import { afterAll, describe, expect, it } from 'vitest';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, ne, sql } from 'drizzle-orm';
 import type { RequestEvent, ServerLoadEvent } from '@sveltejs/kit';
 import { testDb, closeTestDb } from '$lib/server/db/test/db';
 import { restaurants } from '$lib/server/db/schema/restaurants';
@@ -192,23 +192,27 @@ async function loadData(user: Principal): Promise<LoadData> {
 
 /** Every method of the restaurant, live and archived: Cash first, then sort order, then name. */
 async function methodRows(restaurantId: string) {
-	return db
-		.select({
-			id: paymentMethods.id,
-			name: paymentMethods.name,
-			kind: paymentMethods.kind,
-			merchantNumber: paymentMethods.merchantNumber,
-			enabled: paymentMethods.enabled,
-			sortOrder: paymentMethods.sortOrder,
-			archivedAt: paymentMethods.archivedAt
-		})
-		.from(paymentMethods)
-		.where(eq(paymentMethods.restaurantId, restaurantId))
-		.orderBy(
-			sql`${paymentMethods.kind} = 'cash' desc`,
-			asc(paymentMethods.sortOrder),
-			asc(paymentMethods.name)
-		);
+	return (
+		db
+			.select({
+				id: paymentMethods.id,
+				name: paymentMethods.name,
+				kind: paymentMethods.kind,
+				merchantNumber: paymentMethods.merchantNumber,
+				enabled: paymentMethods.enabled,
+				sortOrder: paymentMethods.sortOrder,
+				archivedAt: paymentMethods.archivedAt
+			})
+			.from(paymentMethods)
+			// Cash and the owner's methods; the built-in Customer credit row
+			// (tasks/customer-credit) has its own switch and its own cases.
+			.where(and(eq(paymentMethods.restaurantId, restaurantId), ne(paymentMethods.kind, 'credit')))
+			.orderBy(
+				sql`${paymentMethods.kind} = 'cash' desc`,
+				asc(paymentMethods.sortOrder),
+				asc(paymentMethods.name)
+			)
+	);
 }
 
 async function eventCount(restaurantId: string, event: string): Promise<number> {

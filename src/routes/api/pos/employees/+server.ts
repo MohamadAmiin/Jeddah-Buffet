@@ -3,6 +3,7 @@ import { db } from '$lib/server/db/client';
 import { requireDevice } from '$lib/server/auth/pos-context';
 import { listPosEmployees } from '$lib/server/auth/employee-directory';
 import {
+	getCreditMethod,
 	getReceiptLayout,
 	getRestaurantWithSettings,
 	listPaymentMethods
@@ -44,6 +45,7 @@ export const GET: RequestHandler = async (event) => {
 	// 2026-09-15): null travels as null — a number substituted here would silently
 	// answer the setting for every restaurant whose owner never chose one.
 	const restaurant = await getRestaurantWithSettings(db, device.restaurantId);
+	const credit = await getCreditMethod(db, device.restaurantId);
 	const settings = {
 		// Shown in the till's context strip; not a secret — it is on every receipt.
 		restaurantName: restaurant?.name ?? null,
@@ -60,9 +62,18 @@ export const GET: RequestHandler = async (event) => {
 		// Exactly FOUR keys per method, mapped by name and never spread: enabled,
 		// sortOrder and archivedAt are the dashboard's business, not the till's.
 		// The order is the reader's — cash first, then sort_order.
-		paymentMethods: (await listPaymentMethods(db, device.restaurantId))
-			.filter((m) => m.enabled && m.archivedAt === null)
-			.map((m) => ({ id: m.id, name: m.name, kind: m.kind, merchantNumber: m.merchantNumber })),
+		//
+		// tasks/customer-credit: the built-in Customer credit row rides LAST, and only
+		// while the owner has it switched on — the till offers the credit tender from
+		// this entry alone. A till shell older than that plan drops the unknown kind.
+		paymentMethods: [
+			...(await listPaymentMethods(db, device.restaurantId))
+				.filter((m) => m.enabled && m.archivedAt === null)
+				.map((m) => ({ id: m.id, name: m.name, kind: m.kind, merchantNumber: m.merchantNumber })),
+			...(credit?.enabled
+				? [{ id: credit.id, name: credit.name, kind: 'credit' as const, merchantNumber: null }]
+				: [])
+		],
 		// The layout carries the logo's FINGERPRINT { sha256, widthDots, heightDots }
 		// or null — never the bitmap (see the comment above `return json(`).
 		receipt: await getReceiptLayout(db, device.restaurantId)
