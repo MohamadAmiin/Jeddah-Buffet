@@ -18,6 +18,7 @@ import {
 	countSurplusLines,
 	revaluationLines,
 	openingStockLines,
+	customerPaymentLines,
 	type PostingEvent,
 	type RuleLine
 } from './posting-rules';
@@ -78,7 +79,7 @@ function underlyingMessage(err: unknown): string {
 }
 
 // One rule builder per POSTING_EVENTS member: pos-sales' six unchanged, plus
-// tasks/inventory-cogs' eight (T-13). Record<PostingEvent, ...> makes a missing
+// tasks/inventory-cogs' eight (T-13) and tasks/customer-credit's two (T-06). Record<PostingEvent, ...> makes a missing
 // event a type error, so the property test always covers every event.
 type Built = { lines: RuleLine[]; sourceType: JournalSourceType };
 function saleBuilder(kind: (typeof SALE_EVENTS)[number]) {
@@ -159,6 +160,12 @@ const BUILDERS: Record<PostingEvent, (next: () => bigint, i: number) => Built> =
 	opening_stock: (next) => ({
 		lines: openingStockLines(amount(next)),
 		sourceType: 'opening_stock'
+	}),
+	// tasks/customer-credit T-06: the charge, and the three ways it is paid back.
+	credit_sale: saleBuilder('credit_sale'),
+	customer_payment_received: (next, i) => ({
+		lines: customerPaymentLines((['cash', 'card', 'mobile'] as const)[i % 3], amount(next)),
+		sourceType: 'customer_payment'
 	})
 };
 

@@ -23,7 +23,9 @@ export const JOURNAL_SOURCE_TYPES = [
 	'supplier_payment',
 	'waste_entry',
 	'stock_count',
-	'opening_stock'
+	'opening_stock',
+	// tasks/customer-credit: a customer_payments row.
+	'customer_payment'
 ] as const;
 export type JournalSourceType = (typeof JOURNAL_SOURCE_TYPES)[number];
 
