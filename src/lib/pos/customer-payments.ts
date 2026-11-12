@@ -75,8 +75,12 @@ export function viewOf(entry: QueueEntry): CustomerPaymentView | null {
 	const payload = entry.envelope.payload as CustomerPaymentPayload;
 	const record = entry.customerPayment;
 	// DONE with an error is a refusal; DONE without one is the server's yes.
-	// Anything else — pending, sending, parked — is still unanswered.
-	const refused = entry.state === 'done' && entry.lastError !== undefined;
+	// PARKED will never be sent again (a foreign device, a malformed request): it
+	// reads as refused, so the cashier can acknowledge it instead of facing a
+	// "waiting for the server" banner that never clears. Pending and sending are
+	// still unanswered.
+	const parked = entry.state === 'parked';
+	const refused = parked || (entry.state === 'done' && entry.lastError !== undefined);
 	const confirmed = entry.state === 'done' && !refused;
 	const after = entry.lastResult?.balanceAfterMinor;
 	return {
@@ -95,7 +99,7 @@ export function viewOf(entry: QueueEntry): CustomerPaymentView | null {
 		tappedAt: record.tappedAt,
 		state: confirmed ? 'confirmed' : refused ? 'refused' : 'pending',
 		balanceAfterMinor: confirmed && typeof after === 'string' ? after : null,
-		refusal: refused ? (entry.lastError ?? '').replace(/^rejected:/, '') : null,
+		refusal: parked ? 'parked' : refused ? (entry.lastError ?? '').replace(/^rejected:/, '') : null,
 		printedAt: record.printedAt ?? null,
 		drawerAt: record.drawerAt ?? null,
 		reprints: record.reprints ?? 0,
@@ -112,11 +116,16 @@ function readEntries(): Promise<QueueEntry[]> {
 	);
 }
 
-/** Every customer payment this till has sent, newest first. */
-export async function listCustomerPayments(): Promise<CustomerPaymentView[]> {
+/**
+ * The customer payments sent under ONE registration of this till, newest first.
+ * Filtered by device like the sales list: the queue outlives a re-registration
+ * (unsynced work must), but an earlier registration's customers — their names,
+ * phones and what they still owed — are not this registration's to show.
+ */
+export async function listCustomerPayments(deviceId: string): Promise<CustomerPaymentView[]> {
 	return (await readEntries())
 		.map(viewOf)
-		.filter((view): view is CustomerPaymentView => view !== null)
+		.filter((view): view is CustomerPaymentView => view !== null && view.deviceId === deviceId)
 		.sort((a, b) => b.tappedAt.localeCompare(a.tappedAt));
 }
 
@@ -318,6 +327,8 @@ const REFUSAL_WORDS: Record<string, string> = {
 	exceeds_balance: 'it is more than the customer owes',
 	session_closed: 'the shift is closed',
 	unknown_session: 'the server does not know this shift',
+	session_device_mismatch: 'the shift belongs to another till',
+	parked: 'this till could not send it — it belongs to an earlier registration',
 	unknown_customer: 'the server does not know this customer',
 	tender_not_accepted: 'that payment method is switched off',
 	invalid_amount: 'the amount is not valid',

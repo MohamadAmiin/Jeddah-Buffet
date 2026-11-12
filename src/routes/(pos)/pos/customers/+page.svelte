@@ -150,7 +150,7 @@
 	);
 
 	async function reload() {
-		payments = await listCustomerPayments().catch(() => []);
+		payments = deviceId === null ? [] : await listCustomerPayments(deviceId).catch(() => []);
 		cache = await readCustomers().catch(() => null);
 		localOrders = await readLocalOrders().catch(() => []);
 	}

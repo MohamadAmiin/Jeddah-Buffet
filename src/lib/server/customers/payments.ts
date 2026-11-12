@@ -80,6 +80,7 @@ export type ReceiveInput = {
 
 export type ReceiveRefusal =
 	| 'unknown_session'
+	| 'session_device_mismatch'
 	| 'session_closed'
 	| 'unknown_customer'
 	| 'tender_not_accepted'
@@ -93,16 +94,18 @@ async function lockShift(
 	tx: DbTx,
 	restaurantId: string,
 	posSessionId: string
-): Promise<{ status: string; businessDate: string } | null> {
+): Promise<{ status: string; businessDate: string; deviceId: string } | null> {
 	if (!UUID.test(posSessionId)) return null;
-	const result = await tx.execute<{ status: string; business_date: string }>(sql`
-		select s.status, s.business_date::text as business_date
+	const result = await tx.execute<{ status: string; business_date: string; device_id: string }>(sql`
+		select s.status, s.business_date::text as business_date, s.device_id
 		from pos_sessions s
 		where s.id = ${posSessionId} and s.restaurant_id = ${restaurantId}
 		for share
 	`);
 	const row = result.rows[0];
-	return row ? { status: row.status, businessDate: row.business_date } : null;
+	return row
+		? { status: row.status, businessDate: row.business_date, deviceId: row.device_id }
+		: null;
 }
 
 /** Today in the restaurant's zone, computed in SQL (invariant 11). A private
@@ -175,6 +178,10 @@ export async function receiveCustomerPayment(
 	// 1 — the shift, FOR SHARE. Decide "open" under the lock.
 	const shift = await lockShift(tx, ctx.restaurantId, input.posSessionId);
 	if (!shift) return { ok: false, reason: 'unknown_session' };
+	// The shift must be the op's OWN till's, as a sale's must (validate.ts step 3):
+	// cash received at one till may never be counted in another till's drawer —
+	// that would post a shortage against a different cashier's shift.
+	if (shift.deviceId !== ctx.deviceId) return { ok: false, reason: 'session_device_mismatch' };
 	if (shift.status !== 'open') return { ok: false, reason: 'session_closed' };
 
 	// 2 — the customer, FOR UPDATE. Everything below reads a settled balance.

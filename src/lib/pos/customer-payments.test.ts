@@ -193,7 +193,7 @@ describe('startCustomerPayment — the record and the op are one write', () => {
 		// Logout and shift close are blocked while the queue is non-empty (invariant 5).
 		expect(await countUnsynced()).toBe(1);
 
-		const [view] = await listCustomerPayments();
+		const [view] = await listCustomerPayments('device-A');
 		expect(view).toMatchObject({ state: 'pending', balanceAfterMinor: null, refusal: null });
 	});
 
@@ -316,12 +316,27 @@ describe('a refused payment', () => {
 		expect(await countUnsynced()).toBe(0);
 
 		// On screen until the cashier says the money went back.
-		expect(needsAttention(await listCustomerPayments())).toHaveLength(1);
+		expect(needsAttention(await listCustomerPayments('device-A'))).toHaveLength(1);
+		// Another registration of this till never sees it.
+		expect(await listCustomerPayments('device-B')).toEqual([]);
 		await acknowledgeRefusal(first, new Date(TAP_MS + 9000));
-		expect(needsAttention(await listCustomerPayments())).toEqual([]);
+		expect(needsAttention(await listCustomerPayments('device-A'))).toEqual([]);
 		// A refusal is an answer: the customer may try again.
-		expect(pendingFor(await listCustomerPayments(), 'c-ali')).toBeNull();
+		expect(pendingFor(await listCustomerPayments('device-A'), 'c-ali')).toBeNull();
 		expect((await startCustomerPayment(args({ now: new Date(TAP_MS + 10_000) }))).ok).toBe(true);
+	});
+
+	it('409 foreign_device parks the op: it reads as refused and can be acknowledged, never "waiting" for ever', async () => {
+		const first = await started();
+		await flush(
+			server(() => ({ status: 409, body: { error: 'foreign_device' } })).fetchFn,
+			noRetry
+		);
+		const view = await readCustomerPayment(first);
+		expect(view).toMatchObject({ state: 'refused', refusal: 'parked' });
+		expect(refusalWords(view!.refusal)).toContain('earlier registration');
+		await acknowledgeRefusal(first);
+		expect(needsAttention(await listCustomerPayments('device-A'))).toEqual([]);
 	});
 
 	it('403: refused as not permitted', async () => {

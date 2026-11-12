@@ -9,6 +9,7 @@ import {
 	recordSaleAt,
 	seedSalesRestaurant,
 	syncContext,
+	withSecondDevice,
 	type RecordSaleOptions,
 	type SalesFixture
 } from '../db/test/sales';
@@ -376,6 +377,29 @@ describe('refusals write nothing', () => {
 		for (const [result, reason] of tries) expect(result).toEqual({ ok: false, reason });
 
 		expect(await counts(w.f.restaurantId)).toEqual({ payments: 0, entries: 0 });
+		expect(await balanceOf(db, w.f.restaurantId, w.customer)).toBe(880n);
+	});
+
+	it("MANDATORY (verification finding): another till's open shift is refused — cash is never counted in a different drawer", async () => {
+		const w = await world();
+		await charge(w, 1);
+		// A second till of the same restaurant, with its own open shift.
+		const second = await withSecondDevice(db, w.f);
+		const otherShift = randomUUID();
+		await openSessionAt(db, second, {
+			posSessionId: otherShift,
+			openedAt: AT,
+			openingCashMinor: 10_000n
+		});
+
+		// The op comes from the FIRST till but names the second till's shift.
+		const { result } = await receive(w, 500n, 'cash', { posSessionId: otherShift });
+
+		expect(result).toEqual({ ok: false, reason: 'session_device_mismatch' });
+		expect(await counts(w.f.restaurantId)).toEqual({ payments: 0, entries: 0 });
+		expect(await db.transaction((tx) => expectedCash(tx, w.f.restaurantId, otherShift))).toBe(
+			10_000n
+		);
 		expect(await balanceOf(db, w.f.restaurantId, w.customer)).toBe(880n);
 	});
 
