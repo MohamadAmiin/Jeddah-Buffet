@@ -486,7 +486,8 @@ export async function statement(
 			       coalesce(i.invoice_number, p.order_id::text) as reference,
 			       null::uuid as payment_id, null::text as method_name, null::text as method,
 			       null::text as reason, u.display_name as cashier_name, d.device_code as till_code,
-			       p.amount_minor::text as amount, false as reversed, 0 as tie
+			       p.amount_minor::text as amount, false as reversed, 0 as tie,
+			       p.created_at as recorded
 			from payments p
 			join orders o on o.id = p.order_id and o.restaurant_id = p.restaurant_id
 			join pos_sessions s on s.id = o.pos_session_id and s.restaurant_id = o.restaurant_id
@@ -497,7 +498,7 @@ export async function statement(
 			union all
 			select 'payment', cp.business_date::text, cp.received_at, cp.id::text, cp.id,
 			       cp.payment_method_name, cp.method, null, u.display_name, d.device_code,
-			       cp.amount_minor::text, cp.reversed_at is not null, 1
+			       cp.amount_minor::text, cp.reversed_at is not null, 1, cp.created_at
 			from customer_payments cp
 			left join users u on u.id = cp.recorded_by_user_id
 			left join pos_devices d on d.id = cp.device_id
@@ -505,13 +506,15 @@ export async function statement(
 			union all
 			select 'reversal', cp.reversal_business_date::text, cp.reversed_at, cp.id::text, cp.id,
 			       cp.payment_method_name, cp.method, cp.reversal_reason, u.display_name, null,
-			       cp.amount_minor::text, false, 2
+			       cp.amount_minor::text, false, 2, cp.reversed_at
 			from customer_payments cp
 			left join users u on u.id = cp.reversed_by_user_id
 			where cp.restaurant_id = ${restaurantId} and cp.customer_id = ${customerId}
 			  and cp.reversed_at is not null
 		) rows
-		order by at, tie, reference
+		-- Device time first; rows sharing an instant fall back to the order the
+		-- server recorded them in, so the running balance is deterministic.
+		order by at, tie, recorded, reference
 	`);
 
 	let balance = minor(0n);

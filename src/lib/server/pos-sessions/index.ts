@@ -180,9 +180,19 @@ export async function openSession(
 	};
 }
 
-/** Expected cash: opening float + Σ cash payments on paid orders of the
- * session. Refunds, pay-ins and pay-outs are zero in this plan and will
- * join this same statement when their plans land. */
+/**
+ * Expected cash: the opening float
+ *   + the cash payments of the session's paid orders
+ *   + the session's cash customer payments that are not reversed
+ *     (tasks/customer-credit: a customer paying their debt in cash puts it in
+ *     this shift's drawer; a credit SALE adds nothing — no money changed hands).
+ *
+ * EACH SUM IS ITS OWN SCALAR SUBQUERY. Never add a source as one more join: two
+ * child tables joined to one session multiply each other's rows (120 orders and
+ * one 50.00 customer payment would count the 50.00 a hundred and twenty times),
+ * and the wrong figure is then posted to 6800 by a close nobody can reopen.
+ * Refunds, pay-ins and pay-outs are zero today; each joins as its own subquery.
+ */
 export async function expectedCash(
 	tx: Executor,
 	restaurantId: string,
@@ -190,17 +200,21 @@ export async function expectedCash(
 ): Promise<Minor> {
 	const rows = await tx.execute<{ expected: string }>(sql`
 		select s.opening_cash_minor
-			+ coalesce(
-					sum(p.amount_minor) filter (
-						where p.method = 'cash' and o.status = 'paid'
-					),
-					0
-				) as expected
+			+ coalesce((
+					select sum(p.amount_minor)
+					from orders o
+					join payments p on p.order_id = o.id and p.restaurant_id = o.restaurant_id
+					where o.pos_session_id = s.id and o.restaurant_id = s.restaurant_id
+					  and o.status = 'paid' and p.method = 'cash'
+				), 0)
+			+ coalesce((
+					select sum(cp.amount_minor)
+					from customer_payments cp
+					where cp.pos_session_id = s.id and cp.restaurant_id = s.restaurant_id
+					  and cp.method = 'cash' and cp.reversed_at is null
+				), 0) as expected
 		from pos_sessions s
-		left join orders o on o.pos_session_id = s.id and o.restaurant_id = s.restaurant_id
-		left join payments p on p.order_id = o.id and p.restaurant_id = o.restaurant_id
 		where s.id = ${posSessionId} and s.restaurant_id = ${restaurantId}
-		group by s.id, s.opening_cash_minor
 	`);
 	if (rows.rows.length === 0) throw new SessionNotFound(posSessionId);
 	return minor(BigInt(rows.rows[0].expected));
