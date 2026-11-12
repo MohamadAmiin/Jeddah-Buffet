@@ -310,7 +310,11 @@
 			await reconcile().catch(() => {});
 			const layout = await readReceiptLayout().catch(() => null);
 			zeroTaxShown = layout?.show.zeroTax ?? true;
-			options = tenderOptions(await readPaymentMethods().catch(() => []));
+			// The Customer credit tender is held back until this screen can pick the
+			// customer it charges (tasks/customer-credit T-18).
+			options = tenderOptions(await readPaymentMethods().catch(() => [])).filter(
+				(o) => o.kind !== 'credit'
+			);
 			const code = await readCachedSetting('deviceCode').catch(() => null);
 			deviceCode = typeof code === 'string' ? code : null;
 			ready = true;
@@ -360,7 +364,8 @@
 				currencyCode: menu.currency as string,
 				menuVersion: menu.version,
 				payment: {
-					method: option.kind,
+					// Never credit here yet: the filter above holds that tender back (T-18).
+					method: option.kind as 'cash' | 'card' | 'mobile',
 					tenderedMinor: option.kind === 'cash' ? cashTendered : null,
 					// The owner-named method, id and name always as a pair; the synthetic
 					// Cash sends both null and the server resolves the restaurant's Cash

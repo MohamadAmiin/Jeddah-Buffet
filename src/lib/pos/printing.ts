@@ -38,6 +38,7 @@
 // as its text and the logo left off (submitWithFallback), so no line is lost.
 import { paymentNumbersFrom } from '../receipt-layout';
 import { canPrint, type CanPrint } from './can-print';
+import { tenderClass } from './tenders';
 import type { Cart } from './orders';
 import { asciiFallback, hasArabic, isPlainAscii } from './paper-script';
 import {
@@ -718,10 +719,14 @@ export function saleStatusMark(order: LocalOrder<Cart>): SaleStatusMark {
 		return { glyph: '○', text: 'Sold before printing was set up', tone: 'neutral' };
 	}
 	const method = order.sale.payload.payments[0]?.method;
-	if (method === 'cash') {
-		// A completed cash sale is a fact, whatever the server said: still printable.
-		return order.syncStatus === 'unrecorded'
-			? { glyph: '◆', text: "Recorded for the owner's review", tone: 'pending' }
+	if (tenderClass(method) === 'fact') {
+		// A completed cash or credit sale is a fact, whatever the server said: still
+		// printable. A credit sale is never "Paid": the customer owes it.
+		if (order.syncStatus === 'unrecorded') {
+			return { glyph: '◆', text: "Recorded for the owner's review", tone: 'pending' };
+		}
+		return method === 'credit'
+			? { glyph: '◐', text: 'On credit — not paid', tone: 'neutral' }
 			: { glyph: '●', text: 'Paid', tone: 'ok' };
 	}
 	if (order.syncStatus === 'accepted' || order.syncStatus === 'recorded_flagged') {

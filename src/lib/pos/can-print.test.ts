@@ -6,7 +6,7 @@ import { canPrint } from './can-print';
 // MANDATORY — invariant 5's fail-closed rule for card and mobile, and "a
 // completed cash sale is a fact" (menu-and-printing T-18).
 
-function snapshot(method: 'cash' | 'card' | 'mobile'): SaleSnapshot {
+function snapshot(method: 'cash' | 'card' | 'mobile' | 'credit'): SaleSnapshot {
 	return {
 		payload: {
 			orderId: 'o1',
@@ -57,6 +57,20 @@ describe('canPrint', () => {
 		});
 		expect(canPrint(order({ sale: snapshot('cash'), syncStatus: 'recorded_flagged' }))).toEqual({
 			ok: true
+		});
+	});
+
+	it('a completed CREDIT sale prints whatever its sync status — a fact, like cash (customer-credit T-15)', () => {
+		expect(canPrint(order({ sale: snapshot('credit') }))).toEqual({ ok: true });
+		for (const syncStatus of ['unrecorded', 'recorded_flagged', 'accepted'] as const) {
+			expect(canPrint(order({ sale: snapshot('credit'), syncStatus }))).toEqual({ ok: true });
+		}
+	});
+
+	it('a tender this code does not know stays closed', () => {
+		expect(canPrint(order({ sale: snapshot('cheque' as never) }))).toEqual({
+			ok: false,
+			reason: 'awaiting_confirmation'
 		});
 	});
 

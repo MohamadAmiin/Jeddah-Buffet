@@ -1,9 +1,20 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { CASH_TENDER_KEY, OFFLINE_REASON, tenderOptions, tenderReason } from './tenders';
+import {
+	CASH_TENDER_KEY,
+	CREDIT_NEEDS_PERMISSION,
+	CREDIT_NO_CUSTOMERS,
+	OFFLINE_REASON,
+	tenderClass,
+	tenderOptions,
+	tenderReason
+} from './tenders';
 
 // The pay screen's tender list and THE offline rule, by kind
 // (tasks/settings-tax-payments-receipt T-22). Pure — no IndexedDB.
+
+/** The pay screen's comparisons with the literal 'cash' (see the tripwire below). */
+const PAY_PAGE_CASH_COMPARISONS = 9;
 
 const SYNTHETIC_CASH = {
 	key: 'cash',
@@ -80,6 +91,114 @@ describe('tenderReason — invariant 5, fail closed', () => {
 		expect(tenderReason('cash', true)).toBeNull();
 		expect(tenderReason('card', true)).toBeNull();
 		expect(tenderReason('mobile', true)).toBeNull();
+	});
+});
+
+describe('the Customer credit tender (customer-credit T-15)', () => {
+	const CREDIT = { id: 'x1', name: 'Customer credit', kind: 'credit', merchantNumber: null };
+
+	it('is offered LAST, keyed by its id, when the cache holds the credit row', () => {
+		const options = tenderOptions([CREDIT, ...CACHED]);
+		expect(options.map((o) => o.kind)).toEqual(['cash', 'mobile', 'card', 'mobile', 'credit']);
+		expect(options.at(-1)).toEqual({
+			key: 'x1',
+			id: 'x1',
+			name: 'Customer credit',
+			kind: 'credit',
+			merchantNumber: null,
+			icon: 'user-plus'
+		});
+	});
+
+	it('is not offered when the cache has no credit row (the owner has it switched off)', () => {
+		expect(tenderOptions(CACHED).some((o) => o.kind === 'credit')).toBe(false);
+	});
+
+	it('drops a second credit row, and never gives it a merchant number', () => {
+		const options = tenderOptions([
+			{ ...CREDIT, merchantNumber: '61 000 0000' },
+			{ ...CREDIT, id: 'x2', name: 'Tabs' }
+		]);
+		expect(options.filter((o) => o.kind === 'credit')).toEqual([
+			{
+				key: 'x1',
+				id: 'x1',
+				name: 'Customer credit',
+				kind: 'credit',
+				merchantNumber: null,
+				icon: 'user-plus'
+			}
+		]);
+	});
+
+	it('is NEVER disabled for being offline: a credit charge is a fact (invariant 5, amended)', () => {
+		expect(tenderReason('credit', false)).toBeNull();
+		expect(tenderReason('credit', true)).toBeNull();
+	});
+
+	it('says why it is dead: no permission, or no customer cached', () => {
+		expect(tenderReason('credit', true, { mayTakePayment: false, customersCached: true })).toBe(
+			CREDIT_NEEDS_PERMISSION
+		);
+		expect(tenderReason('credit', false, { mayTakePayment: true, customersCached: false })).toBe(
+			CREDIT_NO_CUSTOMERS
+		);
+		// The credit context never changes the answer for another kind.
+		expect(
+			tenderReason('cash', false, { mayTakePayment: false, customersCached: false })
+		).toBeNull();
+		expect(tenderReason('card', false, { mayTakePayment: true, customersCached: true })).toBe(
+			OFFLINE_REASON
+		);
+	});
+});
+
+describe('tenderClass — THE fact / request rule', () => {
+	it('cash and credit are facts; card and mobile are requests', () => {
+		expect(tenderClass('cash')).toBe('fact');
+		expect(tenderClass('credit')).toBe('fact');
+		expect(tenderClass('card')).toBe('request');
+		expect(tenderClass('mobile')).toBe('request');
+	});
+
+	it('fails closed on anything it does not know', () => {
+		for (const kind of ['cheque', '', 'CASH', null, undefined]) {
+			expect(tenderClass(kind)).toBe('request');
+		}
+	});
+
+	// THE TRIPWIRE. A sale's class — "is it already final?" — must come from
+	// tenderClass. A comparison with the literal 'cash' is for what only cash does:
+	// the drawer, the keypad, tendered and change. Each file below holds exactly
+	// the comparisons listed; a new one anywhere under src/lib/pos or
+	// src/routes/(pos) fails here, so it is looked at before it ships.
+	it('every comparison with the literal cash is on the allow-list', () => {
+		const ALLOWED: Record<string, number> = {
+			// The cash row of the cached methods; cash is never disabled.
+			'src/lib/pos/tenders.ts': 3,
+			// THE DRAWER CLAUSE: only cash opens it.
+			'src/lib/pos/printing.ts': 1,
+			// The CASH / CHANGE lines of a receipt.
+			'src/lib/pos/receipt.ts': 1,
+			// Tendered and change exist for cash only.
+			'src/lib/pos/orders.ts': 3,
+			// The cash keypad, tendered, change, and the drawer on Pay.
+			'src/routes/(pos)/pos/pay/+page.svelte': PAY_PAGE_CASH_COMPARISONS
+		};
+		const found: Record<string, number> = {};
+		const walk = (dir: string) => {
+			for (const entry of readdirSync(dir, { withFileTypes: true })) {
+				const path = `${dir}/${entry.name}`;
+				if (entry.isDirectory()) walk(path);
+				else if (/\.(ts|svelte)$/.test(entry.name) && !/\.test\.ts$/.test(entry.name)) {
+					const hits = readFileSync(path, 'utf8').match(/[!=]==\s*'cash'/g);
+					if (hits) found[path] = hits.length;
+				}
+			}
+		};
+		walk('src/lib/pos');
+		walk('src/routes/(pos)');
+		expect(found).toEqual(ALLOWED);
 	});
 });
 

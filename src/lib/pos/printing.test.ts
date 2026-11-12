@@ -1109,6 +1109,42 @@ describe('listRecentSales and saleStatusMark (T-31)', () => {
 		expect(reprintRefusal(review)).toBeNull();
 		expect(reprintRefusal(order)).toBeNull();
 
+		// tasks/customer-credit T-15: a credit sale is a fact like cash — printable at
+		// once, never "awaiting confirmation" — but never "Paid": the customer owes it.
+		const onCredit = {
+			...order,
+			sale: {
+				...order.sale!,
+				payload: {
+					...order.sale!.payload,
+					payments: [
+						{
+							...order.sale!.payload.payments[0],
+							method: 'credit' as const,
+							tenderedMinor: null,
+							changeMinor: null
+						}
+					]
+				}
+			}
+		};
+		expect(saleStatusMark(onCredit)).toEqual({
+			glyph: '◐',
+			text: 'On credit — not paid',
+			tone: 'neutral'
+		});
+		expect(saleStatusMark({ ...onCredit, syncStatus: 'accepted' })).toEqual({
+			glyph: '◐',
+			text: 'On credit — not paid',
+			tone: 'neutral'
+		});
+		expect(saleStatusMark({ ...onCredit, syncStatus: 'unrecorded' })).toEqual({
+			glyph: '◆',
+			text: "Recorded for the owner's review",
+			tone: 'pending'
+		});
+		expect(reprintRefusal(onCredit)).toBeNull();
+
 		const card = (await readOrder((await sell('card')).orderId))!;
 		expect(saleStatusMark(card)).toEqual({
 			glyph: '◐',
