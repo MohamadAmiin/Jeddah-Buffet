@@ -730,3 +730,89 @@ export function renderArabicTestPage(input: ArabicTestPageInput): TextLine[] {
 	];
 	return out.map((l) => ({ ...l, text: toPrintable(l.text) }));
 }
+
+// ── The customer payment receipt (tasks/customer-credit T-19) ────────────────
+
+/**
+ * Everything a PAYMENT RECEIVED receipt prints, already decided: this file does
+ * no arithmetic, so `balanceBeforeMinor` arrives computed by the money module
+ * (after + amount) from the balance the SERVER stored with the payment — never
+ * from the till's cached list.
+ */
+export type PaymentReceiptInput = {
+	header: ReceiptHeader;
+	timeZone: string;
+	deviceCode: string;
+	currencyCode: string;
+	/** A short reference the customer can quote: the payment id's first block. */
+	reference: string;
+	customerName: string;
+	customerPhone: string;
+	methodName: string;
+	method: 'cash' | 'card' | 'mobile';
+	amountMinor: string;
+	tenderedMinor: string | null;
+	changeMinor: string | null;
+	balanceBeforeMinor: string;
+	balanceAfterMinor: string;
+	cashierName: string;
+	/** ISO time of the tap. */
+	receivedAt: string;
+};
+
+/**
+ * The receipt a customer takes when they pay towards their credit balance. It
+ * is not an invoice and carries no invoice number: nothing was sold. Nothing on
+ * it is hideable — it is the customer's proof of what they paid and still owe.
+ */
+export function renderPaymentReceipt(input: PaymentReceiptInput, opts: RenderOptions): PrintLine[] {
+	const w = opts.width;
+	const p = toPrintable;
+	const cur = input.currencyCode;
+	const { header } = input;
+	const out: PrintLine[] = [];
+
+	if (opts.copy) {
+		out.push(rule('*', w));
+		out.push(line('*' + center('COPY', w - 2)[0]!.padEnd(w - 2) + '*'));
+		out.push(rule('*', w));
+	}
+	out.push(...lines(center(p(header.restaurantName), w), { bold: true, align: 'center' }));
+	if (header.address) out.push(...lines(center(p(header.address), w), { align: 'center' }));
+	if (header.phone) out.push(...lines(center(p(`Tel ${header.phone}`), w), { align: 'center' }));
+	out.push(rule('-', w));
+	out.push(...lines(center('PAYMENT RECEIVED', w), { bold: true, align: 'center' }));
+	out.push(rule('-', w));
+
+	out.push(...lines(pair('Date/Time', formatDateTime(input.receivedAt, input.timeZone), w)));
+	out.push(...lines(pair('Reference', p(input.reference), w)));
+	out.push(...lines(pair('Cashier', p(input.cashierName), w)));
+	if (opts.copy) {
+		out.push(...lines(pair('Reprinted', formatDateTime(opts.copy.reprintedAt, input.timeZone), w)));
+		out.push(...lines(pair('Reprint by', p(opts.copy.by), w)));
+	}
+	out.push(rule('-', w));
+
+	out.push(...lines(wrap(`Customer: ${p(input.customerName)}`, w)));
+	if (input.customerPhone) out.push(...lines(pair('Phone', p(input.customerPhone), w)));
+	out.push(rule('-', w));
+
+	out.push(...lines(pair('Balance before', money(input.balanceBeforeMinor, cur), w)));
+	out.push(
+		...lines(pair(`PAID ${p(input.methodName).toUpperCase()}`, money(input.amountMinor, cur), w), {
+			bold: true,
+			size: 'tall'
+		})
+	);
+	if (input.method === 'cash' && input.tenderedMinor !== null && input.changeMinor !== null) {
+		out.push(...lines(pair('Tendered', money(input.tenderedMinor, cur), w)));
+		out.push(...lines(pair('Change', money(input.changeMinor, cur), w)));
+	}
+	out.push(rule('=', w));
+	out.push(...lines(pair('STILL OWED', money(input.balanceAfterMinor, cur), w), { bold: true }));
+	out.push(rule('-', w));
+	out.push(...lines(center(p(`matcami POS ${input.deviceCode}`), w), { align: 'center' }));
+	if (opts.copy)
+		out.push(...lines(center('This is a copy of the receipt', w), { align: 'center' }));
+	return out;
+}

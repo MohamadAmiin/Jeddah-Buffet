@@ -176,10 +176,13 @@ describe('tenderClass — THE fact / request rule', () => {
 		const ALLOWED: Record<string, number> = {
 			// The cash row of the cached methods; cash is never disabled.
 			'src/lib/pos/tenders.ts': 3,
-			// THE DRAWER CLAUSE: only cash opens it.
-			'src/lib/pos/printing.ts': 1,
-			// The CASH / CHANGE lines of a receipt.
-			'src/lib/pos/receipt.ts': 1,
+			// THE TWO DRAWER CLAUSES: only a cash sale, and only a cash customer
+			// payment, opens it.
+			'src/lib/pos/printing.ts': 2,
+			// The CASH / CHANGE lines of a receipt and of a payment receipt.
+			'src/lib/pos/receipt.ts': 2,
+			// Tendered and change ride on a cash customer payment only.
+			'src/lib/pos/customer-payments.ts': 1,
 			// Tendered and change exist for cash only.
 			'src/lib/pos/orders.ts': 3,
 			// The cash keypad, tendered, change, and the drawer on Pay.

@@ -125,6 +125,33 @@ export type LocalOrder<C = unknown> = {
 
 /** One queued operation. Every *Minor field in `envelope` is a decimal STRING
  * (bigint never survives JSON). */
+/**
+ * The till's own record of a `customer.payment` op (tasks/customer-credit T-19),
+ * kept ON its queue entry — written in the same transaction as the enqueue, so
+ * there is never a payment op without it. It is what the screen, the receipt and
+ * the drawer are driven from: the op's envelope carries ids, this carries the
+ * names and the marks. No new object store (the LocalOrder.sale / .printed
+ * precedent — a new store would need a database version the till cannot roll
+ * back from).
+ */
+export type LocalCustomerPayment = {
+	customerName: string;
+	customerPhone: string;
+	/** The method's name as the till showed it ("Cash", "EVC Plus"). */
+	methodName: string;
+	cashierName: string;
+	/** ISO time of the tap: the 30-second drawer window starts here. */
+	tappedAt: string;
+	/** Set once the PAYMENT RECEIVED receipt was sent to the printer. */
+	printedAt?: string;
+	/** Set once the drawer was pulsed for this (cash) payment. */
+	drawerAt?: string;
+	/** Reprint counter, bumped before each COPY is sent. */
+	reprints?: number;
+	/** A REFUSED payment stays on screen until the cashier says the money went back. */
+	acknowledgedAt?: string;
+};
+
 export type QueueEntry = {
 	clientOpId: string;
 	deviceId: string;
@@ -135,6 +162,8 @@ export type QueueEntry = {
 	attempts: number;
 	lastError?: string;
 	lastResult?: SyncResult;
+	/** Present on a `customer.payment` entry only. */
+	customerPayment?: LocalCustomerPayment;
 };
 
 /** Per-device counters. NEVER cleared by bindDevice or forgetDevice. */
