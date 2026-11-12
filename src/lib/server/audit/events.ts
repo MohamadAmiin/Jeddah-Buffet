@@ -107,7 +107,7 @@ export type AuditEvent =
 				deviceCode: string;
 				invoiceNumber: string;
 				orderType: OrderType;
-				method: 'cash' | 'card' | 'mobile';
+				method: 'cash' | 'card' | 'mobile' | 'credit';
 				paymentMethodId: string;
 				paymentMethodName: string;
 				totalMinor: string;

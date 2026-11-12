@@ -86,11 +86,18 @@ function parseOrHard<T extends z.ZodTypeAny>(schema: T, payload: unknown): z.inf
 	return parsed.data as z.infer<T>;
 }
 
-function peekMethod(payload: unknown): 'cash' | 'card' | 'mobile' | null {
+function peekMethod(payload: unknown): 'cash' | 'card' | 'mobile' | 'credit' | null {
 	const p = payload as { payments?: unknown[] } | null;
 	if (!p || !Array.isArray(p.payments) || p.payments.length === 0) return null;
 	const first = p.payments[0] as { method?: unknown };
-	if (first.method === 'cash' || first.method === 'card' || first.method === 'mobile') {
+	if (
+		first.method === 'cash' ||
+		first.method === 'card' ||
+		first.method === 'mobile' ||
+		// tasks/customer-credit: a credit charge is a FACT, like cash — recorded,
+		// flagged or stored unrecorded, never answered 403 or 422 (isRequestClass).
+		first.method === 'credit'
+	) {
 		return first.method;
 	}
 	return null;

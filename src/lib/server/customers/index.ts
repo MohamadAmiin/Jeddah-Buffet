@@ -351,8 +351,9 @@ async function unrecordedChargeCount(
 		  and o.kind = 'sale.complete'
 		  and o.status = 'unrecorded'
 		  and o.resolved_at is null
-		  and o.payload -> 'payments' -> 0 ->> 'method' = 'credit'
-		  and o.payload -> 'payments' -> 0 ->> 'customerId' = ${customerId}
+		  -- pos_sync_ops.payload holds the WHOLE envelope; the sale is its payload key.
+		  and o.payload -> 'payload' -> 'payments' -> 0 ->> 'method' = 'credit'
+		  and o.payload -> 'payload' -> 'payments' -> 0 ->> 'customerId' = ${customerId}
 	`);
 	return result.rows[0]?.c ?? 0;
 }
