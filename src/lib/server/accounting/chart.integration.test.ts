@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterAll, describe, expect, it } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { closeTestDb, testDb } from '../db/test/db';
 import { accounts } from '../db/schema/accounting';
@@ -28,8 +28,14 @@ async function register(name: string, email: string): Promise<string> {
 }
 
 describe('the chart of accounts', () => {
-	it('CHART has 23 rows, exact spec-23 codes and account types', () => {
-		expect(CHART).toHaveLength(23);
+	it('CHART has 24 rows: the exact spec-23 codes, 1100 Accounts Receivable, and valid types', () => {
+		expect(CHART).toHaveLength(24);
+		// The ONE account spec 23 does not name (tasks/customer-credit, 2026-11-12).
+		expect(CHART.find((r) => r.code === '1100')).toEqual({
+			code: '1100',
+			name: 'Accounts Receivable',
+			type: 'asset'
+		});
 		const codes = new Set(CHART.map((r) => r.code));
 		expect(codes).toEqual(
 			new Set([
@@ -37,6 +43,7 @@ describe('the chart of accounts', () => {
 				'1010',
 				'1020',
 				'1030',
+				'1100',
 				'1200',
 				'2000',
 				'2100',
@@ -66,13 +73,13 @@ describe('the chart of accounts', () => {
 		expect(CHART[2].name.charCodeAt(17)).toBe(0x2013);
 	});
 
-	it('registering a restaurant seeds all 23 accounts once', async () => {
+	it('registering a restaurant seeds all 24 accounts once', async () => {
 		const restaurantId = await register('Cafe One', 'chart-one@example.com');
 		const rows = await testDb()
 			.select()
 			.from(accounts)
 			.where(eq(accounts.restaurantId, restaurantId));
-		expect(rows).toHaveLength(23);
+		expect(rows).toHaveLength(24);
 		expect(
 			rows
 				.map((r) => ({ code: r.code, name: r.name, type: r.type }))
@@ -80,13 +87,13 @@ describe('the chart of accounts', () => {
 		).toEqual([...CHART].sort((a, b) => a.code.localeCompare(b.code)));
 	});
 
-	it('two restaurants get 23 accounts each, per-restaurant', async () => {
+	it('two restaurants get 24 accounts each, per-restaurant', async () => {
 		const rA = await register('Cafe Two', 'chart-two@example.com');
 		const rB = await register('Cafe Three', 'chart-three@example.com');
 		const rowsA = await testDb().select().from(accounts).where(eq(accounts.restaurantId, rA));
 		const rowsB = await testDb().select().from(accounts).where(eq(accounts.restaurantId, rB));
-		expect(rowsA).toHaveLength(23);
-		expect(rowsB).toHaveLength(23);
+		expect(rowsA).toHaveLength(24);
+		expect(rowsB).toHaveLength(24);
 	});
 
 	it('ensureChart is idempotent and keeps the same ids', async () => {
@@ -95,18 +102,48 @@ describe('the chart of accounts', () => {
 			.select()
 			.from(accounts)
 			.where(eq(accounts.restaurantId, restaurantId));
-		expect(first).toHaveLength(23);
+		expect(first).toHaveLength(24);
 		await db.transaction(async (tx) => ensureChart(tx, restaurantId));
 		const second = await testDb()
 			.select()
 			.from(accounts)
 			.where(eq(accounts.restaurantId, restaurantId));
-		expect(second).toHaveLength(23);
+		expect(second).toHaveLength(24);
 		const byCode = (rows: typeof first) => Object.fromEntries(rows.map((r) => [r.code, r.id]));
 		expect(byCode(second)).toEqual(byCode(first));
 	});
 
-	it('parity with the SQL backfill in migration 0012', () => {
+	it('ensureChart adds exactly 1100 to a restaurant holding the old 23, and nothing on a second run', async () => {
+		const restaurantId = await register('Cafe Old', 'chart-old@example.com');
+		const before = await testDb()
+			.select()
+			.from(accounts)
+			.where(eq(accounts.restaurantId, restaurantId));
+		// Put the restaurant back where it stood before tasks/customer-credit.
+		// accounts has no append-only trigger; nothing references 1100 yet.
+		await testDb()
+			.delete(accounts)
+			.where(and(eq(accounts.restaurantId, restaurantId), eq(accounts.code, '1100')));
+
+		await db.transaction(async (tx) => ensureChart(tx, restaurantId));
+		await db.transaction(async (tx) => ensureChart(tx, restaurantId));
+
+		const after = await testDb()
+			.select()
+			.from(accounts)
+			.where(eq(accounts.restaurantId, restaurantId));
+		expect(after).toHaveLength(24);
+		const idOf = (rows: typeof after, code: string) => rows.find((r) => r.code === code)?.id;
+		for (const row of before.filter((r) => r.code !== '1100')) {
+			expect(idOf(after, row.code)).toBe(row.id);
+		}
+		expect(after.find((r) => r.code === '1100')).toMatchObject({
+			name: 'Accounts Receivable',
+			type: 'asset'
+		});
+	});
+
+	it('parity with the SQL backfills: migration 0012 holds the spec-23 rows, 0022 adds 1100', () => {
 		const migration = new URL('../db/migrations/0012_journal_guards.sql', import.meta.url);
 		const sqlText = readFileSync(migration, 'utf8');
 		const tuple = /\(\s*'(\d{4})'\s*,\s*'((?:[^']|'')+)'\s*,\s*'([a-z_]+)'\s*\)/g;
@@ -116,6 +153,12 @@ describe('the chart of accounts', () => {
 			type
 		}));
 		expect(rows).toHaveLength(23);
+		const seeded = readFileSync(
+			new URL('../db/migrations/0022_customer_credit_guards.sql', import.meta.url),
+			'utf8'
+		);
+		expect(seeded).toContain("'1100', 'Accounts Receivable', 'asset'");
+		rows.push({ code: '1100', name: 'Accounts Receivable', type: 'asset' });
 		const byCode = (a: { code: string }, b: { code: string }) => a.code.localeCompare(b.code);
 		expect([...rows].sort(byCode)).toEqual(
 			[...CHART].sort(byCode).map((r) => ({ code: r.code, name: r.name, type: r.type }))

@@ -1,8 +1,11 @@
-// Spec 23 verbatim. Never add, rename or renumber an account here — a code the
-// spec does not define is an open decision to surface, not a gap to fill
-// (CLAUDE.md, Domain glossary).
+// Spec 23 verbatim, PLUS ONE: 1100 Accounts Receivable, added by the user's
+// decision of 2026-11-12 (tasks/customer-credit — money a registered customer
+// owes for a bill charged to their account; spec 31 lists Accounts Receivable
+// under "Later", and the user chose to build it). Never add, rename or renumber
+// any other account here — a code the spec does not define is an open decision
+// to surface, not a gap to fill (CLAUDE.md, Domain glossary).
 //
-// Every restaurant gets all 23 accounts (Assumption 5 of tasks/pos-sales,
+// Every restaurant gets all 24 accounts (Assumption 5 of tasks/pos-sales,
 // recorded in CLAUDE.md by T-02 on 2026-09-28), deviating from spec 23's
 // "Only the payment methods the restaurant accepts are created" — turning a
 // tender on later must not need a migration or a seed step.
@@ -35,6 +38,9 @@ export const CHART: readonly ChartRow[] = Object.freeze([
 	{ code: '1010', name: 'Bank', type: 'asset' },
 	{ code: '1020', name: 'Payment Clearing – Card', type: 'asset' },
 	{ code: '1030', name: 'Payment Clearing – Mobile Money', type: 'asset' },
+	// Not spec 23: tasks/customer-credit, 2026-11-12. Migration 0022 seeded it
+	// for restaurants that existed before this row.
+	{ code: '1100', name: 'Accounts Receivable', type: 'asset' },
 	{ code: '1200', name: 'Inventory', type: 'asset' },
 	{ code: '2000', name: 'Accounts Payable', type: 'liability' },
 	{ code: '2100', name: 'Tax Payable', type: 'liability' },
@@ -56,7 +62,7 @@ export const CHART: readonly ChartRow[] = Object.freeze([
 	{ code: '6900', name: 'Other Expenses', type: 'expense' }
 ]);
 
-/** Idempotently seed spec 23's 23 accounts for a restaurant. Called by the
+/** Idempotently seed the 24 accounts (spec 23's 23 plus 1100) for a restaurant. Called by the
  * restaurantInitializers list for new restaurants; migration 0012 (T-09)
  * backfilled the same rows for restaurants that existed before this ran. */
 export async function ensureChart(tx: DbTx, restaurantId: string): Promise<void> {
