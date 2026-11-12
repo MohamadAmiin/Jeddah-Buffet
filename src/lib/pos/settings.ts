@@ -79,7 +79,9 @@ const LEGACY_RECEIPT_FOOTER_SETTING = 'receiptFooter';
 export type CachedPaymentMethod = {
 	id: string;
 	name: string;
-	kind: 'cash' | 'card' | 'mobile';
+	/** `credit` is the built-in Customer credit row (tasks/customer-credit): the
+	 * server sends it only while the owner has it switched on. */
+	kind: PaymentMethod;
 	merchantNumber: string | null;
 };
 

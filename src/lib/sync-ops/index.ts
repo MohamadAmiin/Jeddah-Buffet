@@ -25,7 +25,10 @@ export const OP_KINDS = [
 	'session.close',
 	'sale.complete',
 	'sale.abandoned',
-	'pin.login'
+	'pin.login',
+	// tasks/customer-credit: a customer pays (part of) what they owe, at the
+	// till, online. A REQUEST, not a fact: the server may answer 403 or 422.
+	'customer.payment'
 ] as const;
 export type OpKind = (typeof OP_KINDS)[number];
 
@@ -39,11 +42,18 @@ export type OrderType = (typeof ORDER_TYPES)[number];
 /** Tender KINDS (CLAUDE.md decision (b); settings-tax-payments-receipt
  * decision 2). A payment method the owner names (`payment_methods`) has
  * exactly one kind, fixed at creation; `cash` belongs to the built-in Cash row
- * only. The database CHECKs `payments_method_valid` and
- * `payment_methods_kind_valid` spell the same three literals. Append only: a
- * queued sale carries these strings. */
-export const PAYMENT_METHODS = ['cash', 'card', 'mobile'] as const;
+ * only. `credit` (tasks/customer-credit, 2026-11-12) belongs to the built-in
+ * Customer credit row only: the bill is charged to a registered customer's
+ * account (1100 Accounts Receivable) and no money changes hands. The database
+ * CHECKs `payments_method_valid` and `payment_methods_kind_valid` spell the
+ * same four literals. Append only: a queued sale carries these strings. */
+export const PAYMENT_METHODS = ['cash', 'card', 'mobile', 'credit'] as const;
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
+
+/** What a customer may pay a debt WITH — never `credit`. The database CHECK
+ * `customer_payments_method_valid` spells the same three literals. */
+export const CUSTOMER_PAYMENT_METHODS = ['cash', 'card', 'mobile'] as const;
+export type CustomerPaymentMethod = (typeof CUSTOMER_PAYMENT_METHODS)[number];
 
 /** Order lifecycle: `open`, `billed`, `paid`, `voided`, `refunded`. */
 export const ORDER_STATUSES = ['open', 'billed', 'paid', 'voided', 'refunded'] as const;
@@ -71,7 +81,12 @@ export const SOFT_FLAGS = [
 	'totals_mismatch',
 	'stale_menu_price',
 	'session_closed',
-	'clock_ahead'
+	'clock_ahead',
+	// tasks/customer-credit: a credit charge is a recorded fact (invariant 5 as
+	// amended 2026-11-12) — these three flag it for the owner, never reject it.
+	'credit_limit_exceeded',
+	'customer_archived',
+	'credit_not_enabled'
 ] as const;
 export type SoftFlag = (typeof SOFT_FLAGS)[number];
 
@@ -180,6 +195,14 @@ export type SalePayment = {
 	/** OPTIONAL: the method's name as the till showed it ("EVC Plus"), 1–40
 	 * characters, no control characters. */
 	paymentMethodName?: string | null;
+	/** OPTIONAL (tasks/customer-credit), the `note` precedent: the registered
+	 * customer a `credit` payment is charged to. Sent ONLY when `method` is
+	 * `credit`; a till queued before customer credit omits the key, and the
+	 * server ignores it on every other method. */
+	customerId?: string | null;
+	/** OPTIONAL: the customer's name as the till showed and printed it, cleaned
+	 * by cleanCustomerName. The server cleans it again and never refuses it. */
+	customerName?: string | null;
 	// decimal string
 	amountMinor: string;
 	// decimal string | null
@@ -244,6 +267,27 @@ export type SaleAbandonedPayload = {
 	reason: 'rejected' | 'cancelled';
 };
 
+/** A customer pays (part of) their balance at the till (tasks/customer-credit).
+ * `method` is cash, card or mobile — never credit; `tenderedMinor` and
+ * `changeMinor` are meaningful for cash only, as on a sale's payment. */
+export type CustomerPaymentPayload = {
+	/** Device-generated; the server stores the payment under this id. */
+	paymentId: string;
+	customerId: string;
+	posSessionId: string;
+	method: CustomerPaymentMethod;
+	paymentMethodId: string | null;
+	paymentMethodName: string | null;
+	// decimal string
+	amountMinor: string;
+	// decimal string | null
+	tenderedMinor: string | null;
+	// decimal string | null
+	changeMinor: string | null;
+	/** Device time of the tap, ISO 8601. */
+	receivedAt: string;
+};
+
 /** A PIN-login outcome recorded from the till. The employee is the envelope's
  * `employeeId`; a failed login carries the same envelope. */
 export type PinLoginPayload = { outcome: 'success' | 'failed' };
@@ -262,6 +306,12 @@ export type SyncResult = {
 	expectedCashMinor?: string;
 	// decimal string
 	differenceMinor?: string;
+	/** `customer.payment` only: what the customer still owes after this payment,
+	 * as stored with it — the same on the first answer and on every replay. */
+	// decimal string
+	balanceAfterMinor?: string;
+	/** A rejected request's reason in one word (`exceeds_balance`, …). */
+	detail?: string;
 };
 
 const DEVICE_CODE_PATTERN = /^[A-Z0-9]{1,8}$/;
@@ -328,4 +378,28 @@ export function cleanTaxOverrideReason(raw: string): string {
 	const points = [...cleaned];
 	if (points.length <= TAX_OVERRIDE_REASON_MAX) return cleaned;
 	return points.slice(0, TAX_OVERRIDE_REASON_MAX).join('').trim();
+}
+
+/** A customer's name, in code points — the bound of `customers.name` and of
+ * `payments.customer_name`. */
+export const CUSTOMER_NAME_MAX = 80;
+
+/**
+ * THE cleaner of a customer's name (tasks/customer-credit), shared by the till,
+ * the dashboard's writer and the sync validator, under the same rule as
+ * cleanTaxOverrideReason: control, format and line-separator characters become
+ * spaces, whitespace runs collapse, the ends are trimmed, and anything past
+ * CUSTOMER_NAME_MAX code points is cut on a code-point boundary. It never
+ * throws and may return ''. The server never refuses a credit sale for its
+ * customer name — a name the till printed must not turn a completed sale
+ * unrecorded (invariant 5).
+ */
+export function cleanCustomerName(raw: string): string {
+	const cleaned = raw
+		.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ')
+		.replace(/\s+/g, ' ')
+		.trim();
+	const points = [...cleaned];
+	if (points.length <= CUSTOMER_NAME_MAX) return cleaned;
+	return points.slice(0, CUSTOMER_NAME_MAX).join('').trim();
 }
