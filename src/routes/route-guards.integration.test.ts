@@ -38,6 +38,7 @@ const DASHBOARD_ROUTE_IDS = [
 	'/(dashboard)/reports/flagged',
 	'/(dashboard)/reports/tax-overrides',
 	// tasks/customer-credit
+	'/(dashboard)/reports/credit',
 	'/(dashboard)/customers',
 	'/(dashboard)/customers/new',
 	'/(dashboard)/customers/[id]'

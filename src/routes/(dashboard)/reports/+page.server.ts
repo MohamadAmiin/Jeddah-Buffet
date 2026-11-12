@@ -108,7 +108,26 @@ export const load: ServerLoad = async (event) => {
 			netSales: standalone(report.totals.netSales),
 			tax: standalone(report.totals.tax),
 			takings: standalone(report.totals.takings),
+			// tasks/customer-credit: sold, not received. netSales + tax = takings + this.
+			soldOnCredit: standalone(report.totals.soldOnCredit),
 			orderCount: report.totals.orderCount
+		},
+		// Whether to show anything about customer credit on this date: a restaurant
+		// that never uses it sees the report it always saw.
+		usesCredit: report.totals.soldOnCredit !== 0n || report.customerPayments.rows.length > 0,
+		// What customers paid towards their balances — NEVER part of takings. A
+		// reversal dated this day shows as a negative net.
+		customerPayments: {
+			rows: report.customerPayments.rows.map((r) => ({
+				key: r.paymentMethodId,
+				label: r.name,
+				count: r.count,
+				received: column(r.received),
+				reversed: column(r.reversed),
+				net: column(r.net),
+				negative: r.net < 0n
+			})),
+			net: standalone(report.customerPayments.net)
 		},
 		byTender: report.byTender.map((r) => ({
 			method: r.method,
@@ -164,6 +183,10 @@ export const load: ServerLoad = async (event) => {
 					: { text: standalone(s.difference), negative: s.difference < 0n }
 		})),
 		flagged: report.flagged,
-		isEmpty: report.totals.orderCount === 0 && report.sessions.length === 0
+		// A day holding only customer payments (or a reversal) is not empty.
+		isEmpty:
+			report.totals.orderCount === 0 &&
+			report.sessions.length === 0 &&
+			report.customerPayments.rows.length === 0
 	};
 };
