@@ -23,6 +23,7 @@ import { DEVICE_COOKIE, registerDevice, revokeDevice } from '$lib/server/auth/po
 import { POST as pinPost } from './pin/+server';
 import { GET as employeesGet } from './employees/+server';
 import { GET as receiptLogoGet } from './receipt-logo/+server';
+import { GET as customersGet } from './customers/+server';
 import { POST as registerPost } from './register/+server';
 import { GET as menuVersionGet } from '../menu/version/+server';
 import { GET as menuGet } from '../menu/+server';
@@ -178,6 +179,13 @@ const DEVICE_GUARDED = [
 		method: 'GET',
 		body: () => undefined,
 		handler: receiptLogoGet
+	},
+	// tasks/customer-credit T-13: names, phones and balances — a read is guarded too.
+	{
+		routeId: '/api/pos/customers',
+		method: 'GET',
+		body: () => undefined,
+		handler: customersGet
 	},
 	{
 		routeId: '/api/menu/version',

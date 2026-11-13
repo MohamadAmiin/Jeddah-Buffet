@@ -18,6 +18,7 @@ import { posSessions } from './pos-sessions';
 import { menuItems, modifiers } from './menu';
 import { taxRates } from './tax-rates';
 import { paymentMethods } from './payment-methods';
+import { customers } from './customers';
 
 // SPEC 13: order and item statuses.
 //   orders.status  ∈ ('open','billed','paid','voided','refunded')
@@ -291,6 +292,12 @@ export const payments = pgTable(
 		// Cash only: what the customer handed over and what went back. Null for card/mobile.
 		tenderedMinor: bigint('tendered_minor', { mode: 'bigint' }),
 		changeMinor: bigint('change_minor', { mode: 'bigint' }),
+		// A `credit` payment only (tasks/customer-credit): the registered customer the
+		// bill was charged to, and their name AT THE TIME OF SALE. NULL on every other
+		// payment and never backfilled (this table is append-only). What a customer
+		// owes is the sum of these rows minus their unreversed customer_payments.
+		customerId: uuid('customer_id'),
+		customerName: text('customer_name'),
 		paidAt: timestamp('paid_at', { withTimezone: true }).notNull(),
 		receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
 		createdAt: createdAt()
@@ -317,7 +324,25 @@ export const payments = pgTable(
 			'payments_payment_method_name_length',
 			sql`${t.paymentMethodName} is null or char_length(${t.paymentMethodName}) between 1 and 40`
 		),
-		check('payments_method_valid', sql`${t.method} in ('cash', 'card', 'mobile')`),
+		foreignKey({
+			columns: [t.restaurantId, t.customerId],
+			foreignColumns: [customers.restaurantId, customers.id],
+			name: 'payments_customer_fk'
+		}).onDelete('restrict'),
+		// The balance read. Partial: no write cost on cash, card or mobile sales.
+		index('payments_customer_idx')
+			.on(t.restaurantId, t.customerId)
+			.where(sql`${t.customerId} is not null`),
+		// Credit names a customer; nothing else may.
+		check(
+			'payments_credit_customer',
+			sql`(${t.method} = 'credit') = (${t.customerId} is not null) and (${t.customerId} is null) = (${t.customerName} is null)`
+		),
+		check(
+			'payments_customer_name_length',
+			sql`${t.customerName} is null or char_length(${t.customerName}) between 1 and 80`
+		),
+		check('payments_method_valid', sql`${t.method} in ('cash', 'card', 'mobile', 'credit')`),
 		check('payments_amount_minor_non_negative', sql`${t.amountMinor} >= 0`),
 		check(
 			'payments_cash_fields',

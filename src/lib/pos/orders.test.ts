@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import type { SaleCompletePayload } from '../sync-ops';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ROUNDING_RULE, minor } from '../money';
 import { computeOrderTotals, serializeTotals } from '../money/order-totals';
@@ -203,6 +204,111 @@ describe('completeSale', () => {
 			deviceId: 'device-A',
 			invoiceSeq: 1,
 			queueSeq: 1
+		});
+	});
+
+	// tasks/customer-credit T-17: a bill charged to a registered customer.
+	describe('a credit sale', () => {
+		const base = {
+			employeeId: 'emp-1',
+			deviceId: 'device-A',
+			deviceCode: 'POS1',
+			posSessionId: 'ses-1',
+			taxMode: 'exclusive' as const,
+			currencyCode: 'USD',
+			menuVersion: 1,
+			now: NOW,
+			cashierName: 'Sam',
+			businessDate: '2026-09-28'
+		};
+		const credit = (customer: { id: string; name: string } | null) => ({
+			method: 'credit' as const,
+			tenderedMinor: null,
+			paymentMethodId: 'pm-credit',
+			paymentMethodName: 'Customer credit',
+			customer
+		});
+
+		it('is complete on the device: ONE queued op carrying the customer, one invoice number, no cash fields', async () => {
+			const cart = await buildCart();
+			const result = await completeSale({
+				...base,
+				cart,
+				payment: credit({ id: 'cust-1', name: '  Ali \n Hassan ' })
+			});
+
+			expect(result.invoiceNumber).toBe('POS1-000001');
+			expect(result.changeMinor).toBeNull();
+			const queue = await readQueue();
+			expect(queue).toHaveLength(1);
+			expect(queue[0].kind).toBe('sale.complete');
+			const payment = (queue[0].envelope.payload as SaleCompletePayload).payments[0];
+			expect(payment).toMatchObject({
+				method: 'credit',
+				paymentMethodId: 'pm-credit',
+				paymentMethodName: 'Customer credit',
+				// The name the receipt prints, cleaned by the shared cleaner.
+				customerId: 'cust-1',
+				customerName: 'Ali Hassan',
+				tenderedMinor: null,
+				changeMinor: null
+			});
+			expect(payment.amountMinor).toBe(
+				(queue[0].envelope.payload as SaleCompletePayload).totals.totalMinor
+			);
+			expect(await readSequence('device-A')).toEqual({
+				deviceId: 'device-A',
+				invoiceSeq: 1,
+				queueSeq: 1
+			});
+			// The snapshot every receipt prints from holds the same payment.
+			const order = await readOrder(cart.orderId);
+			expect(order?.state).toBe('completed');
+			expect(order?.sale?.payload.payments[0]).toEqual(payment);
+		});
+
+		it('needs a customer: refused BEFORE the transaction, nothing queued, no invoice number burned', async () => {
+			const cart = await buildCart();
+			const before = await readSequence('device-A');
+			for (const customer of [null, { id: '', name: 'Ali' }, { id: 'cust-1', name: ' \n ' }]) {
+				await expect(completeSale({ ...base, cart, payment: credit(customer) })).rejects.toThrow(
+					'Choose the customer'
+				);
+			}
+			expect(await readQueue()).toHaveLength(0);
+			expect(await readSequence('device-A')).toEqual(before);
+		});
+
+		it('a cash, card or mobile payment may never name a customer, and its payload has no customer keys', async () => {
+			const cart = await buildCart();
+			await expect(
+				completeSale({
+					...base,
+					cart,
+					payment: {
+						method: 'cash',
+						tenderedMinor: 5000n,
+						paymentMethodId: null,
+						paymentMethodName: null,
+						customer: { id: 'cust-1', name: 'Ali' }
+					}
+				})
+			).rejects.toThrow('only a credit payment names a customer');
+			expect(await readQueue()).toHaveLength(0);
+
+			await completeSale({
+				...base,
+				cart,
+				payment: {
+					method: 'cash',
+					tenderedMinor: 5000n,
+					paymentMethodId: null,
+					paymentMethodName: null
+				}
+			});
+			const payment = ((await readQueue())[0].envelope.payload as SaleCompletePayload).payments[0];
+			expect(payment).not.toHaveProperty('customerId');
+			expect(payment).not.toHaveProperty('customerName');
 		});
 	});
 

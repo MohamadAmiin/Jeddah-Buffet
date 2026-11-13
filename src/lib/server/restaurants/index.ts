@@ -11,7 +11,7 @@ import { TAX_MODES, type TaxMode } from '../../money/tax';
 import { SUPPORTED_CURRENCIES } from '../../money/format';
 import { DEFAULT_ROLES } from '../permissions/keys';
 import { isValidTimeZone, canonicalTimeZone } from './time-zone';
-import { ensureCashMethod } from './payment-methods';
+import { ensureCashMethod, ensureCreditMethod } from './payment-methods';
 import { RECEIPT_SHOW_COLUMNS, RECEIPT_SHOW_SELECTION, receiptShowFrom } from './receipt';
 import { RECEIPT_SHOW_KEYS, type ReceiptShow } from '../../receipt-layout';
 
@@ -566,6 +566,13 @@ export const restaurantInitializers: Array<
 	// /settings/payments. Idempotent; migration 0017 seeded existing restaurants.
 	async function seedCashMethod(tx, restaurantId) {
 		await ensureCashMethod(tx, restaurantId);
+	},
+	// The built-in Customer credit method (tasks/customer-credit, decided
+	// 2026-11-12), seeded DISABLED: the owner switches it on at /settings/payments.
+	// After seedChartOfAccounts, which gave the restaurant 1100 Accounts Receivable.
+	// Idempotent; migration 0022 seeded existing restaurants.
+	async function seedCreditMethod(tx, restaurantId) {
+		await ensureCreditMethod(tx, restaurantId);
 	}
 ];
 

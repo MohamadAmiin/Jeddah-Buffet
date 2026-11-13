@@ -6,7 +6,7 @@
 // (invariant 10); a method of another restaurant is never reachable
 // (invariant 8).
 import { afterAll, describe, expect, it } from 'vitest';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, ne, sql } from 'drizzle-orm';
 import type { RequestEvent, ServerLoadEvent } from '@sveltejs/kit';
 import { testDb, closeTestDb } from '$lib/server/db/test/db';
 import { restaurants } from '$lib/server/db/schema/restaurants';
@@ -184,6 +184,7 @@ type LoadData = {
 		last: boolean;
 	}>;
 	archived: Array<{ id: string; name: string; kindLabel: string }>;
+	credit: { name: string; enabled: boolean };
 };
 
 async function loadData(user: Principal): Promise<LoadData> {
@@ -192,23 +193,27 @@ async function loadData(user: Principal): Promise<LoadData> {
 
 /** Every method of the restaurant, live and archived: Cash first, then sort order, then name. */
 async function methodRows(restaurantId: string) {
-	return db
-		.select({
-			id: paymentMethods.id,
-			name: paymentMethods.name,
-			kind: paymentMethods.kind,
-			merchantNumber: paymentMethods.merchantNumber,
-			enabled: paymentMethods.enabled,
-			sortOrder: paymentMethods.sortOrder,
-			archivedAt: paymentMethods.archivedAt
-		})
-		.from(paymentMethods)
-		.where(eq(paymentMethods.restaurantId, restaurantId))
-		.orderBy(
-			sql`${paymentMethods.kind} = 'cash' desc`,
-			asc(paymentMethods.sortOrder),
-			asc(paymentMethods.name)
-		);
+	return (
+		db
+			.select({
+				id: paymentMethods.id,
+				name: paymentMethods.name,
+				kind: paymentMethods.kind,
+				merchantNumber: paymentMethods.merchantNumber,
+				enabled: paymentMethods.enabled,
+				sortOrder: paymentMethods.sortOrder,
+				archivedAt: paymentMethods.archivedAt
+			})
+			.from(paymentMethods)
+			// Cash and the owner's methods; the built-in Customer credit row
+			// (tasks/customer-credit) has its own switch and its own cases.
+			.where(and(eq(paymentMethods.restaurantId, restaurantId), ne(paymentMethods.kind, 'credit')))
+			.orderBy(
+				sql`${paymentMethods.kind} = 'cash' desc`,
+				asc(paymentMethods.sortOrder),
+				asc(paymentMethods.name)
+			)
+	);
 }
 
 async function eventCount(restaurantId: string, event: string): Promise<number> {
@@ -326,7 +331,7 @@ describe('payment methods settings page', () => {
 		// The load's shape: the Cash row, the live owner methods with their place
 		// in the list, and the archived ones.
 		const data = await loadData(owner);
-		expect(Object.keys(data).sort()).toEqual(['archived', 'cash', 'methods']);
+		expect(Object.keys(data).sort()).toEqual(['archived', 'cash', 'credit', 'methods']);
 		expect(data.cash).toEqual({ id: rows[0].id, name: 'Cash' });
 		expect(data.methods).toEqual([
 			{
@@ -726,4 +731,50 @@ describe('payment methods settings page', () => {
 		expect(await methodRows(a.restaurantId)).toMatchObject([CASH_ROW]);
 		expect((await loadData(a.owner)).methods).toEqual([]);
 	});
+});
+
+describe('the Customer credit switch (customer-credit T-22)', () => {
+	const creditRows = (restaurantId: string) =>
+		db
+			.select()
+			.from(paymentMethods)
+			.where(and(eq(paymentMethods.restaurantId, restaurantId), eq(paymentMethods.kind, 'credit')));
+
+	it('is off for a new restaurant, is never one of the editable methods, and the owner switches it on and off', async () => {
+		const { restaurantId, owner } = await owned('Cafe Credit');
+
+		const before = await loadData(owner);
+		expect(before.credit).toEqual({ name: 'Customer credit', enabled: false });
+		expect(before.methods).toEqual([]);
+
+		const on = await action('setCredit', makeEvent(owner, [['enabled', 'yes']]));
+		expect((on as { message?: string }).message).toBe(
+			'Customer credit is on. Tills offer it after their next sign-in.'
+		);
+		expect((await loadData(owner)).credit.enabled).toBe(true);
+		expect((await creditRows(restaurantId))[0].enabled).toBe(true);
+		// Still not an editable method.
+		expect((await loadData(owner)).methods).toEqual([]);
+
+		const same = await action('setCredit', makeEvent(owner, [['enabled', 'yes']]));
+		expect((same as { message?: string }).message).toBe('No changes to save.');
+
+		const off = await action('setCredit', makeEvent(owner, [['enabled', 'no']]));
+		expect((off as { message?: string }).message).toBe(
+			'Customer credit is off. Customers can still pay what they owe.'
+		);
+		expect((await loadData(owner)).credit.enabled).toBe(false);
+		expect(await eventCount(restaurantId, 'payment_method.credit_switched')).toBe(2);
+	});
+
+	it('refuses anything but yes or no, changing nothing', async () => {
+		const { restaurantId, owner } = await owned('Cafe Credit 2');
+		const result = await action('setCredit', makeEvent(owner, [['enabled', 'maybe']]));
+		expect(statusCodeOf(result)).toBe(400);
+		expect((await creditRows(restaurantId))[0].enabled).toBe(false);
+		expect(await eventCount(restaurantId, 'payment_method.credit_switched')).toBe(0);
+	});
+
+	// A forged restaurantId is covered for this action, like every settings action,
+	// by the table in ../settings-security.integration.test.ts.
 });

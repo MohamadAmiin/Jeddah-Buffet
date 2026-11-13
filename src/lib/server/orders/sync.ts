@@ -11,6 +11,7 @@ import { z } from 'zod';
 import type { Db } from '../db/client';
 import type { PosDeviceContext } from '../auth/pos-context';
 import {
+	CUSTOMER_PAYMENT_METHODS,
 	OP_KINDS,
 	formatInvoiceNumber,
 	type OpEnvelope,
@@ -30,6 +31,7 @@ import {
 } from '../pos-sessions';
 import { validateSale, type HardFlag, type SoftFlag, type SyncContext } from './validate';
 import { recordSale } from './pay';
+import { receiveCustomerPayment, storedBalanceAfter } from '../customers/payments';
 import { posSyncOps } from '../db/schema/pos-sync';
 import { posDevices } from '../db/schema/pos-devices';
 import { posSessions } from '../db/schema/pos-sessions';
@@ -41,7 +43,10 @@ export const _SessionContextIsSyncContext: SessionContext = {} as SyncContext;
 
 export type HandleResult =
 	| { http: 200; body: SyncResult & { alreadyClosed?: true } }
-	| { http: 400 | 403 | 409 | 422; body: { error: string; flag?: string; count?: number } };
+	| {
+			http: 400 | 403 | 409 | 422;
+			body: { error: string; flag?: string; count?: number; detail?: string };
+	  };
 
 export class HardFailure extends Error {
 	constructor(
@@ -76,6 +81,21 @@ const saleAbandonedSchema = z.object({
 	reason: z.enum(['rejected', 'cancelled'])
 });
 const pinLoginSchema = z.object({ outcome: z.enum(['success', 'failed']) });
+// tasks/customer-credit T-12. The method list is CUSTOMER_PAYMENT_METHODS: a
+// debt is never paid with credit. The method's name is not shape-checked: the
+// module stores the row's own name when the till's is not storable.
+const customerPaymentSchema = z.object({
+	paymentId: z.string().uuid(),
+	customerId: z.string().uuid(),
+	posSessionId: z.string().uuid(),
+	method: z.enum(CUSTOMER_PAYMENT_METHODS),
+	paymentMethodId: z.string().uuid().nullable(),
+	paymentMethodName: z.string().max(200).nullable(),
+	amountMinor: z.string().regex(CASH_STRING),
+	tenderedMinor: z.string().regex(CASH_STRING).nullable(),
+	changeMinor: z.string().regex(CASH_STRING).nullable(),
+	receivedAt: z.string().datetime({ offset: true })
+});
 
 function parseOrHard<T extends z.ZodTypeAny>(schema: T, payload: unknown): z.infer<T> {
 	const parsed = schema.safeParse(payload);
@@ -86,11 +106,18 @@ function parseOrHard<T extends z.ZodTypeAny>(schema: T, payload: unknown): z.inf
 	return parsed.data as z.infer<T>;
 }
 
-function peekMethod(payload: unknown): 'cash' | 'card' | 'mobile' | null {
+function peekMethod(payload: unknown): 'cash' | 'card' | 'mobile' | 'credit' | null {
 	const p = payload as { payments?: unknown[] } | null;
 	if (!p || !Array.isArray(p.payments) || p.payments.length === 0) return null;
 	const first = p.payments[0] as { method?: unknown };
-	if (first.method === 'cash' || first.method === 'card' || first.method === 'mobile') {
+	if (
+		first.method === 'cash' ||
+		first.method === 'card' ||
+		first.method === 'mobile' ||
+		// tasks/customer-credit: a credit charge is a FACT, like cash — recorded,
+		// flagged or stored unrecorded, never answered 403 or 422 (isRequestClass).
+		first.method === 'credit'
+	) {
 		return first.method;
 	}
 	return null;
@@ -128,6 +155,10 @@ function pgError(thrown: unknown): { code?: string; constraint?: string; message
 
 function isRequestClass(envelope: OpEnvelope<OpKind, unknown>): boolean {
 	if (envelope.kind === 'session.close') return true;
+	// tasks/customer-credit: receiving a customer's payment is a REQUEST — the
+	// server knows the balance, the till does not. It answers 403 or 422 and
+	// stores nothing; it is never stored unrecorded.
+	if (envelope.kind === 'customer.payment') return true;
 	if (envelope.kind === 'sale.complete') {
 		const method = peekMethod(envelope.payload);
 		return method === 'card' || method === 'mobile';
@@ -147,7 +178,8 @@ async function replayLookup(
 			flag: posSyncOps.flag,
 			error: posSyncOps.error,
 			posSessionId: posSyncOps.posSessionId,
-			kind: posSyncOps.kind
+			kind: posSyncOps.kind,
+			payload: posSyncOps.payload
 		})
 		.from(posSyncOps)
 		.where(
@@ -188,6 +220,17 @@ async function replayLookup(
 				body.expectedCashMinor = sessionRow.expectedCashMinor.toString();
 				body.differenceMinor = sessionRow.differenceMinor.toString();
 			}
+		}
+	}
+	// tasks/customer-credit: a replayed customer payment answers with the balance
+	// STORED with that payment — the same number the first answer carried, however
+	// many charges and payments have happened since. The receipt prints from it.
+	if (row.kind === 'customer.payment') {
+		const paymentId = (row.payload as { payload?: { paymentId?: unknown } } | null)?.payload
+			?.paymentId;
+		if (typeof paymentId === 'string') {
+			const after = await storedBalanceAfter(db, restaurantId, paymentId);
+			if (after !== null) body.balanceAfterMinor = after.toString();
 		}
 	}
 	return { http: 200, body };
@@ -349,7 +392,7 @@ export async function handleOp(
 	// Pre-transaction gate for request-class ops only.
 	if (isRequestClass(envelope)) {
 		const keys =
-			envelope.kind === 'session.close'
+			envelope.kind === 'session.close' || envelope.kind === 'customer.payment'
 				? (['pos.payment'] as const)
 				: (['pos.sell', 'pos.payment'] as const);
 		const check = await checkEmployee(db, ctx.restaurantId, ctx.employeeId, keys);
@@ -594,6 +637,56 @@ export async function handleOp(
 					};
 				}
 
+				// tasks/customer-credit T-12: a customer pays (part of) what they owe.
+				// A refusal throws, so the transaction rolls back and NOTHING is stored
+				// — no op row, no payment, no entry — exactly as for a refused card sale.
+				case 'customer.payment': {
+					const parsed = parseOrHard(customerPaymentSchema, envelope.payload);
+					if (ctx.employeeUserId === null) {
+						throw new HardFailure('invalid_payload', 'employee_unknown');
+					}
+					const received = await receiveCustomerPayment(
+						tx,
+						{
+							restaurantId: ctx.restaurantId,
+							actorUserId: ctx.employeeUserId,
+							deviceId: ctx.opDeviceId,
+							clientOpId: ctx.clientOpId,
+							occurredAt: ctx.occurredAt,
+							ip: ctx.ip,
+							userAgent: ctx.userAgent
+						},
+						{
+							paymentId: parsed.paymentId,
+							customerId: parsed.customerId,
+							posSessionId: parsed.posSessionId,
+							method: parsed.method,
+							paymentMethodId: parsed.paymentMethodId,
+							paymentMethodName: parsed.paymentMethodName,
+							amountMinor: minor(BigInt(parsed.amountMinor)),
+							tenderedMinor:
+								parsed.tenderedMinor === null ? null : minor(BigInt(parsed.tenderedMinor)),
+							changeMinor: parsed.changeMinor === null ? null : minor(BigInt(parsed.changeMinor)),
+							receivedAt: new Date(parsed.receivedAt)
+						}
+					);
+					if (!received.ok) throw new HardFailure('invalid_payload', received.reason);
+					await tx
+						.update(posSyncOps)
+						.set({ status: 'accepted' })
+						.where(eq(posSyncOps.id, opRow.id));
+					return {
+						http: 200,
+						body: {
+							clientOpId: ctx.clientOpId,
+							status: 'accepted',
+							posSessionId: parsed.posSessionId,
+							businessDate: received.businessDate,
+							balanceAfterMinor: received.balanceAfterMinor.toString()
+						}
+					};
+				}
+
 				default: {
 					// OP_KINDS is exhaustive; a wire kind not in it is dropped by the route.
 					void OP_KINDS;
@@ -649,6 +742,19 @@ async function classifyHardFailure(
 	failure: HardFailure
 ): Promise<HandleResult> {
 	if (isRequestClass(envelope)) {
+		// A refused customer payment also says WHY in one word (exceeds_balance,
+		// session_closed, …): the cashier is holding the customer's money and the
+		// till must say what to do with it. Sales and closes keep their two keys.
+		if (envelope.kind === 'customer.payment') {
+			return {
+				http: 422,
+				body: {
+					error: 'rejected',
+					flag: failure.flag,
+					...(failure.flag === 'invalid_payload' ? { detail: failure.detail } : {})
+				}
+			};
+		}
 		return {
 			http: 422,
 			body: { error: 'rejected', flag: failure.flag }

@@ -26,11 +26,16 @@ export const POSTING_EVENTS = [
 	'stock_count_shortfall',
 	'stock_count_surplus',
 	'inventory_revaluation',
-	'opening_stock'
+	'opening_stock',
+	// tasks/customer-credit (T-06): a bill charged to a registered customer, and
+	// what that customer pays back. Neither is a spec 24 row — Accounts
+	// Receivable is the user's decision of 2026-11-12.
+	'credit_sale',
+	'customer_payment_received'
 ] as const;
 export type PostingEvent = (typeof POSTING_EVENTS)[number];
 
-export const SALE_EVENTS = ['cash_sale', 'card_sale', 'mobile_sale'] as const;
+export const SALE_EVENTS = ['cash_sale', 'card_sale', 'mobile_sale', 'credit_sale'] as const;
 export type SaleEvent = (typeof SALE_EVENTS)[number];
 
 /** Exactly ONE of debit / credit is present; the amount is a Minor and may be 0n. */
@@ -48,6 +53,7 @@ const CODE = {
 	BANK: '1010',
 	CLEARING_CARD: '1020',
 	CLEARING_MOBILE: '1030',
+	ACCOUNTS_RECEIVABLE: '1100',
 	INVENTORY: '1200',
 	ACCOUNTS_PAYABLE: '2000',
 	TAX_PAYABLE: '2100',
@@ -72,11 +78,15 @@ const CODE = {
 const TENDER_ACCOUNT: Record<SaleEvent, string> = {
 	cash_sale: CODE.CASH_ON_HAND,
 	card_sale: CODE.CLEARING_CARD,
-	mobile_sale: CODE.CLEARING_MOBILE
+	mobile_sale: CODE.CLEARING_MOBILE,
+	// No money changes hands: the customer owes the total.
+	credit_sale: CODE.ACCOUNTS_RECEIVABLE
 };
 
 /** Spec 24's "Cash sale", "Card / mobile sale" and "Sale with discount" in one
- * function. Balances by construction because
+ * function, plus the credit sale of tasks/customer-credit (Dr 1100 Accounts
+ * Receivable in the tender's place — revenue and tax are recognised at the
+ * sale). Balances by construction because
  * subtotal - discount + tax = total (T-10). */
 export function saleLines(event: SaleEvent, t: SaleTotals): RuleLine[] {
 	if (!(SALE_EVENTS as readonly string[]).includes(event)) {
@@ -132,6 +142,8 @@ export function eventForMethod(method: SalePayment['method']): SaleEvent {
 			return 'card_sale';
 		case 'mobile':
 			return 'mobile_sale';
+		case 'credit':
+			return 'credit_sale';
 		default:
 			throw new RangeError(`unknown payment method: ${String(method)}`);
 	}
@@ -187,6 +199,32 @@ export function supplierPaymentLines(paidFrom: PaidFrom, amount: Minor): RuleLin
 	return [
 		{ code: CODE.ACCOUNTS_PAYABLE, debit: amount },
 		{ code: cashOrBank(paidFrom), credit: amount }
+	];
+}
+
+/** tasks/customer-credit: a customer pays (part of) what they owe —
+ * Dr 1000 Cash on Hand (cash, into the till's drawer), 1020 (card) or 1030
+ * (mobile), by the tender's KIND / Cr 1100 Accounts Receivable. A debt is never
+ * paid with credit. */
+export function customerPaymentLines(
+	method: 'cash' | 'card' | 'mobile',
+	amount: Minor
+): RuleLine[] {
+	nonNegative(amount, 'a customer payment');
+	const debit =
+		method === 'cash'
+			? CODE.CASH_ON_HAND
+			: method === 'card'
+				? CODE.CLEARING_CARD
+				: method === 'mobile'
+					? CODE.CLEARING_MOBILE
+					: null;
+	if (debit === null) {
+		throw new TypeError(`a customer pays by cash, card or mobile, got ${String(method)}`);
+	}
+	return [
+		{ code: debit, debit: amount },
+		{ code: CODE.ACCOUNTS_RECEIVABLE, credit: amount }
 	];
 }
 

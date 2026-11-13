@@ -15,6 +15,7 @@ import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import type { DbTx } from '../db/client';
 import { checkEmployee } from '../permissions/employee';
+import { balanceOf, lockCustomer } from '../customers';
 import { orders as _orders } from '../db/schema/orders';
 import { posSessions } from '../db/schema/pos-sessions';
 import { restaurantSettings } from '../db/schema/restaurant-settings';
@@ -27,6 +28,7 @@ import {
 	HARD_FLAGS,
 	ORDER_TYPES,
 	PAYMENT_METHODS,
+	cleanCustomerName,
 	cleanTaxOverrideReason,
 	formatInvoiceNumber,
 	type OpEnvelope,
@@ -34,7 +36,7 @@ import {
 	type SaleLine
 } from '../../sync-ops';
 import { TAX_MODES, type TaxMode } from '../../money/tax';
-import { minor, type Minor, ROUNDING_RULE } from '../../money';
+import { add, minor, type Minor, ROUNDING_RULE } from '../../money';
 import {
 	allocateLineGross,
 	computeOrderTotals,
@@ -129,11 +131,15 @@ export type ParsedSale = {
 	payment: {
 		paymentId: string;
 		/** The KIND: it alone picks the posting rule and the offline rule. */
-		method: 'cash' | 'card' | 'mobile';
+		method: 'cash' | 'card' | 'mobile' | 'credit';
 		/** WHICH method took it (T-15, Step 7): never null — every payment recorded
 		 * from now on names its method; its kind equals `method`. */
 		paymentMethodId: string;
 		paymentMethodName: string;
+		/** A `credit` payment only (tasks/customer-credit): the registered customer
+		 * the bill is charged to, with the name the till printed (cleaned). Null on
+		 * every other method, whatever the payload carried. */
+		customer: { id: string; name: string } | null;
 		amountMinor: Minor;
 		tenderedMinor: Minor | null;
 		changeMinor: Minor | null;
@@ -145,6 +151,10 @@ export type ParsedSale = {
 		status: 'open' | 'closed';
 	};
 };
+
+/** Shape-checked before any SQL, so a malformed id never raises 22P02 into the
+ * caller's transaction. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type ValidateResult =
 	| { ok: true; sale: ParsedSale; softFlags: SoftFlag[] }
@@ -217,6 +227,12 @@ const paymentSchema = z
 		paymentMethodId: z.string().uuid().nullable().optional(),
 		// OPTIONAL, the `note` precedent: a pre-plan till omits it (invariant 5).
 		paymentMethodName: snapshotName.nullable().optional(),
+		// OPTIONAL (tasks/customer-credit), the `note` precedent. Deliberately NOT
+		// shape-checked here: they are read ONLY when the method is `credit` (Step
+		// 7c), so a stray or malformed value on a cash, card or mobile sale can never
+		// turn that sale unrecorded, and a customer's name is cleaned, never refused.
+		customerId: z.unknown().optional(),
+		customerName: z.unknown().optional(),
 		amountMinor: nonNegativeMinor,
 		tenderedMinor: minorString.nullable(),
 		changeMinor: minorString.nullable()
@@ -521,9 +537,26 @@ export async function validateSale(
 	// lookup BY ID filters on neither archived_at nor enabled: a cash sale is a
 	// fact (spec 6) and the Cash row can be neither (payment_methods_cash_rules).
 	const wirePayment = payload.payments[0];
-	const method = wirePayment.method as 'cash' | 'card' | 'mobile';
+	const method = wirePayment.method as 'cash' | 'card' | 'mobile' | 'credit';
 	let methodRow: MethodRow | undefined;
-	if (wirePayment.paymentMethodId != null) {
+	if (method === 'credit') {
+		// tasks/customer-credit: the restaurant's ONE built-in credit row
+		// (payment_methods_one_credit), whatever id the till sent — resolved, like
+		// Cash, with no enabled filter: an offline credit charge is a recorded fact
+		// (invariant 5 as amended 2026-11-12). A row the owner has switched OFF is a
+		// SOFT flag, never a refusal.
+		[methodRow] = await tx
+			.select(METHOD_COLS)
+			.from(paymentMethods)
+			.where(
+				and(eq(paymentMethods.restaurantId, ctx.restaurantId), eq(paymentMethods.kind, 'credit'))
+			)
+			.limit(1);
+		// Unreachable in practice: 0022 and seedCreditMethod give every restaurant
+		// the row. HARD, so the sale is stored `unrecorded`, never dropped.
+		if (!methodRow) return { ok: false, hard: 'invalid_payload', detail: 'credit_method_missing' };
+		if (!methodRow.enabled) pushOnce(softFlags, 'credit_not_enabled');
+	} else if (wirePayment.paymentMethodId != null) {
 		[methodRow] = await tx
 			.select(METHOD_COLS)
 			.from(paymentMethods)
@@ -572,6 +605,42 @@ export async function validateSale(
 	}
 	// The till's name wins (it is what the receipt printed); the row's otherwise.
 	const paymentMethodName = wirePayment.paymentMethodName ?? methodRow.name;
+
+	// Step 7c — the customer a `credit` bill is charged to (tasks/customer-credit).
+	// Read ONLY for credit; on any other method the two keys are ignored.
+	//
+	// THE LOOKUP IS THE LOCK: lockCustomer is `select … for update`, taken BEFORE
+	// the archived and limit checks it protects, so two sales charging one
+	// customer are checked one after the other (the second sees the first's
+	// charge). validateSale still writes nothing. Lock order: customer, then the
+	// order insert's key-share on the shift — which never waits on the FOR SHARE
+	// a customer payment holds.
+	//
+	// An id that is not a customer of THIS restaurant is HARD: the op is stored
+	// unrecorded for the owner, never discarded. Everything else is SOFT — the
+	// food has left the building.
+	let customer: { id: string; name: string } | null = null;
+	if (method === 'credit') {
+		const customerId = wirePayment.customerId;
+		if (typeof customerId !== 'string' || !UUID.test(customerId)) {
+			return { ok: false, hard: 'invalid_payload', detail: 'unknown_customer' };
+		}
+		const row = await lockCustomer(tx, ctx.restaurantId, customerId);
+		if (!row) return { ok: false, hard: 'invalid_payload', detail: 'unknown_customer' };
+		if (row.archivedAt !== null) pushOnce(softFlags, 'customer_archived');
+		if (row.creditLimitMinor !== null) {
+			const owed = await balanceOf(tx, ctx.restaurantId, customerId);
+			if (add(owed, minor(payload.totals.totalMinor)) > row.creditLimitMinor) {
+				pushOnce(softFlags, 'credit_limit_exceeded');
+			}
+		}
+		// The name the till printed, cleaned; the row's when the till sent none.
+		const printed =
+			typeof wirePayment.customerName === 'string'
+				? cleanCustomerName(wirePayment.customerName)
+				: '';
+		customer = { id: row.id, name: printed === '' ? row.name : printed };
+	}
 
 	// Step 7b — the named rate each line says it was taxed under. HARD whatever
 	// the menu version, so before Step 8: an id that is not a rate of THIS
@@ -823,6 +892,7 @@ export async function validateSale(
 			method,
 			paymentMethodId: methodRow.id,
 			paymentMethodName,
+			customer,
 			amountMinor: minor(payment.amountMinor),
 			tenderedMinor: payment.tenderedMinor === null ? null : minor(payment.tenderedMinor),
 			changeMinor: payment.changeMinor === null ? null : minor(payment.changeMinor)

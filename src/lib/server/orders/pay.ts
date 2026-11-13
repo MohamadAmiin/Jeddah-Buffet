@@ -126,6 +126,11 @@ export async function recordSale(
 		amountMinor: sale.payment.amountMinor,
 		tenderedMinor: sale.payment.tenderedMinor,
 		changeMinor: sale.payment.changeMinor,
+		// A credit payment names the customer it is charged to; validateSale locked
+		// that customer's row FOR UPDATE in this transaction and holds it to COMMIT.
+		// payments_credit_customer: set exactly when the method is credit.
+		customerId: sale.payment.customer?.id ?? null,
+		customerName: sale.payment.customer?.name ?? null,
 		paidAt: ctx.occurredAt
 	});
 
@@ -256,6 +261,28 @@ export async function recordSale(
 				rateBp: sale.taxOverride.rateBp,
 				reason: sale.taxOverride.reason,
 				taxRemovedMinor: sale.taxOverride.taxRemovedMinor.toString(),
+				totalMinor: sale.totals.totalMinor.toString()
+			},
+			restaurantId: ctx.restaurantId,
+			actorUserId: ctx.employeeUserId,
+			subjectUserId: null,
+			deviceId: ctx.opDeviceId,
+			clientOpId: null,
+			occurredAt: ctx.occurredAt,
+			ip: ctx.ip,
+			userAgent: ctx.userAgent
+		});
+	}
+
+	// tasks/customer-credit: who was charged. clientOpId null, as above.
+	if (sale.payment.customer !== null) {
+		await writeAudit(tx, {
+			event: 'sale.credit_charged',
+			details: {
+				deviceCode: ctx.opDeviceCode,
+				invoiceNumber: sale.invoiceNumber,
+				customerId: sale.payment.customer.id,
+				customerName: sale.payment.customer.name,
 				totalMinor: sale.totals.totalMinor.toString()
 			},
 			restaurantId: ctx.restaurantId,

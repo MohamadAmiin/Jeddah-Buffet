@@ -1,6 +1,6 @@
 # `accounting/` — chart of accounts, posting rules, journal writer
 
-`chart.ts` — `CHART`, spec 23's 23 accounts verbatim as `{ code, name, type }` with `code` a text string; `ensureChart(tx, restaurantId)`, the idempotent per-restaurant seed (`ON CONFLICT (restaurant_id, code) DO NOTHING`) that the restaurant initializer list runs for every new restaurant and migration 0012 backfilled for existing ones; `accountIdByCode(tx, restaurantId, code)`, the only code-to-id lookup, which throws when the code is absent. `posting-rules.ts` (T-13) and `journal.ts` (T-14) follow in the same plan.
+`chart.ts` — `CHART`, spec 23's 23 accounts verbatim plus 1100 Accounts Receivable (tasks/customer-credit, 2026-11-12) as `{ code, name, type }` with `code` a text string; `ensureChart(tx, restaurantId)`, the idempotent per-restaurant seed (`ON CONFLICT (restaurant_id, code) DO NOTHING`) that the restaurant initializer list runs for every new restaurant and migration 0012 backfilled for existing ones; `accountIdByCode(tx, restaurantId, code)`, the only code-to-id lookup, which throws when the code is absent. `posting-rules.ts` (T-13) and `journal.ts` (T-14) follow in the same plan.
 
 - Entries are **generated from business events** by the spec 24 posting-rule
   table. Nobody types a debit.
@@ -16,7 +16,7 @@
 
 ## Files
 
-- `chart.ts` — `CHART` (spec 23's 23 rows), `ensureChart` (idempotent, `ON CONFLICT DO NOTHING`),
+- `chart.ts` — `CHART` (spec 23's 23 rows plus 1100 Accounts Receivable), `ensureChart` (idempotent, `ON CONFLICT DO NOTHING`),
   `accountIdByCode`.
 - `posting-rules.ts` — `saleLines` → `Dr 1000|1020|1030 total / Dr 4100 discount / Cr 4000
 subtotal / Cr 2100 tax`; `cogsLines` → `Dr 5000 / Cr 1200`; `overShortLines` → `Dr 6800 /

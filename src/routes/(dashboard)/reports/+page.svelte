@@ -41,6 +41,8 @@
 		<div class="flex flex-wrap items-end gap-2">
 			<!-- tasks/bill-tax-override T-12: the bills a cashier made tax-exempt. -->
 			<Button href={resolve('/reports/tax-overrides')} variant="ghost">Tax-exempt bills</Button>
+			<!-- tasks/customer-credit T-23: who charged what to whom, and who received what. -->
+			<Button href={resolve('/reports/credit')} variant="ghost">Customer credit</Button>
 			<form method="GET" action={resolve('/reports')}>
 				<input type="hidden" name="date" value={data.prevDate} />
 				<Button type="submit" variant="ghost">
@@ -89,7 +91,9 @@
 			<div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
 				<h3 id="totals-h" class="text-section">Totals</h3>
 				<p class="text-caption text-ink-2">
-					Net sales = gross sales − discounts. Takings = net sales + tax: what customers paid.
+					Net sales = gross sales − discounts. Takings: money received for this day's sales.
+					{#if data.usesCredit}Net sales + tax = takings + sold on credit.{:else}Takings = net sales
+						+ tax.{/if}
 				</p>
 			</div>
 			<dl class="mt-4 grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
@@ -113,6 +117,12 @@
 					<dt class={tileLabel}>Takings</dt>
 					<dd class={tileValue}>{data.totals.takings}</dd>
 				</div>
+				{#if data.usesCredit}
+					<div class={tile}>
+						<dt class={tileLabel}>Sold on credit (not received)</dt>
+						<dd class={tileValue}>{data.totals.soldOnCredit}</dd>
+					</div>
+				{/if}
 				<div class={tile}>
 					<dt class={tileLabel}>Orders</dt>
 					<dd class={tileValue}>{data.totals.orderCount}</dd>
@@ -146,6 +156,45 @@
 					</tbody>
 				</table>
 			</section>
+
+			{#if data.customerPayments.rows.length > 0}
+				<section class={cardClass}>
+					<h3 class={cardTitle}>Customer payments received</h3>
+					<p class="text-caption text-ink-2 px-6 pb-3">
+						What customers paid towards their credit balances. Not part of takings: those sales were
+						counted on the day they were made. A reversal shows on the day it was made.
+					</p>
+					<table class="w-full text-sm">
+						<caption class="sr-only">Customer payments received</caption>
+						<thead class="bg-raise-2">
+							<tr>
+								<th scope="col" class={th}>Method</th>
+								<th scope="col" class={thMoney}>Payments</th>
+								<th scope="col" class={thMoney}>Received ({data.currency?.code})</th>
+								<th scope="col" class={thMoney}>Reversed</th>
+								<th scope="col" class={thMoney}>Net</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each data.customerPayments.rows as row (row.key)}
+								<tr>
+									<td class={td}>{row.label}</td>
+									<td class={tdMoney}>{row.count}</td>
+									<td class={tdMoney}>{row.received}</td>
+									<td class={tdMoney}>{row.reversed}</td>
+									<td class="{tdMoney} {row.negative ? 'text-danger' : ''}">{row.net}</td>
+								</tr>
+							{/each}
+						</tbody>
+						<tfoot>
+							<tr>
+								<th scope="row" class="{td} text-start font-medium" colspan="4">Net received</th>
+								<td class="{tdMoney} font-medium">{data.customerPayments.net}</td>
+							</tr>
+						</tfoot>
+					</table>
+				</section>
+			{/if}
 
 			<section class={cardClass}>
 				<h3 class={cardTitle}>By payment method</h3>

@@ -39,7 +39,11 @@ export const ADMIN_KEYS = [
 	'admin.expenses',
 	'admin.reports',
 	'admin.employees',
-	'admin.devices'
+	'admin.devices',
+	// tasks/customer-credit (the user's decision of 2026-11-12): the Customers
+	// pages — who may be charged, their limits, their statements, reversing a
+	// payment. Owner only, like every admin.* key.
+	'admin.customers'
 ] as const;
 
 export type PermissionKey =

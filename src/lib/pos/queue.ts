@@ -224,7 +224,14 @@ async function rewritePosSessionId(deviceId: string, oldId: string, newId: strin
 				const rows = request.result as QueueEntry[];
 				for (const row of rows) {
 					if (row.state !== 'pending') continue;
-					if (row.kind !== 'sale.complete' && row.kind !== 'session.close') continue;
+					// customer.payment names its shift too (tasks/customer-credit T-19).
+					if (
+						row.kind !== 'sale.complete' &&
+						row.kind !== 'session.close' &&
+						row.kind !== 'customer.payment'
+					) {
+						continue;
+					}
 					const payload = row.envelope.payload as { posSessionId?: unknown } | null;
 					if (payload && payload.posSessionId === oldId) {
 						const nextPayload = { ...(payload as object), posSessionId: newId };
@@ -437,6 +444,27 @@ export function flush(
 					}
 					// not_permitted.
 					const kind = entry.kind;
+					if (kind === 'customer.payment') {
+						// A refused customer payment (tasks/customer-credit T-19): the entry
+						// is DONE and carries why. No invoice number was burned, so there is
+						// no sale.abandoned; the till shows the refusal until the cashier
+						// says the money went back.
+						await markEntry(entry.clientOpId, (row) => ({
+							...row,
+							state: 'done',
+							lastError: 'rejected:not_permitted'
+						}));
+						emit({
+							type: 'rejected',
+							clientOpId: entry.clientOpId,
+							kind,
+							http: 403,
+							error: 'not_permitted'
+						});
+						signalUnsyncedChange();
+						sent += 1;
+						continue;
+					}
 					if (kind === 'sale.complete') {
 						await markEntry(entry.clientOpId, (row) => ({
 							...row,
@@ -494,7 +522,50 @@ export function flush(
 				}
 
 				if (parsed.status === 422) {
-					const body = (parsed.body ?? {}) as { flag?: string };
+					const body = (parsed.body ?? {}) as { flag?: string; detail?: string };
+					if (entry.kind === 'customer.payment') {
+						if (body.flag === 'database_error') {
+							// The server failed, it did not refuse: the payment may still be
+							// taken. Keep the op PENDING under the SAME key and try again
+							// later — never dropped, never a second op.
+							await markEntry(entry.clientOpId, (row) => ({
+								...row,
+								state: 'pending',
+								attempts: row.attempts + 1,
+								lastError: 'database_error'
+							}));
+							const delay = Math.min(60_000, 1_000 * 2 ** ++consecutiveNetworkFailures);
+							scheduledRetry = schedule(delay, () => {
+								void flush(fetchFn, opts).catch(() => {});
+							});
+							emit({
+								type: 'stopped',
+								reason: 'network',
+								clientOpId: entry.clientOpId,
+								retryInMs: delay
+							});
+							signalUnsyncedChange();
+							return { sent, outcome: 'network' };
+						}
+						// Refused: more than is owed, a closed shift, an unknown customer…
+						const why = body.detail ?? body.flag ?? '';
+						await markEntry(entry.clientOpId, (row) => ({
+							...row,
+							state: 'done',
+							lastError: `rejected:${why}`
+						}));
+						emit({
+							type: 'rejected',
+							clientOpId: entry.clientOpId,
+							kind: entry.kind,
+							http: 422,
+							error: 'rejected',
+							flag: why
+						});
+						signalUnsyncedChange();
+						sent += 1;
+						continue;
+					}
 					if (entry.kind === 'sale.complete') {
 						await markEntry(entry.clientOpId, (row) => ({
 							...row,

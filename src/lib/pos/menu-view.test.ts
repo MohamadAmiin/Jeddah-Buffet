@@ -245,6 +245,10 @@ describe('MANDATORY (spec 29) — the till screens hold no number conversion of 
 		'src/routes/(pos)/pos/pay/+page.svelte',
 		'src/routes/(pos)/pos/sales/+page.svelte',
 		'src/routes/(pos)/pos/printer/+page.svelte',
+		// tasks/customer-credit: balances, limits and payments are money too.
+		'src/routes/(pos)/pos/customers/+page.svelte',
+		'src/lib/pos/customers.ts',
+		'src/lib/pos/customer-payments.ts',
 		'src/lib/pos/menu-view.ts',
 		// The till's shared components print money too (docs/redesign Phase 0), so
 		// every file under src/lib/components/pos/ is scanned — a new one is covered

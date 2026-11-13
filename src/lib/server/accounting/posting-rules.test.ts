@@ -19,7 +19,8 @@ import {
 	countShortfallLines,
 	countSurplusLines,
 	revaluationLines,
-	openingStockLines
+	openingStockLines,
+	customerPaymentLines
 } from './posting-rules';
 import { JOURNAL_SOURCE_TYPES } from './journal';
 
@@ -142,6 +143,7 @@ describe('cogs, over-short, event helpers', () => {
 		expect(eventForMethod('cash')).toBe('cash_sale');
 		expect(eventForMethod('card')).toBe('card_sale');
 		expect(eventForMethod('mobile')).toBe('mobile_sale');
+		expect(eventForMethod('credit')).toBe('credit_sale');
 		for (const m of PAYMENT_METHODS) {
 			expect((SALE_EVENTS as readonly string[]).includes(eventForMethod(m))).toBe(true);
 		}
@@ -149,7 +151,7 @@ describe('cogs, over-short, event helpers', () => {
 	});
 });
 
-describe('MANDATORY (spec 29) — 500 seeded orders x 3 sale events balance', () => {
+describe('MANDATORY (spec 29) — 500 seeded orders x 4 sale events balance', () => {
 	it('every generated sale entry has debits = credits, no negatives, no missing side', () => {
 		const next = generator(20260928n);
 		for (let i = 0; i < 500; i++) {
@@ -225,6 +227,10 @@ describe('code coverage and refusals', () => {
 		for (const line of revaluationLines(minor(-1n))) codes.add(line.code);
 		for (const line of revaluationLines(minor(1n))) codes.add(line.code);
 		for (const line of openingStockLines(minor(1n))) codes.add(line.code);
+		// tasks/customer-credit T-06.
+		for (const method of ['cash', 'card', 'mobile'] as const) {
+			for (const line of customerPaymentLines(method, minor(1n))) codes.add(line.code);
+		}
 		const chartCodes = new Set(CHART.map((r) => r.code));
 		for (const code of codes) expect(chartCodes.has(code)).toBe(true);
 		expect(codes).toEqual(
@@ -233,6 +239,7 @@ describe('code coverage and refusals', () => {
 				'1010',
 				'1020',
 				'1030',
+				'1100',
 				'1200',
 				'2000',
 				'2100',
@@ -273,7 +280,9 @@ describe('code coverage and refusals', () => {
 			'stock_count_shortfall',
 			'stock_count_surplus',
 			'inventory_revaluation',
-			'opening_stock'
+			'opening_stock',
+			'credit_sale',
+			'customer_payment_received'
 		]);
 	});
 
@@ -285,7 +294,8 @@ describe('code coverage and refusals', () => {
 			'supplier_payment',
 			'waste_entry',
 			'stock_count',
-			'opening_stock'
+			'opening_stock',
+			'customer_payment'
 		]);
 	});
 });
@@ -371,6 +381,7 @@ describe('MANDATORY (spec 29) — one posting-rule test per inventory business e
 		expect(() => countShortfallLines(neg)).toThrow(TypeError);
 		expect(() => countSurplusLines(neg)).toThrow(TypeError);
 		expect(() => openingStockLines(neg)).toThrow(TypeError);
+		expect(() => customerPaymentLines('cash', neg)).toThrow(TypeError);
 	});
 
 	it('every rule balances over 1,000 seeded amounts', () => {
@@ -388,10 +399,105 @@ describe('MANDATORY (spec 29) — one posting-rule test per inventory business e
 				countShortfallLines(a),
 				countSurplusLines(a),
 				revaluationLines(signed),
-				openingStockLines(a)
+				openingStockLines(a),
+				customerPaymentLines('cash', a),
+				customerPaymentLines('card', a),
+				customerPaymentLines('mobile', a)
 			]) {
 				expect(linesBalance(lines)).toBe(true);
 			}
 		}
+	});
+});
+
+describe('MANDATORY (spec 29) — one posting-rule test per customer-credit event (tasks/customer-credit T-06)', () => {
+	it('credit sale: Dr 1100 Accounts Receivable / Cr 4000 / Cr 2100 — subtotal 3000, tax 300, total 3300', () => {
+		expect(
+			saleLines('credit_sale', {
+				subtotal: minor(3000n),
+				discount: minor(0n),
+				tax: minor(300n),
+				total: minor(3300n)
+			})
+		).toEqual([
+			{ code: '1100', debit: minor(3300n) },
+			{ code: '4100', debit: minor(0n) },
+			{ code: '4000', credit: minor(3000n) },
+			{ code: '2100', credit: minor(300n) }
+		]);
+	});
+
+	it('credit sale with a discount: Dr 1100 1090, Dr 4100 100 / Cr 4000 1090… the spec 24 discount example on credit', () => {
+		const rule = saleLines('credit_sale', {
+			subtotal: minor(1000n),
+			discount: minor(100n),
+			tax: minor(90n),
+			total: minor(990n)
+		});
+		expect(rule).toEqual([
+			{ code: '1100', debit: minor(990n) },
+			{ code: '4100', debit: minor(100n) },
+			{ code: '4000', credit: minor(1000n) },
+			{ code: '2100', credit: minor(90n) }
+		]);
+		expect(linesBalance(rule)).toBe(true);
+	});
+
+	it('a tax-exempt credit sale emits a zero 2100 line the writer drops (both modes charge tax 0)', () => {
+		const rule = saleLines('credit_sale', {
+			subtotal: minor(2500n),
+			discount: minor(0n),
+			tax: minor(0n),
+			total: minor(2500n)
+		});
+		expect(rule.filter((l) => l.code === '2100')).toEqual([{ code: '2100', credit: minor(0n) }]);
+		expect(rule[0]).toEqual({ code: '1100', debit: minor(2500n) });
+	});
+
+	it('a credit sale never touches a tender account', () => {
+		const codes = saleLines('credit_sale', {
+			subtotal: minor(1000n),
+			discount: minor(0n),
+			tax: minor(100n),
+			total: minor(1100n)
+		}).map((l) => l.code);
+		for (const tender of ['1000', '1010', '1020', '1030']) expect(codes).not.toContain(tender);
+	});
+
+	it('customer payment received: Dr 1000 (cash), 1020 (card) or 1030 (mobile) / Cr 1100', () => {
+		expect(customerPaymentLines('cash', minor(2000n))).toEqual([
+			{ code: '1000', debit: minor(2000n) },
+			{ code: '1100', credit: minor(2000n) }
+		]);
+		expect(customerPaymentLines('card', minor(2000n))).toEqual([
+			{ code: '1020', debit: minor(2000n) },
+			{ code: '1100', credit: minor(2000n) }
+		]);
+		expect(customerPaymentLines('mobile', minor(2000n))).toEqual([
+			{ code: '1030', debit: minor(2000n) },
+			{ code: '1100', credit: minor(2000n) }
+		]);
+	});
+
+	it('a debt is never paid with credit, or with anything else', () => {
+		expect(() => customerPaymentLines('credit' as never, minor(1n))).toThrow(TypeError);
+		expect(() => customerPaymentLines('bank' as never, minor(1n))).toThrow(TypeError);
+	});
+
+	it('a charge and its full repayment leave 1100 at zero', () => {
+		const charge = saleLines('credit_sale', {
+			subtotal: minor(3000n),
+			discount: minor(0n),
+			tax: minor(300n),
+			total: minor(3300n)
+		});
+		const paid = [
+			...customerPaymentLines('cash', minor(2000n)),
+			...customerPaymentLines('mobile', minor(1300n))
+		];
+		const on1100 = [...charge, ...paid].filter((l) => l.code === '1100');
+		const debits = sum(on1100.map((l) => l.debit ?? minor(0n)));
+		const credits = sum(on1100.map((l) => l.credit ?? minor(0n)));
+		expect(debits).toBe(credits);
 	});
 });

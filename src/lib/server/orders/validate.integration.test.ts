@@ -859,6 +859,8 @@ describe('validateSale — named methods and rates (settings-tax-payments-receip
 				method: 'cash',
 				paymentMethodId: cashId,
 				paymentMethodName: 'Cash',
+				// tasks/customer-credit: null on every method but credit.
+				customer: null,
 				amountMinor: 935n,
 				tenderedMinor: 1000n,
 				changeMinor: 65n

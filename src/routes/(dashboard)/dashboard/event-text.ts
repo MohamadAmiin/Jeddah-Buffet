@@ -30,6 +30,7 @@ export const EVENT_TEXT: Record<AuditEventName, string> = {
 	'sale.recorded': 'Sale recorded',
 	'sale.flagged': 'Sale recorded with a flag for review',
 	'sale.tax_override': 'Bill made tax-exempt at the till',
+	'sale.credit_charged': "Bill charged to a customer's credit at the till",
 	'sale.abandoned': 'Sale abandoned; its invoice number was burned',
 	'sync.op_unrecorded': 'A synced operation could not be recorded and needs review',
 	'sync.op_retried': 'Flagged operation retried',
@@ -58,5 +59,12 @@ export const EVENT_TEXT: Record<AuditEventName, string> = {
 	'payment_method.archived': 'Payment method archived',
 	'receipt.lines_updated': 'Receipt header or footer lines changed',
 	'receipt.logo_updated': 'Receipt logo uploaded',
-	'receipt.logo_removed': 'Receipt logo removed'
+	'receipt.logo_removed': 'Receipt logo removed',
+	'customer.created': 'Customer added',
+	'customer.updated': 'Customer changed',
+	'customer.archived': 'Customer archived',
+	'customer.restored': 'Customer restored',
+	'customer.payment_received': 'Customer payment received at the till',
+	'customer.payment_reversed': 'Reversed a customer payment',
+	'payment_method.credit_switched': 'Customer credit switched on or off'
 };

@@ -19,6 +19,16 @@
 // reference a method by id, and a pending card or mobile sale must still resolve
 // its method when it replays.
 //
+// CUSTOMER CREDIT IS THE OTHER BUILT-IN ROW (tasks/customer-credit, decided
+// 2026-11-12): one row of kind 'credit' per restaurant (payment_methods_one_credit),
+// seeded DISABLED by ensureCreditMethod and switched on or off by the owner through
+// setCreditEnabled — its ONLY writer. A bill charged to it debits 1100 Accounts
+// Receivable; setCreditEnabled therefore runs ensureChart first, so credit is never
+// on without that account. An owner can never create, rename, move, archive or
+// number a credit-kind method: every writer below refuses it as it refuses Cash.
+// Switching it OFF stops new charges on the till; it never stops a customer paying
+// what they owe.
+//
 // NOTHING HERE BUMPS menu_version. Methods are not in the menu snapshot; they reach
 // the till in the settings bundle of GET /api/pos/employees (T-20).
 //
@@ -29,7 +39,7 @@
 // before any SQL, so a malformed one never raises 22P02 into the caller's
 // transaction; every change audits in the same transaction (invariant 10); a no-op
 // writes nothing.
-import { and, asc, eq, isNull, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, ne, notInArray, sql } from 'drizzle-orm';
 import type { DbTx } from '../db/client';
 import type { Executor } from '../auth/session';
 // TYPE-ONLY: index.ts re-exports this file, so a runtime import back would be a cycle.
@@ -37,6 +47,7 @@ import type { UpdateSettingsContext } from './index';
 import type { PaymentMethod } from '../../sync-ops';
 import { paymentMethods } from '../db/schema/payment-methods';
 import { writeAudit } from '../audit';
+import { ensureChart } from '../accounting/chart';
 
 export const PAYMENT_METHOD_NAME_MAX = 40;
 export const MERCHANT_NUMBER_MAX = 40;
@@ -136,7 +147,8 @@ function assertEnabled(enabled: unknown): asserts enabled is boolean {
 }
 
 /**
- * The restaurant's methods: Cash first, then by sort_order, then by name.
+ * The restaurant's methods — Cash and the owner's card and mobile methods, NEVER
+ * the built-in Customer credit row: Cash first, then by sort_order, then by name.
  * Live rows only unless `includeArchived` is true. DISABLED rows are returned —
  * filtering to the enabled ones is the settings bundle's job (T-20).
  */
@@ -157,9 +169,13 @@ export async function listPaymentMethods(
 		})
 		.from(paymentMethods)
 		.where(
-			opts?.includeArchived === true
-				? eq(paymentMethods.restaurantId, restaurantId)
-				: and(eq(paymentMethods.restaurantId, restaurantId), isNull(paymentMethods.archivedAt))
+			and(
+				eq(paymentMethods.restaurantId, restaurantId),
+				// The built-in Customer credit row is not one of "the methods": it has
+				// its own reader (getCreditMethod) and its own writer (setCreditEnabled).
+				ne(paymentMethods.kind, 'credit'),
+				opts?.includeArchived === true ? undefined : isNull(paymentMethods.archivedAt)
+			)
 		)
 		.orderBy(
 			sql`${paymentMethods.kind} = 'cash' desc`,
@@ -225,7 +241,7 @@ export async function createPaymentMethod(
 			.where(
 				and(
 					eq(paymentMethods.restaurantId, restaurantId),
-					ne(paymentMethods.kind, 'cash'),
+					notInArray(paymentMethods.kind, ['cash', 'credit']),
 					isNull(paymentMethods.archivedAt)
 				)
 			);
@@ -271,7 +287,13 @@ export async function updatePaymentMethod(
 	| {
 			ok: false;
 			reason:
-				'not_found' | 'archived' | 'is_cash' | 'invalid_name' | 'invalid_number' | 'duplicate_name';
+				| 'not_found'
+				| 'archived'
+				| 'is_cash'
+				| 'is_credit'
+				| 'invalid_name'
+				| 'invalid_number'
+				| 'duplicate_name';
 	  }
 > {
 	if (!UUID.test(methodId)) return { ok: false, reason: 'not_found' };
@@ -311,6 +333,8 @@ export async function updatePaymentMethod(
 	// Cash has nothing editable: its name is built in and payment_methods_cash_rules
 	// keeps it enabled and numberless.
 	if (current.kind === 'cash') return { ok: false, reason: 'is_cash' };
+	// The built-in Customer credit row: setCreditEnabled is its only writer.
+	if (current.kind === 'credit') return { ok: false, reason: 'is_credit' };
 	if (current.archivedAt !== null) return { ok: false, reason: 'archived' };
 
 	const set: { name?: string; merchantNumber?: string | null; enabled?: boolean } = {};
@@ -361,7 +385,8 @@ export async function movePaymentMethod(
 	direction: 'up' | 'down',
 	ctx: UpdateSettingsContext
 ): Promise<
-	{ ok: true; changed: boolean } | { ok: false; reason: 'not_found' | 'archived' | 'is_cash' }
+	| { ok: true; changed: boolean }
+	| { ok: false; reason: 'not_found' | 'archived' | 'is_cash' | 'is_credit' }
 > {
 	if (!UUID.test(methodId)) return { ok: false, reason: 'not_found' };
 
@@ -378,7 +403,7 @@ export async function movePaymentMethod(
 		.where(
 			and(
 				eq(paymentMethods.restaurantId, restaurantId),
-				ne(paymentMethods.kind, 'cash'),
+				notInArray(paymentMethods.kind, ['cash', 'credit']),
 				isNull(paymentMethods.archivedAt)
 			)
 		)
@@ -393,6 +418,7 @@ export async function movePaymentMethod(
 			.limit(1);
 		if (!other) return { ok: false, reason: 'not_found' };
 		if (other.kind === 'cash') return { ok: false, reason: 'is_cash' };
+		if (other.kind === 'credit') return { ok: false, reason: 'is_credit' };
 		return { ok: false, reason: 'archived' };
 	}
 
@@ -437,7 +463,9 @@ export async function archivePaymentMethod(
 	restaurantId: string,
 	methodId: string,
 	ctx: UpdateSettingsContext
-): Promise<{ ok: true } | { ok: false; reason: 'not_found' | 'already_archived' | 'is_cash' }> {
+): Promise<
+	{ ok: true } | { ok: false; reason: 'not_found' | 'already_archived' | 'is_cash' | 'is_credit' }
+> {
 	if (!UUID.test(methodId)) return { ok: false, reason: 'not_found' };
 
 	const [method] = await tx
@@ -452,6 +480,7 @@ export async function archivePaymentMethod(
 		.limit(1);
 	if (!method) return { ok: false, reason: 'not_found' };
 	if (method.kind === 'cash') return { ok: false, reason: 'is_cash' };
+	if (method.kind === 'credit') return { ok: false, reason: 'is_credit' };
 	if (method.archivedAt !== null) return { ok: false, reason: 'already_archived' };
 
 	const now = new Date();
@@ -464,10 +493,91 @@ export async function archivePaymentMethod(
 		actorUserId: ctx.actorUserId,
 		subjectUserId: null,
 		event: 'payment_method.archived',
-		// Not cash (refused above), so the kind is card or mobile.
+		// Not cash or credit (refused above), so the kind is card or mobile.
 		details: { name: method.name, kind: asKind(method.kind) as 'card' | 'mobile' },
 		ip: ctx.ip,
 		userAgent: ctx.userAgent
 	});
 	return { ok: true };
+}
+
+/** The built-in Customer credit row's name, and its fallback where an owner
+ * method already uses it (payment_methods_name_unique is on lower(name) among
+ * live rows). Migration 0022 seeds existing restaurants with the same rule. */
+export const CREDIT_METHOD_NAME = 'Customer credit';
+export const CREDIT_METHOD_FALLBACK_NAME = 'Customer credit (account)';
+
+/**
+ * Seed the built-in Customer credit row, DISABLED: idempotent, the
+ * ensureCashMethod pattern (the conflict target repeats
+ * payment_methods_one_credit's predicate). No audit row: it seeds configuration.
+ */
+export async function ensureCreditMethod(tx: DbTx, restaurantId: string): Promise<void> {
+	await tx.execute(sql`
+		insert into payment_methods (restaurant_id, name, kind, enabled, sort_order, merchant_number)
+		select ${restaurantId},
+		       case when exists (
+		         select 1 from payment_methods taken
+		         where taken.restaurant_id = ${restaurantId}
+		           and taken.archived_at is null
+		           and lower(taken.name) = lower(${CREDIT_METHOD_NAME})
+		       ) then ${CREDIT_METHOD_FALLBACK_NAME} else ${CREDIT_METHOD_NAME} end,
+		       'credit', false, 0, null
+		on conflict (restaurant_id) where kind = 'credit' do nothing
+	`);
+}
+
+/** The built-in Customer credit row, or null for a restaurant that has none yet
+ * (setCreditEnabled creates it). */
+export async function getCreditMethod(
+	database: Executor,
+	restaurantId: string
+): Promise<{ id: string; name: string; enabled: boolean } | null> {
+	const [row] = await database
+		.select({ id: paymentMethods.id, name: paymentMethods.name, enabled: paymentMethods.enabled })
+		.from(paymentMethods)
+		.where(and(eq(paymentMethods.restaurantId, restaurantId), eq(paymentMethods.kind, 'credit')))
+		.limit(1);
+	return row ?? null;
+}
+
+/**
+ * Switch customer credit on or off — the ONLY writer of the credit row.
+ * Self-healing: it first ensures account 1100 Accounts Receivable (ensureChart)
+ * and the row itself, so credit is never on without the account its sales debit,
+ * whatever order the migrations and the deploy ran in. The same value is a
+ * no-op: no UPDATE, no audit.
+ */
+export async function setCreditEnabled(
+	tx: DbTx,
+	restaurantId: string,
+	enabled: boolean,
+	ctx: UpdateSettingsContext
+): Promise<{ ok: true; changed: boolean }> {
+	assertEnabled(enabled);
+	await ensureChart(tx, restaurantId);
+	await ensureCreditMethod(tx, restaurantId);
+	const [current] = await tx
+		.select({ id: paymentMethods.id, enabled: paymentMethods.enabled })
+		.from(paymentMethods)
+		.where(and(eq(paymentMethods.restaurantId, restaurantId), eq(paymentMethods.kind, 'credit')))
+		.for('update')
+		.limit(1);
+	if (!current) throw new Error('the Customer credit method is missing after ensureCreditMethod');
+	if (current.enabled === enabled) return { ok: true, changed: false };
+
+	await tx
+		.update(paymentMethods)
+		.set({ enabled, updatedAt: new Date() })
+		.where(and(eq(paymentMethods.id, current.id), eq(paymentMethods.restaurantId, restaurantId)));
+	await writeAudit(tx, {
+		restaurantId,
+		actorUserId: ctx.actorUserId,
+		subjectUserId: null,
+		event: 'payment_method.credit_switched',
+		details: { enabled },
+		ip: ctx.ip,
+		userAgent: ctx.userAgent
+	});
+	return { ok: true, changed: true };
 }

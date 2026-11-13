@@ -20,7 +20,7 @@ import { posSyncOps } from '../db/schema/pos-sync';
 import { posDevices } from '../db/schema/pos-devices';
 import { users } from '../db/schema/users';
 import { menuItems, menuCategories } from '../db/schema/menu';
-import { minor, subtract, type Minor } from '../../money';
+import { minor, subtract, sum, type Minor } from '../../money';
 import { ORDER_TYPES, type OrderType } from '../../sync-ops';
 
 export type SalesReport = {
@@ -30,14 +30,21 @@ export type SalesReport = {
 		discounts: Minor;
 		netSales: Minor;
 		tax: Minor;
+		/** Money RECEIVED for the day's sales: cash + card + mobile. A bill charged
+		 * to a customer's credit is not in it (tasks/customer-credit). */
 		takings: Minor;
+		/** The day's sales charged to customers' credit — sold, not received.
+		 * netSales + tax = takings + soldOnCredit. */
+		soldOnCredit: Minor;
 		orderCount: number;
 	};
-	byTender: { method: 'cash' | 'card' | 'mobile'; amount: Minor; count: number }[];
+	/** cash, card and mobile always (zero-filled); a `credit` row only on a day
+	 * with credit sales. Sums to takings + soldOnCredit. */
+	byTender: { method: 'cash' | 'card' | 'mobile' | 'credit'; amount: Minor; count: number }[];
 	byPaymentMethod: {
 		paymentMethodId: string | null;
 		name: string;
-		kind: 'cash' | 'card' | 'mobile';
+		kind: 'cash' | 'card' | 'mobile' | 'credit';
 		archived: boolean;
 		amount: Minor;
 		count: number;
@@ -58,6 +65,25 @@ export type SalesReport = {
 		status: 'open' | 'closed';
 	}[];
 	flagged: { count: number; unrecordedCount: number };
+	/**
+	 * What customers paid towards their credit balances (tasks/customer-credit) —
+	 * NEVER part of takings: it is money for sales already counted on the day
+	 * they were made. Per method: payments whose shift's business date is this
+	 * date (reversed or not), minus reversals dated this date. A payment
+	 * reversed on a later day stays here and shows there as a negative.
+	 */
+	customerPayments: {
+		rows: {
+			paymentMethodId: string;
+			name: string;
+			kind: 'cash' | 'card' | 'mobile';
+			received: Minor;
+			reversed: Minor;
+			net: Minor;
+			count: number;
+		}[];
+		net: Minor;
+	};
 };
 
 // The name of a "by payment method" row that has no method row: card and mobile
@@ -67,7 +93,9 @@ export type SalesReport = {
 const UNRECORDED_NAME = {
 	cash: 'Cash',
 	card: 'Card (method not recorded)',
-	mobile: 'Mobile money (method not recorded)'
+	mobile: 'Mobile money (method not recorded)',
+	// Every credit payment names the built-in row; this is unreachable in practice.
+	credit: 'Customer credit'
 } as const;
 
 export async function defaultReportDate(
@@ -134,15 +162,19 @@ export async function salesReport(
 	const netSales = subtract(grossSales, discounts);
 	const orderCount = totalsRow?.orderCount ?? 0;
 
+	// TAKINGS are money received: a credit sale's payment row is a charge to a
+	// customer's account, so it is summed apart (tasks/customer-credit).
 	const takingsRows = await database
 		.select({
-			amount: sql<string>`coalesce(sum(${payments.amountMinor}), 0)::bigint`
+			amount: sql<string>`coalesce(sum(${payments.amountMinor}) filter (where ${payments.method} <> 'credit'), 0)::bigint`,
+			credit: sql<string>`coalesce(sum(${payments.amountMinor}) filter (where ${payments.method} = 'credit'), 0)::bigint`
 		})
 		.from(payments)
 		.innerJoin(orders, eq(orders.id, payments.orderId))
 		.innerJoin(posSessions, eq(posSessions.id, orders.posSessionId))
 		.where(salesFilter);
 	const takings = minor(BigInt(takingsRows[0]?.amount ?? '0'));
+	const soldOnCredit = minor(BigInt(takingsRows[0]?.credit ?? '0'));
 
 	// BY TENDER. All three methods always, zero-filled.
 	const tenderRows = await database
@@ -165,6 +197,16 @@ export async function salesReport(
 			count: hit ? hit.count : 0
 		};
 	});
+	// Credit is a row only on a day that has credit sales: a restaurant that
+	// never switched it on sees the three tenders it always saw.
+	const creditTender = tenderMap.get('credit');
+	if (creditTender) {
+		byTender.push({
+			method: 'credit',
+			amount: minor(BigInt(creditTender.amount)),
+			count: creditTender.count
+		});
+	}
 
 	// BY PAYMENT METHOD (spec 26). Grouped by the method row, named by its CURRENT
 	// name. A payment recorded before named methods has no id: cash folds into the
@@ -205,15 +247,15 @@ export async function salesReport(
 			payments.method
 		)
 		.orderBy(
-			sql`case when ${payments.method} = 'cash' then 0 when ${paymentMethods.id} is not null then 1 else 2 end`,
+			sql`case when ${payments.method} = 'cash' then 0 when ${payments.method} = 'credit' then 3 when ${paymentMethods.id} is not null then 1 else 2 end`,
 			sql`${paymentMethods.sortOrder} nulls last`,
 			sql`lower(${paymentMethods.name})`,
 			payments.method
 		);
 	// No zero-fill: a method with no payments on this date has no row.
 	const byPaymentMethod: SalesReport['byPaymentMethod'] = methodRows.map((r) => {
-		// payments_method_valid admits exactly these three literals.
-		const kind = r.kind as 'cash' | 'card' | 'mobile';
+		// payments_method_valid admits exactly these four literals.
+		const kind = r.kind as 'cash' | 'card' | 'mobile' | 'credit';
 		return {
 			paymentMethodId: r.paymentMethodId,
 			name: r.name ?? UNRECORDED_NAME[kind],
@@ -419,9 +461,56 @@ export async function salesReport(
 		unrecordedCount: flaggedRow?.unrecorded ?? 0
 	};
 
+	// CUSTOMER PAYMENTS RECEIVED. Two scalar-shaped halves joined by method, never
+	// payments joined to reversals: received on this date, reversed on this date.
+	const paidRows = await database.execute<{
+		payment_method_id: string;
+		name: string;
+		kind: 'cash' | 'card' | 'mobile';
+		sort_order: number;
+		received: string;
+		reversed: string;
+		count: number;
+	}>(sql`
+		select pm.id as payment_method_id, pm.name, pm.kind, pm.sort_order,
+		       coalesce(sum(t.received), 0)::text as received,
+		       coalesce(sum(t.reversed), 0)::text as reversed,
+		       coalesce(sum(t.n), 0)::int as count
+		from (
+			select cp.payment_method_id, cp.amount_minor as received, 0::bigint as reversed, 1 as n
+			from customer_payments cp
+			where cp.restaurant_id = ${restaurantId} and cp.business_date = ${businessDate}
+			union all
+			select cp.payment_method_id, 0::bigint, cp.amount_minor, 0
+			from customer_payments cp
+			where cp.restaurant_id = ${restaurantId} and cp.reversal_business_date = ${businessDate}
+		) t
+		join payment_methods pm on pm.id = t.payment_method_id and pm.restaurant_id = ${restaurantId}
+		group by pm.id, pm.name, pm.kind, pm.sort_order
+		order by case when pm.kind = 'cash' then 0 else 1 end, pm.sort_order, lower(pm.name)
+	`);
+	const customerPaymentRows: SalesReport['customerPayments']['rows'] = paidRows.rows.map((r) => {
+		const received = minor(BigInt(r.received));
+		const reversed = minor(BigInt(r.reversed));
+		return {
+			paymentMethodId: r.payment_method_id,
+			name: r.name,
+			kind: r.kind,
+			received,
+			reversed,
+			net: subtract(received, reversed),
+			count: r.count
+		};
+	});
+	const customerPayments: SalesReport['customerPayments'] = {
+		rows: customerPaymentRows,
+		net: sum(customerPaymentRows.map((r) => r.net))
+	};
+
 	return {
 		businessDate,
-		totals: { grossSales, discounts, netSales, tax, takings, orderCount },
+		customerPayments,
+		totals: { grossSales, discounts, netSales, tax, takings, soldOnCredit, orderCount },
 		byTender,
 		byPaymentMethod,
 		byOrderType,

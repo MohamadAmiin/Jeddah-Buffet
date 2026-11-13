@@ -318,7 +318,11 @@ export type RecordSaleOptions = {
 	posSessionId: string;
 	occurredAt: Date;
 	invoiceSeq: number;
-	method: 'cash' | 'card' | 'mobile';
+	method: 'cash' | 'card' | 'mobile' | 'credit';
+	/** A `credit` sale (tasks/customer-credit): the customer the bill is charged
+	 * to. Written into the payment ONLY when present, so a cash sale carrying a
+	 * stray customer can be built too. */
+	customer?: { id: string; name?: string };
 	orderType: OrderType;
 	tableLabel: string | null;
 	/** Written into the payload ONLY when present, so the fixture can still
@@ -407,13 +411,22 @@ export function saleEnvelope(
 		tenderedMinor = tendered.toString();
 		changeMinor = changeDue(minor(tendered), minor(totalMinor)).toString();
 	}
-	const paymentMethod = o.paymentMethod ?? f.paymentMethods[o.method];
+	// Credit has no fixture method: the server resolves the restaurant's one
+	// built-in credit row from the kind, as it does for a pre-plan payload.
+	const paymentMethod =
+		o.paymentMethod ?? (o.method === 'credit' ? undefined : f.paymentMethods[o.method]);
 	const payment = {
 		paymentId: randomUUID(),
 		method: o.method,
-		...(o.omitIds
+		...(o.omitIds || paymentMethod === undefined
 			? {}
 			: { paymentMethodId: paymentMethod.id, paymentMethodName: paymentMethod.name }),
+		...(o.customer
+			? {
+					customerId: o.customer.id,
+					...(o.customer.name === undefined ? {} : { customerName: o.customer.name })
+				}
+			: {}),
 		amountMinor: serialised.totalMinor,
 		tenderedMinor,
 		changeMinor

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, afterEach } from 'vitest';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, ne, sql } from 'drizzle-orm';
 import { testDb, closeTestDb } from '../db/test/db';
 import { restaurants } from '../db/schema/restaurants';
 import { users } from '../db/schema/users';
@@ -7,10 +7,14 @@ import { auditLog } from '../db/schema/audit';
 import { paymentMethods } from '../db/schema/payment-methods';
 import { registerRestaurant } from '../auth/register';
 import { getMenuVersion } from '../menu';
+import { accounts } from '../db/schema/accounting';
 import {
 	archivePaymentMethod,
 	createPaymentMethod,
 	ensureCashMethod,
+	ensureCreditMethod,
+	getCreditMethod,
+	setCreditEnabled,
 	listPaymentMethods,
 	movePaymentMethod,
 	onRestaurantCreated,
@@ -73,11 +77,13 @@ type CreateInput = Parameters<typeof createPaymentMethod>[2];
 
 const auditRows = (event: string) =>
 	db.select().from(auditLog).where(eq(auditLog.event, event)).orderBy(asc(auditLog.id));
+/** Cash and the owner's methods. The built-in Customer credit row (tasks/
+ * customer-credit) has its own cases at the end of this file. */
 const methodRows = (restaurantId: string) =>
 	db
 		.select()
 		.from(paymentMethods)
-		.where(eq(paymentMethods.restaurantId, restaurantId))
+		.where(and(eq(paymentMethods.restaurantId, restaurantId), ne(paymentMethods.kind, 'credit')))
 		.orderBy(asc(paymentMethods.sortOrder), asc(paymentMethods.name));
 
 function create(r: R, input: Partial<CreateInput> & { name: string }) {
@@ -120,7 +126,7 @@ async function ownerOrder(r: R): Promise<string[]> {
 }
 
 describe('the built-in Cash row', () => {
-	it('registration seeds exactly one Cash row', async () => {
+	it('registration seeds exactly one Cash row, and the Customer credit row switched off', async () => {
 		const result = await registerRestaurant(
 			db,
 			{
@@ -145,12 +151,21 @@ describe('the built-in Cash row', () => {
 				archivedAt: paymentMethods.archivedAt
 			})
 			.from(paymentMethods)
-			.where(eq(paymentMethods.restaurantId, result.restaurantId));
+			.where(eq(paymentMethods.restaurantId, result.restaurantId))
+			.orderBy(asc(paymentMethods.kind));
 		expect(rows).toEqual([
 			{
 				name: 'Cash',
 				kind: 'cash',
 				enabled: true,
+				sortOrder: 0,
+				merchantNumber: null,
+				archivedAt: null
+			},
+			{
+				name: 'Customer credit',
+				kind: 'credit',
+				enabled: false,
 				sortOrder: 0,
 				merchantNumber: null,
 				archivedAt: null
@@ -576,5 +591,127 @@ describe('no delete path', () => {
 	it('exports nothing that deletes or removes a method', async () => {
 		const names = Object.keys(await import('./payment-methods'));
 		expect(names.filter((name) => /delete|remove/i.test(name))).toEqual([]);
+	});
+});
+
+describe('the built-in Customer credit row (customer-credit T-09)', () => {
+	const creditRows = (restaurantId: string) =>
+		db
+			.select()
+			.from(paymentMethods)
+			.where(and(eq(paymentMethods.restaurantId, restaurantId), eq(paymentMethods.kind, 'credit')));
+	const setCredit = (r: R, enabled: boolean) =>
+		db.transaction((tx) => setCreditEnabled(tx, r.restaurantId, enabled, r.ctx));
+
+	it('a new restaurant has it, disabled; it is never one of "the methods"', async () => {
+		const r = await makeRestaurant();
+		expect(await getCreditMethod(db, r.restaurantId)).toMatchObject({
+			name: 'Customer credit',
+			enabled: false
+		});
+		expect((await listPaymentMethods(db, r.restaurantId)).map((m) => m.kind)).toEqual(['cash']);
+		expect(
+			(await listPaymentMethods(db, r.restaurantId, { includeArchived: true })).map((m) => m.kind)
+		).toEqual(['cash']);
+	});
+
+	it('ensureCreditMethod is idempotent and never switches it on', async () => {
+		const r = await makeRestaurant();
+		await db.transaction((tx) => ensureCreditMethod(tx, r.restaurantId));
+		await db.transaction((tx) => ensureCreditMethod(tx, r.restaurantId));
+		const rows = await creditRows(r.restaurantId);
+		expect(rows).toHaveLength(1);
+		expect(rows[0].enabled).toBe(false);
+	});
+
+	it('switching it on and off audits each change; the same value is a no-op', async () => {
+		const r = await makeRestaurant();
+		expect(await setCredit(r, false)).toEqual({ ok: true, changed: false });
+		expect(await setCredit(r, true)).toEqual({ ok: true, changed: true });
+		expect(await setCredit(r, true)).toEqual({ ok: true, changed: false });
+		expect((await getCreditMethod(db, r.restaurantId))?.enabled).toBe(true);
+		expect(await setCredit(r, false)).toEqual({ ok: true, changed: true });
+
+		const rows = await auditRows('payment_method.credit_switched');
+		expect(rows.map((row) => row.details)).toEqual([{ enabled: true }, { enabled: false }]);
+		expect(rows[0].actorUserId).toBe(r.ctx.actorUserId);
+	});
+
+	it('MANDATORY (invariant 3): switching it on is self-healing — it creates the row and account 1100 where either is missing', async () => {
+		// A restaurant as it stood before tasks/customer-credit and before migration
+		// 0022 reached it: the 23-account chart, Cash, no credit row.
+		const [restaurant] = await db.insert(restaurants).values({ name: 'Cafe Old' }).returning();
+		await db.transaction((tx) => ensureCashMethod(tx, restaurant.id));
+		await db
+			.insert(accounts)
+			.values({ restaurantId: restaurant.id, code: '1000', name: 'Cash on Hand', type: 'asset' });
+		const r = {
+			restaurantId: restaurant.id,
+			ctx: { actorUserId: null, ip: null, userAgent: null }
+		};
+		expect(await getCreditMethod(db, r.restaurantId)).toBeNull();
+
+		const result = await db.transaction((tx) => setCreditEnabled(tx, r.restaurantId, true, r.ctx));
+
+		expect(result).toEqual({ ok: true, changed: true });
+		expect((await getCreditMethod(db, r.restaurantId))?.enabled).toBe(true);
+		const receivable = await db
+			.select({ name: accounts.name, type: accounts.type })
+			.from(accounts)
+			.where(and(eq(accounts.restaurantId, r.restaurantId), eq(accounts.code, '1100')));
+		expect(receivable).toEqual([{ name: 'Accounts Receivable', type: 'asset' }]);
+	});
+
+	it('takes the fallback name where an owner method is already called "Customer credit"', async () => {
+		const [restaurant] = await db.insert(restaurants).values({ name: 'Cafe Tabs' }).returning();
+		await db.insert(paymentMethods).values({
+			restaurantId: restaurant.id,
+			name: 'customer CREDIT',
+			kind: 'mobile',
+			enabled: true
+		});
+		await db.transaction((tx) => ensureCreditMethod(tx, restaurant.id));
+		expect((await getCreditMethod(db, restaurant.id))?.name).toBe('Customer credit (account)');
+	});
+
+	it('an owner can never create, rename, number, switch, move or archive it through the method writers', async () => {
+		const r = await makeRestaurant();
+		const credit = await getCreditMethod(db, r.restaurantId);
+		if (!credit) throw new Error('fixture: no credit row');
+
+		expect(await create(r, { name: 'Tabs', kind: 'credit' as never })).toEqual({
+			ok: false,
+			reason: 'invalid_kind'
+		});
+		expect(await update(r, credit.id, { name: 'Tabs' })).toEqual({
+			ok: false,
+			reason: 'is_credit'
+		});
+		expect(await update(r, credit.id, { merchantNumber: '61' })).toEqual({
+			ok: false,
+			reason: 'is_credit'
+		});
+		expect(await update(r, credit.id, { enabled: true })).toEqual({
+			ok: false,
+			reason: 'is_credit'
+		});
+		expect(await move(r, credit.id, 'up')).toEqual({ ok: false, reason: 'is_credit' });
+		expect(await archive(r, credit.id)).toEqual({ ok: false, reason: 'is_credit' });
+
+		const [row] = await creditRows(r.restaurantId);
+		expect(row).toMatchObject({
+			name: 'Customer credit',
+			enabled: false,
+			merchantNumber: null,
+			archivedAt: null
+		});
+		expect(await auditRows('payment_method.updated')).toHaveLength(0);
+	});
+
+	it('owner methods are numbered without it: the first one is still 1', async () => {
+		const r = await makeRestaurant();
+		await createdId(r, { name: 'A' });
+		await createdId(r, { name: 'B' });
+		expect(await ownerOrder(r)).toEqual(['A:1', 'B:2']);
 	});
 });

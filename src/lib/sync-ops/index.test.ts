@@ -1,8 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+	cleanCustomerName,
 	cleanTaxOverrideReason,
 	codePointLength,
+	CUSTOMER_NAME_MAX,
+	CUSTOMER_PAYMENT_METHODS,
 	formatInvoiceNumber,
 	parseInvoiceNumber,
 	TAX_OVERRIDE_REASON_MAX,
@@ -92,18 +95,32 @@ describe('the lists', () => {
 			'session.close',
 			'sale.complete',
 			'sale.abandoned',
-			'pin.login'
+			'pin.login',
+			'customer.payment'
 		]);
 		expect([...OP_STATUSES]).toEqual(['accepted', 'recorded_flagged', 'unrecorded']);
 		expect([...ORDER_TYPES]).toEqual(['dine_in', 'takeaway', 'delivery']);
-		expect([...PAYMENT_METHODS]).toEqual(['cash', 'card', 'mobile']);
+		expect([...PAYMENT_METHODS]).toEqual(['cash', 'card', 'mobile', 'credit']);
+		// A debt is never paid with credit.
+		expect([...CUSTOMER_PAYMENT_METHODS]).toEqual(['cash', 'card', 'mobile']);
 		expect([...ORDER_STATUSES]).toEqual(['open', 'billed', 'paid', 'voided', 'refunded']);
 		expect([...LINE_STATUSES]).toEqual(['new', 'sent', 'voided']);
 		expect([...SESSION_STATUSES]).toEqual(['open', 'closed']);
 	});
 
-	it('has seven soft flags and seven hard flags with no overlap', () => {
-		expect(SOFT_FLAGS).toHaveLength(7);
+	it('has ten soft flags and seven hard flags with no overlap', () => {
+		expect([...SOFT_FLAGS]).toEqual([
+			'employee_not_permitted',
+			'employee_inactive',
+			'employee_unknown',
+			'totals_mismatch',
+			'stale_menu_price',
+			'session_closed',
+			'clock_ahead',
+			'credit_limit_exceeded',
+			'customer_archived',
+			'credit_not_enabled'
+		]);
 		expect(HARD_FLAGS).toHaveLength(7);
 		const soft = new Set<string>(SOFT_FLAGS);
 		for (const h of HARD_FLAGS) expect(soft.has(h)).toBe(false);
@@ -334,5 +351,40 @@ describe('the tax-exemption reason (bill-tax-override T-03)', () => {
 		};
 		const payload: Pick<SaleCompletePayload, 'lines' | 'taxOverride'> = { lines: [line] };
 		expect(payload.taxOverride).toBeUndefined();
+	});
+});
+
+describe("a customer's name (customer-credit T-01)", () => {
+	it('collapses whitespace, turns control characters into spaces and trims', () => {
+		expect(cleanCustomerName('  Ali \n Hassan ')).toBe('Ali Hassan');
+		expect(cleanCustomerName('Ali\u001bHassan')).toBe('Ali Hassan');
+	});
+
+	it('cuts at 80 code points and never throws', () => {
+		const cut = cleanCustomerName('x'.repeat(120));
+		expect(codePointLength(cut)).toBe(CUSTOMER_NAME_MAX);
+		expect(cleanCustomerName('')).toBe('');
+		expect(cleanCustomerName('\n\t ')).toBe('');
+	});
+
+	it('never splits a surrogate pair', () => {
+		const cut = cleanCustomerName('😀'.repeat(100));
+		expect(codePointLength(cut)).toBe(CUSTOMER_NAME_MAX);
+		expect(cut).toBe('😀'.repeat(80));
+	});
+
+	it('keeps Arabic letters', () => {
+		expect(cleanCustomerName(' علي  حسن ')).toBe('علي حسن');
+	});
+
+	it('a payment without the customer keys is still a SalePayment', () => {
+		const payment: SalePayment = {
+			paymentId: 'p',
+			method: 'cash',
+			amountMinor: '100',
+			tenderedMinor: '100',
+			changeMinor: '0'
+		};
+		expect(payment.customerId).toBeUndefined();
 	});
 });

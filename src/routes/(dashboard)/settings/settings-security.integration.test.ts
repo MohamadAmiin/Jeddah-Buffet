@@ -388,7 +388,9 @@ const VALID: Record<PageKey, Record<string, ActionCase>> = {
 			})
 		},
 		move: { form: (s) => ({ methodId: s.evcId, direction: 'down' }) },
-		archive: { form: (s) => ({ methodId: s.evcId, name: 'EVC Plus' }) }
+		archive: { form: (s) => ({ methodId: s.evcId, name: 'EVC Plus' }) },
+		// tasks/customer-credit T-22: the built-in Customer credit switch.
+		setCredit: { form: () => ({ enabled: 'yes' }) }
 	},
 	receipt: {
 		save: { form: (s) => receiptForm(s, { receiptAddress: '1 Market Street' }) },

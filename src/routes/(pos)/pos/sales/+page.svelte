@@ -107,6 +107,12 @@
 		if (!payment) return '—';
 		// A sale recorded after T-19 stored the owner-named method it was taken with.
 		const name = payment.paymentMethodName;
+		// A bill charged to a customer's credit names who owes it (tasks/customer-credit).
+		if (payment.method === 'credit') {
+			const who = typeof payment.customerName === 'string' ? payment.customerName : '';
+			const label = typeof name === 'string' && name !== '' ? name : 'Customer credit';
+			return who === '' ? label : `${label} — ${who}`;
+		}
 		if (typeof name === 'string' && name !== '') return name;
 		return TENDER_LABEL[payment.method] ?? payment.method;
 	}

@@ -38,6 +38,7 @@
 // as its text and the logo left off (submitWithFallback), so no line is lost.
 import { paymentNumbersFrom } from '../receipt-layout';
 import { canPrint, type CanPrint } from './can-print';
+import { tenderClass } from './tenders';
 import type { Cart } from './orders';
 import { asciiFallback, hasArabic, isPlainAscii } from './paper-script';
 import {
@@ -55,9 +56,11 @@ import {
 	type SubmitResult
 } from './print-client';
 import { onFlushEvent } from './queue';
+import { balanceBefore, markCustomerPayment, readCustomerPayment } from './customer-payments';
 import {
 	isImageLine,
 	renderKitchenTicket,
+	renderPaymentReceipt,
 	renderReceipt,
 	type ImageLine,
 	type PrintLine,
@@ -568,6 +571,170 @@ export async function printOriginals(
 	return { receipt, kitchen, drawer };
 }
 
+// ── A customer's payment (tasks/customer-credit T-19) ───────────────────────
+
+export type PaymentPrintResult = { receipt: PrintOutcome; drawer: DrawerOutcome };
+
+/** What printing a customer payment needs from the till's caches. */
+async function paymentReceiptLines(
+	clientOpId: string,
+	width: ReceiptWidth,
+	copy: { reprintedAt: string; by: string } | undefined
+): Promise<
+	{ lines: PrintLine[]; paymentId: string } | { skipped: PrintRefusal } | { error: string }
+> {
+	const payment = await readCustomerPayment(clientOpId);
+	if (!payment) return { error: 'unknown_payment' };
+	// FAIL CLOSED, like a card receipt: nothing prints for a payment the server
+	// has not confirmed, and nothing ever prints for one it refused.
+	if (payment.state === 'refused') return { skipped: 'refused' };
+	const before = balanceBefore(payment);
+	if (payment.state !== 'confirmed' || payment.balanceAfterMinor === null || before === null) {
+		return { skipped: 'awaiting_confirmation' };
+	}
+	const [header, timeZone, deviceCode, menu] = await Promise.all([
+		readReceiptHeader(),
+		setting('timeZone'),
+		setting('deviceCode'),
+		readMenu().catch(() => null)
+	]);
+	return {
+		paymentId: payment.paymentId,
+		lines: renderPaymentReceipt(
+			{
+				header,
+				timeZone: timeZone ?? 'UTC',
+				deviceCode: deviceCode ?? '',
+				currencyCode: menu?.currency ?? 'USD',
+				reference: payment.paymentId.slice(0, 8).toUpperCase(),
+				customerName: payment.customerName,
+				customerPhone: payment.customerPhone,
+				methodName: payment.methodName,
+				method: payment.method,
+				amountMinor: payment.amountMinor,
+				tenderedMinor: payment.tenderedMinor,
+				changeMinor: payment.changeMinor,
+				// The SERVER's stored balance, and after + amount by the money module.
+				balanceBeforeMinor: before.toString(),
+				balanceAfterMinor: payment.balanceAfterMinor,
+				cashierName: payment.cashierName,
+				receivedAt: payment.tappedAt
+			},
+			{ width, copy }
+		)
+	};
+}
+
+/**
+ * Print the PAYMENT RECEIVED receipt of a customer payment the SERVER has
+ * confirmed and — for a CASH payment, once, within 30 s of the tap — open the
+ * drawer. Idempotent: the record's marks say what was already done, and the
+ * agent de-duplicates by job id besides.
+ *
+ * THE SECOND DRAWER CLAUSE (invariant 9), beside printOriginals' — the only two
+ * places a pulse is sent. A customer payment is the one drawer opening that is
+ * not a sale; its evidence is the `customer.payment_received` audit row the
+ * server wrote in the payment's transaction. So the pulse waits for the
+ * server's yes: never at the tap, never on a refusal, never while pending,
+ * never on a reprint.
+ */
+export async function printCustomerPayment(
+	clientOpId: string,
+	opts: PrintOptions = {}
+): Promise<PaymentPrintResult> {
+	const fetchFn = opts.fetchFn ?? fetch;
+	const now = opts.now ?? (() => Date.now());
+	const payment = await readCustomerPayment(clientOpId);
+	if (!payment) {
+		const error = { error: 'unknown_payment' };
+		return { receipt: error, drawer: error };
+	}
+	const state = await agentStatus(fetchFn);
+	if (state.state !== 'ready') {
+		const error = { error: state.state };
+		return { receipt: error, drawer: error };
+	}
+	const width: ReceiptWidth = state.status.printers.receipt.width;
+	const built = await paymentReceiptLines(clientOpId, width, undefined);
+	if (!('lines' in built)) return { receipt: built, drawer: 'not_requested' };
+	const stamp = () => new Date(now()).toISOString();
+
+	let receipt: PrintOutcome = 'already_printed';
+	if (payment.printedAt === null) {
+		const arabic = await arabicForAgent(state.status, 'receipt', 'print');
+		receipt = await submitWithFallback(
+			{
+				id: `${built.paymentId}:payment:0`,
+				printer: 'receipt',
+				lines: await forPaper(built.lines, width, arabic.draw, opts.drawText ?? drawTextLine),
+				cut: true
+			},
+			fetchFn
+		);
+		if (isPrinted(receipt)) await markCustomerPayment(clientOpId, { printedAt: stamp() });
+	}
+
+	let drawer: DrawerOutcome = 'not_cash';
+	if (payment.method === 'cash') {
+		if (payment.drawerAt !== null) drawer = 'already_opened';
+		else if (now() - Date.parse(payment.tappedAt) > DRAWER_WINDOW_MS) drawer = 'too_late';
+		else {
+			const pulsed = await pulseDrawer(
+				{ id: `${built.paymentId}:drawer`, completedAt: payment.tappedAt },
+				fetchFn
+			);
+			drawer = pulsed;
+			if (pulsed === 'opened' || pulsed === 'duplicate') {
+				await markCustomerPayment(clientOpId, { drawerAt: stamp() });
+			}
+		}
+	}
+	return { receipt, drawer };
+}
+
+/** Reprint a customer payment's receipt, marked COPY. NEVER a drawer pulse. */
+export async function reprintCustomerPayment(
+	clientOpId: string,
+	by: string,
+	opts: PrintOptions = {}
+): Promise<PrintOutcome> {
+	const fetchFn = opts.fetchFn ?? fetch;
+	const now = opts.now ?? (() => Date.now());
+	const payment = await readCustomerPayment(clientOpId);
+	if (!payment) return { error: 'unknown_payment' };
+	const state = await agentStatus(fetchFn);
+	if (state.state !== 'ready') return { error: state.state };
+	const width: ReceiptWidth = state.status.printers.receipt.width;
+	const built = await paymentReceiptLines(clientOpId, width, {
+		reprintedAt: new Date(now()).toISOString(),
+		by
+	});
+	if (!('lines' in built)) return built;
+	// Bumped BEFORE the send, like a sale's reprint: a retry takes a new id.
+	const n = payment.reprints + 1;
+	await markCustomerPayment(clientOpId, { reprints: n });
+	const arabic = await arabicForAgent(state.status, 'receipt', 'print');
+	return submitWithFallback(
+		{
+			id: `${built.paymentId}:payment:${n}`,
+			printer: 'receipt',
+			lines: await forPaper(built.lines, width, arabic.draw, opts.drawText ?? drawTextLine),
+			cut: true
+		},
+		fetchFn
+	);
+}
+
+const paymentPrints = new EventTarget();
+export type PaymentPrinted = { clientOpId: string; result: PaymentPrintResult };
+
+/** Hear what printing said about a confirmed customer payment. */
+export function onPaymentPrinted(listener: (event: PaymentPrinted) => void): () => void {
+	const handler = (event: Event) => listener((event as CustomEvent<PaymentPrinted>).detail);
+	paymentPrints.addEventListener('printed', handler);
+	return () => paymentPrints.removeEventListener('printed', handler);
+}
+
 // ── Reprints ────────────────────────────────────────────────────────────────
 
 /**
@@ -673,6 +840,20 @@ export function startAutoPrint(opts: PrintOptions = {}): () => void {
 	const announce = (clientOpId: string, result: OriginalsResult) =>
 		autoPrints.dispatchEvent(new CustomEvent('printed', { detail: { clientOpId, result } }));
 	return onFlushEvent((event) => {
+		// tasks/customer-credit T-19: a customer payment prints (and, for cash,
+		// opens the drawer) the moment the server confirms it — from here, so it
+		// happens whatever screen the cashier is on.
+		if (event.type === 'done' && event.kind === 'customer.payment') {
+			if (!AUTO_PRINT_STATUSES.has(event.status)) return;
+			const { clientOpId } = event;
+			const tell = (result: PaymentPrintResult) =>
+				paymentPrints.dispatchEvent(new CustomEvent('printed', { detail: { clientOpId, result } }));
+			void printCustomerPayment(clientOpId, opts).then(tell, () => {
+				const error = { error: 'print_failed' };
+				tell({ receipt: error, drawer: 'not_requested' });
+			});
+			return;
+		}
 		if (event.type !== 'done' || event.kind !== 'sale.complete') return;
 		if (!AUTO_PRINT_STATUSES.has(event.status)) return;
 		const { clientOpId } = event;
@@ -718,10 +899,14 @@ export function saleStatusMark(order: LocalOrder<Cart>): SaleStatusMark {
 		return { glyph: '○', text: 'Sold before printing was set up', tone: 'neutral' };
 	}
 	const method = order.sale.payload.payments[0]?.method;
-	if (method === 'cash') {
-		// A completed cash sale is a fact, whatever the server said: still printable.
-		return order.syncStatus === 'unrecorded'
-			? { glyph: '◆', text: "Recorded for the owner's review", tone: 'pending' }
+	if (tenderClass(method) === 'fact') {
+		// A completed cash or credit sale is a fact, whatever the server said: still
+		// printable. A credit sale is never "Paid": the customer owes it.
+		if (order.syncStatus === 'unrecorded') {
+			return { glyph: '◆', text: "Recorded for the owner's review", tone: 'pending' };
+		}
+		return method === 'credit'
+			? { glyph: '◐', text: 'On credit — not paid', tone: 'neutral' }
 			: { glyph: '●', text: 'Paid', tone: 'ok' };
 	}
 	if (order.syncStatus === 'accepted' || order.syncStatus === 'recorded_flagged') {

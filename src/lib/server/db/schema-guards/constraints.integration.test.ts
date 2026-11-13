@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm';
 import { TAX_MODES } from '$lib/money/tax';
 import {
 	OP_KINDS,
+	CUSTOMER_PAYMENT_METHODS,
 	OP_STATUSES,
 	ORDER_TYPES,
 	PAYMENT_METHODS,
@@ -1090,7 +1091,10 @@ const POSTING_EVENTS = [
 	'stock_count_shortfall',
 	'stock_count_surplus',
 	'inventory_revaluation',
-	'opening_stock'
+	'opening_stock',
+	// tasks/customer-credit
+	'credit_sale',
+	'customer_payment_received'
 ] as const;
 
 // tasks/inventory-cogs T-13 exports JOURNAL_SOURCE_TYPES beside POSTING_EVENTS;
@@ -1102,7 +1106,9 @@ const JOURNAL_SOURCE_TYPES = [
 	'supplier_payment',
 	'waste_entry',
 	'stock_count',
-	'opening_stock'
+	'opening_stock',
+	// tasks/customer-credit
+	'customer_payment'
 ] as const;
 
 type MakeSessionOverrides = {
@@ -1343,7 +1349,8 @@ async function makeEntry(client: pg.PoolClient, restaurantId: string): Promise<s
 describe('value sets are pinned to the isomorphic constants (T-08)', () => {
 	it('lists match the wire contract, verbatim', () => {
 		expect([...ORDER_TYPES]).toEqual(['dine_in', 'takeaway', 'delivery']);
-		expect([...PAYMENT_METHODS]).toEqual(['cash', 'card', 'mobile']);
+		expect([...PAYMENT_METHODS]).toEqual(['cash', 'card', 'mobile', 'credit']);
+		expect([...CUSTOMER_PAYMENT_METHODS]).toEqual(['cash', 'card', 'mobile']);
 		expect([...ORDER_STATUSES]).toEqual(['open', 'billed', 'paid', 'voided', 'refunded']);
 		expect([...LINE_STATUSES]).toEqual(['new', 'sent', 'voided']);
 		expect([...SESSION_STATUSES]).toEqual(['open', 'closed']);
@@ -1352,7 +1359,8 @@ describe('value sets are pinned to the isomorphic constants (T-08)', () => {
 			'session.close',
 			'sale.complete',
 			'sale.abandoned',
-			'pin.login'
+			'pin.login',
+			'customer.payment'
 		]);
 		expect([...OP_STATUSES]).toEqual(['accepted', 'recorded_flagged', 'unrecorded']);
 		expect([...TAX_MODES]).toEqual(['exclusive', 'inclusive']);
@@ -1492,7 +1500,7 @@ describe('value sets are pinned to the isomorphic constants (T-08)', () => {
 		expect(error.constraint).toBe('accounts_type_valid');
 	});
 
-	it('POSTING_EVENTS restated locally matches the fourteen wire literals', () => {
+	it('POSTING_EVENTS restated locally matches the sixteen wire literals', () => {
 		expect([...POSTING_EVENTS]).toEqual([
 			'cash_sale',
 			'card_sale',
@@ -1507,7 +1515,9 @@ describe('value sets are pinned to the isomorphic constants (T-08)', () => {
 			'stock_count_shortfall',
 			'stock_count_surplus',
 			'inventory_revaluation',
-			'opening_stock'
+			'opening_stock',
+			'credit_sale',
+			'customer_payment_received'
 		]);
 	});
 
@@ -3372,4 +3382,332 @@ describe('bill tax override (bill-tax-override T-01)', () => {
 		}
 		throw new Error('Expected this statement to be rejected, but it succeeded');
 	}
+});
+
+describe('customer credit (customer-credit T-04)', () => {
+	type Ctx = {
+		r: string;
+		owner: string;
+		device: string;
+		session: string;
+		cash: string;
+		credit: string;
+		customer: string;
+		accounts: [string, string];
+	};
+
+	async function method(r: string, name: string, kind: string, enabled = true): Promise<string> {
+		const { rows } = await pool.query<{ id: string }>(
+			`insert into payment_methods (restaurant_id, name, kind, enabled)
+			 values ($1, $2, $3, $4) returning id`,
+			[r, name, kind, enabled]
+		);
+		return rows[0].id;
+	}
+
+	async function customer(r: string, name = 'Ali Hassan', phone = '615000001'): Promise<string> {
+		const { rows } = await pool.query<{ id: string }>(
+			`insert into customers (restaurant_id, name, phone) values ($1, $2, $3) returning id`,
+			[r, name, phone]
+		);
+		return rows[0].id;
+	}
+
+	async function ctx(name: string): Promise<Ctx> {
+		const r = await makeRestaurant(name);
+		const owner = await makeOwner(r, `${name}@credit.test`);
+		// The token hash is unique across restaurants: derive one per context.
+		const device = await makeDevice(r, owner, 'POS1', (name + 'a'.repeat(64)).slice(0, 64));
+		const session = await makeSession(r, device, owner);
+		const cash = await method(r, 'Cash', 'cash');
+		const credit = await method(r, 'Customer credit', 'credit', false);
+		const accounts: [string, string] = [
+			await makeAccount(r, '1000', 'Cash on Hand'),
+			await makeAccount(r, '1100', 'Accounts Receivable')
+		];
+		return { r, owner, device, session, cash, credit, customer: await customer(r), accounts };
+	}
+
+	/** A committed, balanced entry (the COMMIT-time trigger refuses an empty one). */
+	async function entry(c: Ctx): Promise<string> {
+		const client = await pool.connect();
+		try {
+			await client.query('begin');
+			const { rows } = await client.query<{ id: string }>(
+				`insert into journal_entries (restaurant_id, business_date, event, source_type, source_id, memo)
+				 values ($1, '2026-09-28', 'customer_payment_received', 'customer_payment', gen_random_uuid(), 'test')
+				 returning id`,
+				[c.r]
+			);
+			await client.query(
+				`insert into journal_entry_lines (restaurant_id, entry_id, account_id, line_no, debit_minor, credit_minor)
+				 values ($1, $2, $3, 1, 2000, 0), ($1, $2, $4, 2, 0, 2000)`,
+				[c.r, rows[0].id, c.accounts[0], c.accounts[1]]
+			);
+			await client.query('commit');
+			return rows[0].id;
+		} catch (error) {
+			await client.query('rollback');
+			throw error;
+		} finally {
+			client.release();
+		}
+	}
+
+	const PAYMENT_COLUMNS = `restaurant_id, order_id, method, payment_method_id, payment_method_name,
+		amount_minor, tendered_minor, change_minor, customer_id, customer_name, paid_at`;
+
+	/** A customer payment; `over` replaces columns by name. */
+	async function customerPaymentSql(
+		c: Ctx,
+		over: Record<string, unknown> = {}
+	): Promise<{ sql: string; params: unknown[] }> {
+		const row: Record<string, unknown> = {
+			id: (await pool.query<{ id: string }>('select gen_random_uuid() as id')).rows[0].id,
+			restaurant_id: c.r,
+			customer_id: c.customer,
+			amount_minor: 2000,
+			method: 'cash',
+			payment_method_id: c.cash,
+			payment_method_name: 'Cash',
+			tendered_minor: 2000,
+			change_minor: 0,
+			balance_after_minor: 1000,
+			pos_session_id: c.session,
+			device_id: c.device,
+			recorded_by_user_id: c.owner,
+			business_date: '2026-09-28',
+			received_at: new Date(),
+			journal_entry_id: await entry(c),
+			...over
+		};
+		const columns = Object.keys(row);
+		return {
+			sql: `insert into customer_payments (${columns.join(', ')})
+				values (${columns.map((_, i) => `$${i + 1}`).join(', ')}) returning id`,
+			params: columns.map((k) => row[k])
+		};
+	}
+
+	async function customerPayment(c: Ctx, over: Record<string, unknown> = {}): Promise<string> {
+		const { sql, params } = await customerPaymentSql(c, over);
+		const { rows } = await pool.query<{ id: string }>(sql, params);
+		return rows[0].id;
+	}
+
+	async function customerPaymentError(
+		c: Ctx,
+		over: Record<string, unknown>
+	): Promise<pg.DatabaseError> {
+		const { sql, params } = await customerPaymentSql(c, over);
+		return expectError(sql, params);
+	}
+
+	it('payments: a credit payment names its customer and inserts', async () => {
+		const c = await ctx('cc-ok');
+		const order = await makeOrder(c.r, c.session, c.device, c.owner);
+		const { rowCount } = await pool.query(
+			`insert into payments (${PAYMENT_COLUMNS})
+			 values ($1, $2, 'credit', $3, 'Customer credit', 1100, null, null, $4, 'Ali Hassan', now())`,
+			[c.r, order, c.credit, c.customer]
+		);
+		expect(rowCount).toBe(1);
+	});
+
+	it('payments_credit_customer: credit without a customer, and cash with one, are rejected', async () => {
+		const c = await ctx('cc-pair');
+		const order = await makeOrder(c.r, c.session, c.device, c.owner);
+
+		const noCustomer = await expectError(
+			`insert into payments (${PAYMENT_COLUMNS})
+			 values ($1, $2, 'credit', $3, 'Customer credit', 1100, null, null, null, null, now())`,
+			[c.r, order, c.credit]
+		);
+		expect(noCustomer.constraint).toBe('payments_credit_customer');
+
+		const cashWithCustomer = await expectError(
+			`insert into payments (${PAYMENT_COLUMNS})
+			 values ($1, $2, 'cash', $3, 'Cash', 1100, 1100, 0, $4, 'Ali Hassan', now())`,
+			[c.r, order, c.cash, c.customer]
+		);
+		expect(cashWithCustomer.constraint).toBe('payments_credit_customer');
+
+		const noName = await expectError(
+			`insert into payments (${PAYMENT_COLUMNS})
+			 values ($1, $2, 'credit', $3, 'Customer credit', 1100, null, null, $4, null, now())`,
+			[c.r, order, c.credit, c.customer]
+		);
+		expect(noName.constraint).toBe('payments_credit_customer');
+	});
+
+	it("payments: a credit payment carries no cash fields, cannot point at the Cash row, and cannot name another restaurant's customer", async () => {
+		const c = await ctx('cc-fk');
+		const other = await ctx('cc-other');
+		const order = await makeOrder(c.r, c.session, c.device, c.owner);
+
+		const cashFields = await expectError(
+			`insert into payments (${PAYMENT_COLUMNS})
+			 values ($1, $2, 'credit', $3, 'Customer credit', 1100, 1100, 0, $4, 'Ali Hassan', now())`,
+			[c.r, order, c.credit, c.customer]
+		);
+		expect(cashFields.constraint).toBe('payments_cash_fields');
+
+		const wrongRow = await expectError(
+			`insert into payments (${PAYMENT_COLUMNS})
+			 values ($1, $2, 'credit', $3, 'Cash', 1100, null, null, $4, 'Ali Hassan', now())`,
+			[c.r, order, c.cash, c.customer]
+		);
+		expect(wrongRow.code).toBe('23503');
+		expect(wrongRow.constraint).toBe('payments_payment_method_fk');
+
+		const foreign = await expectError(
+			`insert into payments (${PAYMENT_COLUMNS})
+			 values ($1, $2, 'credit', $3, 'Customer credit', 1100, null, null, $4, 'Ali Hassan', now())`,
+			[c.r, order, c.credit, other.customer]
+		);
+		expect(foreign.code).toBe('23503');
+		expect(foreign.constraint).toBe('payments_customer_fk');
+	});
+
+	it('payment_methods: one credit row per restaurant, never archived, no merchant number', async () => {
+		const c = await ctx('cc-method');
+
+		const second = await expectError(
+			`insert into payment_methods (restaurant_id, name, kind, enabled) values ($1, 'Tabs', 'credit', false)`,
+			[c.r]
+		);
+		expect(second.code).toBe('23505');
+		expect(second.constraint).toBe('payment_methods_one_credit');
+
+		const archived = await expectError(
+			`update payment_methods set archived_at = now() where id = $1`,
+			[c.credit]
+		);
+		expect(archived.constraint).toBe('payment_methods_credit_rules');
+
+		const numbered = await expectError(
+			`update payment_methods set merchant_number = '61' where id = $1`,
+			[c.credit]
+		);
+		expect(numbered.constraint).toBe('payment_methods_credit_rules');
+
+		const rekind = await expectError(`update payment_methods set kind = 'mobile' where id = $1`, [
+			c.credit
+		]);
+		expect(rekind.message).toContain('kind is fixed');
+
+		// Unlike Cash, it may be off — and on.
+		await pool.query(`update payment_methods set enabled = true where id = $1`, [c.credit]);
+	});
+
+	it('customers: never deleted; one LIVE customer per phone; an archived one frees it', async () => {
+		const c = await ctx('cc-customers');
+
+		const deleted = await expectError(`delete from customers where id = $1`, [c.customer]);
+		expect(deleted.message).toContain('archived, never deleted');
+
+		const twin = await expectError(
+			`insert into customers (restaurant_id, name, phone) values ($1, 'Twin', '615000001')`,
+			[c.r]
+		);
+		expect(twin.code).toBe('23505');
+		expect(twin.constraint).toBe('customers_phone_unique');
+
+		await pool.query(`update customers set archived_at = now() where id = $1`, [c.customer]);
+		expect(await customer(c.r, 'Twin', '615000001')).toBeTruthy();
+
+		// Another restaurant may hold the same phone.
+		const other = await makeRestaurant('cc-customers-2');
+		expect(await customer(other, 'Ali', '615000001')).toBeTruthy();
+	});
+
+	it('customers: the name, phone and limit CHECKs', async () => {
+		const r = await makeRestaurant('cc-checks');
+		const insert = `insert into customers (restaurant_id, name, phone, credit_limit_minor) values ($1, $2, $3, $4)`;
+		expect((await expectError(insert, [r, '', '615', null])).constraint).toBe(
+			'customers_name_valid'
+		);
+		expect((await expectError(insert, [r, 'x'.repeat(81), '615', null])).constraint).toBe(
+			'customers_name_valid'
+		);
+		expect((await expectError(insert, [r, 'Ali', '61', null])).constraint).toBe(
+			'customers_phone_valid'
+		);
+		expect((await expectError(insert, [r, 'Ali', '615', -1])).constraint).toBe(
+			'customers_credit_limit_minor_non_negative'
+		);
+		await pool.query(insert, [r, 'Ali', '615', 0]);
+	});
+
+	it('customer_payments: amount, method and cash-field CHECKs; the kind must match the method row', async () => {
+		const c = await ctx('cc-cp-checks');
+		expect(await customerPayment(c)).toBeTruthy();
+
+		expect((await customerPaymentError(c, { amount_minor: 0, tendered_minor: 0 })).constraint).toBe(
+			'customer_payments_amount_positive'
+		);
+		// A debt is never paid with credit.
+		expect(
+			(
+				await customerPaymentError(c, {
+					method: 'credit',
+					payment_method_id: c.credit,
+					tendered_minor: null,
+					change_minor: null
+				})
+			).constraint
+		).toBe('customer_payments_method_valid');
+		expect(
+			(await customerPaymentError(c, { tendered_minor: null, change_minor: null })).constraint
+		).toBe('customer_payments_cash_fields');
+		const mismatch = await customerPaymentError(c, {
+			method: 'card',
+			tendered_minor: null,
+			change_minor: null
+		});
+		expect(mismatch.constraint).toBe('customer_payments_payment_method_fk');
+		expect((await customerPaymentError(c, { balance_after_minor: -1 })).constraint).toBe(
+			'customer_payments_balance_after_non_negative'
+		);
+	});
+
+	it('MANDATORY (invariant 2): a customer payment is never deleted or edited; the reversal stamp is written once, whole', async () => {
+		const c = await ctx('cc-cp-guard');
+		const id = await customerPayment(c);
+
+		const deleted = await expectError(`delete from customer_payments where id = $1`, [id]);
+		expect(deleted.message).toContain('append-only');
+
+		const edited = await expectError(
+			`update customer_payments set amount_minor = 1 where id = $1`,
+			[id]
+		);
+		expect(edited.message).toContain('only the reversal stamp');
+
+		const partial = await expectError(
+			`update customer_payments set reversed_at = now(), reversed_by_user_id = $2 where id = $1`,
+			[id, c.owner]
+		);
+		expect(partial.constraint).toBe('customer_payments_reversal_fields');
+
+		const stamp = `update customer_payments set reversed_at = now(), reversed_by_user_id = $2,
+			reversal_reason = $3, reversal_entry_id = $4, reversal_business_date = '2026-09-28' where id = $1`;
+
+		const smuggled = await expectError(stamp.replace('where', ', amount_minor = 1 where'), [
+			id,
+			c.owner,
+			'Keyed twice',
+			await entry(c)
+		]);
+		expect(smuggled.message).toContain('only the reversal stamp');
+
+		const shortReason = await expectError(stamp, [id, c.owner, 'x', await entry(c)]);
+		expect(shortReason.constraint).toBe('customer_payments_reversal_fields');
+
+		const { rowCount } = await pool.query(stamp, [id, c.owner, 'Keyed twice', await entry(c)]);
+		expect(rowCount).toBe(1);
+
+		const again = await expectError(stamp, [id, c.owner, 'Second try', await entry(c)]);
+		expect(again.message).toContain('already reversed');
+	});
 });

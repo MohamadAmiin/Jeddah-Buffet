@@ -645,8 +645,10 @@ describe('salesReport — tenant isolation and edge cases', () => {
 			netSales: 0n,
 			tax: 0n,
 			takings: 0n,
+			soldOnCredit: 0n,
 			orderCount: 0
 		});
+		expect(report.customerPayments).toEqual({ rows: [], net: 0n });
 		expect(report.byTender).toEqual([
 			{ method: 'cash', amount: 0n, count: 0 },
 			{ method: 'card', amount: 0n, count: 0 },

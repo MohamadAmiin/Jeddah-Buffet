@@ -358,7 +358,7 @@ export async function createMenuItem(
 }
 
 /** The till's keypads take MINOR units as digits: 50000n is five presses and reads 500.00. */
-async function typeMinor(tillPage: Page, amount: bigint): Promise<void> {
+export async function typeMinor(tillPage: Page, amount: bigint): Promise<void> {
 	for (const digit of String(amount)) {
 		await tillPage.getByRole('button', { name: digit, exact: true }).click();
 	}
